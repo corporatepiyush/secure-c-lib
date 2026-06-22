@@ -1,31 +1,32 @@
 #ifndef SCL_LOG_H
 #define SCL_LOG_H
 
+#include <stdarg.h>
 #include "../common/scl_common.h"
 
 typedef enum {
     SCL_LOG_DEBUG = 0,
-    SCL_LOG_INFO,
-    SCL_LOG_WARN,
-    SCL_LOG_ERROR
+    SCL_LOG_INFO = 1,
+    SCL_LOG_WARN = 2,
+    SCL_LOG_ERROR = 3,
 } scl_log_level_t;
 
-typedef void (*scl_log_writer_t)(scl_log_level_t level, const char *msg, void *ctx);
+typedef struct {
+    scl_log_level_t min_level;
+    int use_color;
+} scl_log_config_t;
 
-/* Set minimum level (messages below are suppressed) */
+void scl_log_init(scl_log_config_t config);
 void scl_log_set_level(scl_log_level_t level);
 
-/* Set custom writer; default writes to stderr with level prefix */
-void scl_log_set_writer(scl_log_writer_t writer, void *ctx);
+void scl_log_debug(const char *fmt, ...);
+void scl_log_info(const char *fmt, ...);
+void scl_log_warn(const char *fmt, ...);
+void scl_log_error(const char *fmt, ...);
 
-/* Core logging functions */
-void scl_log_write(scl_log_level_t level, const char *file, int line,
-                   const char *func, const char *fmt, ...)
-    __attribute__((format(printf, 5, 6)));
+void scl_log_vdebug(const char *fmt, va_list args);
+void scl_log_vinfo(const char *fmt, va_list args);
+void scl_log_vwarn(const char *fmt, va_list args);
+void scl_log_verror(const char *fmt, va_list args);
 
-#define scl_log_debug(...)  scl_log_write(SCL_LOG_DEBUG,  __FILE__, __LINE__, __func__, __VA_ARGS__)
-#define scl_log_info(...)   scl_log_write(SCL_LOG_INFO,   __FILE__, __LINE__, __func__, __VA_ARGS__)
-#define scl_log_warn(...)   scl_log_write(SCL_LOG_WARN,   __FILE__, __LINE__, __func__, __VA_ARGS__)
-#define scl_log_error(...)  scl_log_write(SCL_LOG_ERROR,  __FILE__, __LINE__, __func__, __VA_ARGS__)
-
-#endif
+#endif // SCL_LOG_H
