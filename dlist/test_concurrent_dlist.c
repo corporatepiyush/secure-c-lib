@@ -15,88 +15,88 @@ static int tests_failed = 0;
 static void test_init_destroy(void)
 {
     TEST("init and destroy");
-    scl_concurrent_dlist_t list;
-    assert(scl_concurrent_dlist_init(&list, sizeof(int)) == SCL_OK);
-    assert(scl_concurrent_dlist_empty(&list));
-    scl_concurrent_dlist_destroy(&list);
+    scl_atomic_dlist_t list;
+    assert(scl_atomic_dlist_init(scl_allocator_default(), &list, sizeof(int)) == SCL_OK);
+    assert(scl_atomic_dlist_empty(&list));
+    scl_atomic_dlist_destroy(scl_allocator_default(), &list);
     PASS();
 }
 
 static void test_push_pop(void)
 {
     TEST("push_front/pop_front and push_back/pop_back");
-    scl_concurrent_dlist_t list;
-    scl_concurrent_dlist_init(&list, sizeof(int));
+    scl_atomic_dlist_t list;
+    scl_atomic_dlist_init(scl_allocator_default(), &list, sizeof(int));
     for (int i = 0; i < 50; i++) {
-        assert(scl_concurrent_dlist_push_front(&list, &i) == SCL_OK);
-        assert(scl_concurrent_dlist_push_back(&list, &i) == SCL_OK);
+        assert(scl_atomic_dlist_push_front(scl_allocator_default(), &list, &i) == SCL_OK);
+        assert(scl_atomic_dlist_push_back(scl_allocator_default(), &list, &i) == SCL_OK);
     }
-    assert(scl_concurrent_dlist_count(&list) == 100);
+    assert(scl_atomic_dlist_count(&list) == 100);
     for (int i = 49; i >= 0; i--) {
         int v;
-        assert(scl_concurrent_dlist_pop_front(&list, &v) == SCL_OK && v == i);
-        assert(scl_concurrent_dlist_pop_back(&list, &v) == SCL_OK && v == i);
+        assert(scl_atomic_dlist_pop_front(scl_allocator_default(), &list, &v) == SCL_OK && v == i);
+        assert(scl_atomic_dlist_pop_back(scl_allocator_default(), &list, &v) == SCL_OK && v == i);
     }
-    assert(scl_concurrent_dlist_empty(&list));
-    scl_concurrent_dlist_destroy(&list);
+    assert(scl_atomic_dlist_empty(&list));
+    scl_atomic_dlist_destroy(scl_allocator_default(), &list);
     PASS();
 }
 
 static void test_insert_remove_at(void)
 {
     TEST("insert_at and remove_at");
-    scl_concurrent_dlist_t list;
-    scl_concurrent_dlist_init(&list, sizeof(int));
-    for (int i = 0; i < 5; i++) { int v = i * 10; scl_concurrent_dlist_push_back(&list, &v); }
+    scl_atomic_dlist_t list;
+    scl_atomic_dlist_init(scl_allocator_default(), &list, sizeof(int));
+    for (int i = 0; i < 5; i++) { int v = i * 10; scl_atomic_dlist_push_back(scl_allocator_default(), &list, &v); }
     int v = 99;
-    assert(scl_concurrent_dlist_insert_at(&list, 2, &v) == SCL_OK);
-    assert(scl_concurrent_dlist_count(&list) == 6);
-    assert(scl_concurrent_dlist_remove_at(&list, 2, &v) == SCL_OK && v == 99);
-    assert(scl_concurrent_dlist_count(&list) == 5);
-    assert(scl_concurrent_dlist_insert_at(&list, 5, &v) == SCL_OK);
-    assert(scl_concurrent_dlist_remove_at(&list, 5, &v) == SCL_OK && v == 99);
-    scl_concurrent_dlist_destroy(&list);
+    assert(scl_atomic_dlist_insert_at(scl_allocator_default(), &list, 2, &v) == SCL_OK);
+    assert(scl_atomic_dlist_count(&list) == 6);
+    assert(scl_atomic_dlist_remove_at(scl_allocator_default(), &list, 2, &v) == SCL_OK && v == 99);
+    assert(scl_atomic_dlist_count(&list) == 5);
+    assert(scl_atomic_dlist_insert_at(scl_allocator_default(), &list, 5, &v) == SCL_OK);
+    assert(scl_atomic_dlist_remove_at(scl_allocator_default(), &list, 5, &v) == SCL_OK && v == 99);
+    scl_atomic_dlist_destroy(scl_allocator_default(), &list);
     PASS();
 }
 
 static void test_null_empty(void)
 {
     TEST("null and empty checks");
-    scl_concurrent_dlist_t list;
-    assert(scl_concurrent_dlist_init(NULL, sizeof(int)) == SCL_ERR_NULL_PTR);
-    assert(scl_concurrent_dlist_init(&list, sizeof(int)) == SCL_OK);
-    assert(scl_concurrent_dlist_pop_front(&list, &(int){0}) == SCL_ERR_EMPTY);
-    assert(scl_concurrent_dlist_pop_back(&list, &(int){0}) == SCL_ERR_EMPTY);
-    scl_concurrent_dlist_destroy(&list);
-    scl_concurrent_dlist_destroy(NULL);
+    scl_atomic_dlist_t list;
+    assert(scl_atomic_dlist_init(scl_allocator_default(), NULL, sizeof(int)) == SCL_ERR_NULL_PTR);
+    assert(scl_atomic_dlist_init(scl_allocator_default(), &list, sizeof(int)) == SCL_OK);
+    assert(scl_atomic_dlist_pop_front(scl_allocator_default(), &list, &(int){0}) == SCL_ERR_EMPTY);
+    assert(scl_atomic_dlist_pop_back(scl_allocator_default(), &list, &(int){0}) == SCL_ERR_EMPTY);
+    scl_atomic_dlist_destroy(scl_allocator_default(), &list);
+    scl_atomic_dlist_destroy(scl_allocator_default(), NULL);
     PASS();
 }
 
 static void *push_front_thread(void *arg)
 {
-    scl_concurrent_dlist_t *list = (scl_concurrent_dlist_t *)arg;
-    for (int i = 0; i < 50; i++) scl_concurrent_dlist_push_front(list, &i);
+    scl_atomic_dlist_t *list = (scl_atomic_dlist_t *)arg;
+    for (int i = 0; i < 50; i++) scl_atomic_dlist_push_front(scl_allocator_default(), list, &i);
     return NULL;
 }
 
 static void test_concurrent_push(void)
 {
     TEST("concurrent push front 2 threads");
-    scl_concurrent_dlist_t list;
-    scl_concurrent_dlist_init(&list, sizeof(int));
+    scl_atomic_dlist_t list;
+    scl_atomic_dlist_init(scl_allocator_default(), &list, sizeof(int));
     pthread_t t1, t2;
     pthread_create(&t1, NULL, push_front_thread, &list);
     pthread_create(&t2, NULL, push_front_thread, &list);
     pthread_join(t1, NULL);
     pthread_join(t2, NULL);
-    assert(scl_concurrent_dlist_count(&list) == 100);
-    scl_concurrent_dlist_destroy(&list);
+    assert(scl_atomic_dlist_count(&list) == 100);
+    scl_atomic_dlist_destroy(scl_allocator_default(), &list);
     PASS();
 }
 
 int main(void)
 {
-    printf("=== scl_concurrent_dlist tests ===\n");
+    printf("=== scl_dlist tests ===\n");
     test_init_destroy();
     test_push_pop();
     test_insert_remove_at();

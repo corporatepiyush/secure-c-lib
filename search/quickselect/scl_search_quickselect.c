@@ -1,9 +1,4 @@
-#if defined(__GNUC__) && !defined(__clang__)
-#pragma GCC optimize ("O3", "unroll-loops", "tree-vectorize", "inline")
-#endif
-
 #include "scl_search_quickselect.h"
-#include <stdlib.h>
 #include <string.h>
 
 static void swap_elements(void *a, void *b, size_t elem_size)
@@ -33,7 +28,7 @@ static size_t partition(void *base, size_t lo, size_t hi, size_t elem_size, scl_
     return i;
 }
 
-scl_error_t scl_search_quickselect(void *base, size_t count, size_t elem_size, scl_cmp_func_t cmp, size_t k, void *out)
+scl_error_t scl_search_quickselect(scl_allocator_t *alloc, void *base, size_t count, size_t elem_size, scl_cmp_func_t cmp, size_t k, void *out)
 {
     if (__builtin_expect(base == NULL, 0)) return SCL_ERR_NULL_PTR;
     if (__builtin_expect(cmp == NULL, 0)) return SCL_ERR_NULL_PTR;
@@ -41,9 +36,12 @@ scl_error_t scl_search_quickselect(void *base, size_t count, size_t elem_size, s
     if (__builtin_expect(count == 0, 0)) return SCL_ERR_EMPTY;
     if (__builtin_expect(k >= count, 0)) return SCL_ERR_INVALID_INDEX;
 
-    void *copy = malloc(count * elem_size);
+    size_t bytes;
+    if (scl_mul_overflow(count, elem_size, &bytes))
+        return SCL_ERR_SIZE_OVERFLOW;
+    void *copy = scl_alloc(alloc, bytes, alignof(max_align_t));
     if (__builtin_expect(copy == NULL, 0)) return SCL_ERR_OUT_OF_MEMORY;
-    memcpy(copy, base, count * elem_size);
+    memcpy(copy, base, bytes);
 
     size_t lo = 0, hi = count - 1;
     while (lo < hi) {
@@ -54,6 +52,6 @@ scl_error_t scl_search_quickselect(void *base, size_t count, size_t elem_size, s
     }
 
     memcpy(out, (unsigned char *)copy + k * elem_size, elem_size);
-    free(copy);
+    scl_free(alloc, copy);
     return SCL_OK;
 }

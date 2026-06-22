@@ -8,8 +8,6 @@
 #pragma GCC diagnostic ignored "-Wpedantic"
 #endif
 
-typedef int (*scl_cmp_func_t)(const void *a, const void *b);
-
 typedef enum { SCL_RB_RED, SCL_RB_BLACK } scl_rb_color_t;
 
 typedef struct scl_rbtree_node {
@@ -27,10 +25,10 @@ typedef struct {
     scl_cmp_func_t cmp;
 } scl_rbtree_t;
 
-scl_error_t scl_rbtree_init(scl_rbtree_t *tree, size_t element_size, scl_cmp_func_t cmp) SCL_WARN_UNUSED;
-void        scl_rbtree_destroy(scl_rbtree_t *tree);
-scl_error_t scl_rbtree_insert(scl_rbtree_t *tree, const void *element) SCL_WARN_UNUSED;
-scl_error_t scl_rbtree_remove(scl_rbtree_t *tree, const void *key) SCL_WARN_UNUSED;
+scl_error_t scl_rbtree_init(scl_allocator_t *alloc, scl_rbtree_t *tree, size_t element_size, scl_cmp_func_t cmp) SCL_WARN_UNUSED;
+void        scl_rbtree_destroy(scl_allocator_t *alloc, scl_rbtree_t *tree);
+scl_error_t scl_rbtree_insert(scl_allocator_t *alloc, scl_rbtree_t *tree, const void *element) SCL_WARN_UNUSED;
+scl_error_t scl_rbtree_remove(scl_allocator_t *alloc, scl_rbtree_t *tree, const void *key) SCL_WARN_UNUSED;
 bool        scl_rbtree_contains(const scl_rbtree_t *tree, const void *key);
 scl_error_t scl_rbtree_find(const scl_rbtree_t *tree, const void *key, void *out) SCL_WARN_UNUSED;
 scl_error_t scl_rbtree_min(const scl_rbtree_t *tree, void *out) SCL_WARN_UNUSED;
@@ -38,7 +36,6 @@ scl_error_t scl_rbtree_max(const scl_rbtree_t *tree, void *out) SCL_WARN_UNUSED;
 size_t      scl_rbtree_count(const scl_rbtree_t *tree);
 bool        scl_rbtree_empty(const scl_rbtree_t *tree);
 
-typedef void (*scl_visit_func_t)(void *data, void *ctx);
 scl_error_t scl_rbtree_inorder(const scl_rbtree_t *tree, scl_visit_func_t visit, void *ctx) SCL_WARN_UNUSED;
 
 #ifdef __GNUC__

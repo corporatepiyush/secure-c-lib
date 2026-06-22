@@ -1,15 +1,6 @@
 #include "scl_slist.h"
-#include <stdio.h>
-#include <stdlib.h>
+#include "../testlib/scl_test.h"
 #include <string.h>
-#include <assert.h>
-
-static int tests_passed = 0;
-static int tests_failed = 0;
-
-#define TEST(name) do { printf("  TEST: %s ... ", name); } while(0)
-#define PASS() do { printf("PASSED\n"); tests_passed++; } while(0)
-#define FAIL(msg) do { printf("FAILED: %s\n", msg); tests_failed++; } while(0)
 
 static int cmp_int(const void *a, const void *b)
 {
@@ -20,84 +11,85 @@ static int cmp_int(const void *a, const void *b)
     return 0;
 }
 
-static void test_init_destroy(void)
+static void test_init_destroy(scl_test_runner_t *tr)
 {
-    TEST("init and destroy");
+    scl_test_group("init and destroy");
+    scl_allocator_t *a = scl_allocator_default();
     scl_slist_t list;
-    assert(scl_slist_init(&list, sizeof(int)) == SCL_OK);
-    assert(scl_slist_empty(&list));
-    scl_slist_destroy(&list);
-    PASS();
+    SCL_EXPECT_OK(tr, scl_slist_init(&list, sizeof(int)));
+    SCL_EXPECT_TRUE(tr, scl_slist_empty(&list));
+    scl_slist_destroy(a, &list);
 }
 
-static void test_push_front_pop_front(void)
+static void test_push_front_pop_front(scl_test_runner_t *tr)
 {
-    TEST("push front/pop front");
+    scl_test_group("push front/pop front");
+    scl_allocator_t *a = scl_allocator_default();
     scl_slist_t list;
     scl_slist_init(&list, sizeof(int));
     for (int i = 0; i < 10; i++)
-        assert(scl_slist_push_front(&list, &i) == SCL_OK);
-    assert(scl_slist_count(&list) == 10);
+        SCL_EXPECT_OK(tr, scl_slist_push_front(a, &list, &i));
+    SCL_EXPECT_EQ_SZ(tr, scl_slist_count(&list), 10);
     for (int i = 9; i >= 0; i--) {
-        int val; scl_slist_pop_front(&list, &val);
-        assert(val == i);
+        int val; scl_slist_pop_front(a, &list, &val);
+        SCL_EXPECT_EQ_I(tr, val, i);
     }
-    assert(scl_slist_empty(&list));
-    scl_slist_destroy(&list);
-    PASS();
+    SCL_EXPECT_TRUE(tr, scl_slist_empty(&list));
+    scl_slist_destroy(a, &list);
 }
 
-static void test_push_back_pop_front(void)
+static void test_push_back_pop_front(scl_test_runner_t *tr)
 {
-    TEST("push back/pop front (FIFO)");
+    scl_test_group("push back/pop front (FIFO)");
+    scl_allocator_t *a = scl_allocator_default();
     scl_slist_t list;
     scl_slist_init(&list, sizeof(int));
     for (int i = 0; i < 10; i++)
-        assert(scl_slist_push_back(&list, &i) == SCL_OK);
+        SCL_EXPECT_OK(tr, scl_slist_push_back(a, &list, &i));
     for (int i = 0; i < 10; i++) {
-        int val; scl_slist_pop_front(&list, &val);
-        assert(val == i);
+        int val; scl_slist_pop_front(a, &list, &val);
+        SCL_EXPECT_EQ_I(tr, val, i);
     }
-    scl_slist_destroy(&list);
-    PASS();
+    scl_slist_destroy(a, &list);
 }
 
-static void test_null(void)
+static void test_null(scl_test_runner_t *tr)
 {
-    TEST("null checks");
-    assert(scl_slist_init(NULL, sizeof(int)) == SCL_ERR_NULL_PTR);
-    assert(scl_slist_init(NULL, sizeof(int)) == SCL_ERR_NULL_PTR);
-    scl_slist_destroy(NULL);
-    PASS();
+    scl_test_group("null checks");
+    SCL_EXPECT_ERROR(tr, scl_slist_init(NULL, sizeof(int)), SCL_ERR_NULL_PTR);
+    scl_allocator_t *a = scl_allocator_default();
+    scl_slist_destroy(a, NULL);
 
-    TEST("zero element size rejection");
+    scl_test_group("zero element size rejection");
     scl_slist_t list;
-    assert(scl_slist_init(&list, 0) == SCL_ERR_INVALID_ARG);
-    PASS();
+    SCL_EXPECT_ERROR(tr, scl_slist_init(&list, 0), SCL_ERR_INVALID_ARG);
 }
 
-static void test_search(void)
+static void test_search(scl_test_runner_t *tr)
 {
-    TEST("search");
+    scl_test_group("search");
+    scl_allocator_t *a = scl_allocator_default();
     scl_slist_t list;
     scl_slist_init(&list, sizeof(int));
-    for (int i = 0; i < 10; i++) scl_slist_push_back(&list, &i);
+    for (int i = 0; i < 10; i++) scl_slist_push_back(a, &list, &i);
     int key = 5, out;
-    assert(scl_slist_search(&list, &key, cmp_int, &out) == SCL_OK && out == 5);
+    SCL_EXPECT_OK(tr, scl_slist_search(&list, &key, cmp_int, &out));
+    SCL_EXPECT_EQ_I(tr, out, 5);
     key = 999;
-    assert(scl_slist_search(&list, &key, cmp_int, &out) == SCL_ERR_NOT_FOUND);
-    scl_slist_destroy(&list);
-    PASS();
+    SCL_EXPECT_ERROR(tr, scl_slist_search(&list, &key, cmp_int, &out), SCL_ERR_NOT_FOUND);
+    scl_slist_destroy(a, &list);
 }
 
 int main(void)
 {
-    printf("=== scl_slist tests ===\n");
-    test_init_destroy();
-    test_push_front_pop_front();
-    test_push_back_pop_front();
-    test_null();
-    test_search();
-    printf("Results: %d passed, %d failed\n", tests_passed, tests_failed);
-    return tests_failed > 0 ? 1 : 0;
+    scl_test_runner_t tr;
+    scl_test_init(&tr);
+    scl_test_group("=== scl_slist tests ===");
+    test_init_destroy(&tr);
+    test_push_front_pop_front(&tr);
+    test_push_back_pop_front(&tr);
+    test_null(&tr);
+    test_search(&tr);
+    scl_test_summary(&tr);
+    return tr.failed > 0 ? 1 : 0;
 }

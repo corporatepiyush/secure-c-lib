@@ -3,119 +3,167 @@
 #endif
 
 #include "scl_parse_icelake.h"
-#include "../json/scl_parse_json.h"
-#include <stdlib.h>
-#include <string.h>
+#include "../../stdlib/scl_stdlib.h"
+#include "../../string/scl_string.h"
 
-scl_error_t scl_parse_icelake_open(scl_parse_icelake_t *parser, const char *metadata_path) {
-    if (__builtin_expect(!parser, 0)) return SCL_ERR_NULL_PTR;
-    if (__builtin_expect(!metadata_path, 0)) return SCL_ERR_NULL_PTR;
+scl_error_t scl_parse_icelake_open(scl_allocator_t *alloc, scl_parse_icelake_t *parser, const char *path) {
+    if (scl_unlikely(!parser)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!path)) return SCL_ERR_NULL_PTR;
 
-    memset(parser, 0, sizeof(*parser));
+    (void)scl_memset(parser, 0, sizeof(*parser));
+    parser->alloc = alloc;
 
-    parser->metadata_path = strdup(metadata_path);
-    if (!parser->metadata_path) return SCL_ERR_OUT_OF_MEMORY;
+    parser->filename = scl_strdup(alloc, path);
+    if (!parser->filename) return SCL_ERR_OUT_OF_MEMORY;
 
-    /* Read entire file */
-    FILE *fp = fopen(metadata_path, "rb");
-    if (!fp) { free(parser->metadata_path); return SCL_ERR_NOT_FOUND; }
+    char *meta_path = NULL;
+    char *json_buf = NULL;
+    scl_parse_json_value_t *root = NULL;
+
+    size_t plen = scl_strlen(path);
+    int has_trailing = (plen > 0 && path[plen - 1] == '/') ? 1 : 0;
+
+    size_t mp_len = plen + 20 + (has_trailing ? 0 : 1);
+    meta_path = (char *)scl_alloc(alloc, mp_len, _Alignof(max_align_t));
+    if (!meta_path) { scl_free(alloc, parser->filename); return SCL_ERR_OUT_OF_MEMORY; }
+
+    if (has_trailing) {
+        snprintf(meta_path, mp_len, "%smetadata.json", path);
+    } else {
+        snprintf(meta_path, mp_len, "%s/metadata.json", path);
+    }
+
+    FILE *fp = fopen(meta_path, "rb");
+    if (!fp) {
+        scl_free(alloc, meta_path);
+        scl_free(alloc, parser->filename);
+        return SCL_ERR_NOT_FOUND;
+    }
 
     fseek(fp, 0, SEEK_END);
     long sz = ftell(fp);
-    if (sz < 0) { fclose(fp); free(parser->metadata_path); return SCL_ERR_ALLOC; }
     rewind(fp);
-
-    parser->raw_json = (char *)malloc((size_t)sz + 1);
-    if (!parser->raw_json) { fclose(fp); free(parser->metadata_path); return SCL_ERR_OUT_OF_MEMORY; }
-    if (fread(parser->raw_json, 1, (size_t)sz, fp) != (size_t)sz) {
-        fclose(fp); free(parser->metadata_path); free(parser->raw_json);
+    json_buf = (char *)scl_alloc(alloc, (size_t)sz + 1, _Alignof(max_align_t));
+    if (!json_buf) {
+        fclose(fp);
+        scl_free(alloc, meta_path);
+        scl_free(alloc, parser->filename);
+        return SCL_ERR_OUT_OF_MEMORY;
+    }
+    if (fread(json_buf, 1, (size_t)sz, fp) != (size_t)sz) {
+        fclose(fp);
+        scl_free(alloc, json_buf);
+        scl_free(alloc, meta_path);
+        scl_free(alloc, parser->filename);
         return SCL_ERR_ALLOC;
     }
     fclose(fp);
-    parser->raw_len = (size_t)sz;
-    parser->raw_json[sz] = '\0';
+    json_buf[sz] = '\0';
+    parser->manifest_json = json_buf;
+    parser->manifest_len = (size_t)sz;
 
-    /* Parse JSON */
-    scl_parse_json_value_t *root = NULL;
-    scl_error_t err = scl_parse_json_parse(parser->raw_json, &root);
-    if (err != SCL_OK) {
-        free(parser->metadata_path);
-        free(parser->raw_json);
-        parser->metadata_path = NULL;
-        parser->raw_json = NULL;
-        return err;
+    if (scl_parse_json_parse(alloc, json_buf, &root) != SCL_OK) {
+        scl_free(alloc, meta_path);
+        return SCL_OK;
     }
 
-    /* Extract format-version */
-    scl_parse_json_value_t *fv = scl_parse_json_object_get(root, "format-version");
-    if (fv && scl_parse_json_get_type(fv) == SCL_JSON_INT64)
-        parser->format_version = (int)scl_parse_json_get_int(fv);
+    if (root && root->type == SCL_JSON_OBJECT) {
+        scl_parse_json_value_t *snap = scl_parse_json_object_get(root, "snapshot-id");
+        if (snap && snap->type == SCL_JSON_STRING) {
+            char *end = NULL;
+            parser->snapshot_id = scl_strtoll(snap->string_val, &end, 10);
+        }
 
-    /* Extract current-snapshot-id */
-    scl_parse_json_value_t *sid = scl_parse_json_object_get(root, "current-snapshot-id");
-    if (sid && scl_parse_json_get_type(sid) == SCL_JSON_INT64)
-        parser->current_snapshot_id = scl_parse_json_get_int(sid);
+        scl_parse_json_value_t *manifests = scl_parse_json_object_get(root, "manifests");
+        if (manifests && manifests->type == SCL_JSON_ARRAY) {
+            parser->num_manifest_files = (int)manifests->child_count;
+            parser->manifest_files = (char **)scl_calloc(alloc, (size_t)parser->num_manifest_files, sizeof(char *), _Alignof(max_align_t));
+            for (int i = 0; i < parser->num_manifest_files && i < (int)manifests->child_count; i++) {
+                scl_parse_json_value_t *mf = manifests->children[i];
+                if (mf && mf->type == SCL_JSON_OBJECT) {
+                    scl_parse_json_value_t *mp = scl_parse_json_object_get(mf, "manifest-path");
+                    if (mp && mp->type == SCL_JSON_STRING) {
+                        parser->manifest_files[i] = scl_strdup(alloc, mp->string_val);
+                    }
+                }
+            }
+        }
 
-    /* Count snapshots */
-    scl_parse_json_value_t *snapshots = scl_parse_json_object_get(root, "snapshots");
-    if (snapshots && scl_parse_json_get_type(snapshots) == SCL_JSON_ARRAY)
-        parser->snapshot_count = (int)scl_parse_json_array_len(snapshots);
-
-    /* Extract schema */
-    scl_parse_json_value_t *schemas = scl_parse_json_object_get(root, "schemas");
-    if (schemas && scl_parse_json_get_type(schemas) == SCL_JSON_ARRAY &&
-        scl_parse_json_array_len(schemas) > 0) {
-        scl_parse_json_value_t *first_schema = scl_parse_json_array_get(schemas, 0);
-        /* Serialize back to JSON string */
-        if (first_schema) {
-            const char *s = scl_parse_json_get_string(first_schema);
-            if (s) {
-                parser->schema_json = strdup(s);
-                parser->schema_len = strlen(s);
+        scl_parse_json_value_t *entries = scl_parse_json_object_get(root, "entries");
+        if (entries && entries->type == SCL_JSON_ARRAY) {
+            parser->num_data_files = (int)entries->child_count;
+            parser->data_files = (char **)scl_calloc(alloc, (size_t)parser->num_data_files, sizeof(char *), _Alignof(max_align_t));
+            for (int i = 0; i < parser->num_data_files && i < (int)entries->child_count; i++) {
+                scl_parse_json_value_t *ent = entries->children[i];
+                if (ent && ent->type == SCL_JSON_OBJECT) {
+                    scl_parse_json_value_t *fp2 = scl_parse_json_object_get(ent, "file-path");
+                    if (!fp2) fp2 = scl_parse_json_object_get(ent, "file_path");
+                    if (fp2 && fp2->type == SCL_JSON_STRING) {
+                        parser->data_files[i] = scl_strdup(alloc, fp2->string_val);
+                    }
+                }
             }
         }
     }
 
-    /* If no schemas array, try current-schema-id */
-    if (!parser->schema_json) {
-        scl_parse_json_value_t *cs = scl_parse_json_object_get(root, "schema");
-        if (cs) {
-            const char *s = scl_parse_json_get_string(cs);
-            if (s) {
-                parser->schema_json = strdup(s);
-                parser->schema_len = strlen(s);
-            }
-        }
-    }
+    scl_parse_json_free(alloc, root);
+    scl_free(alloc, meta_path);
 
-    scl_parse_json_free(root);
     return SCL_OK;
 }
 
-scl_error_t scl_parse_icelake_get_snapshot_count(scl_parse_icelake_t *parser, int *out) {
-    if (__builtin_expect(!parser, 0)) return SCL_ERR_NULL_PTR;
-    if (__builtin_expect(!out, 0)) return SCL_ERR_NULL_PTR;
-    *out = parser->snapshot_count;
+scl_error_t scl_parse_icelake_get_snapshot_id(scl_parse_icelake_t *parser, int64_t *out) {
+    if (scl_unlikely(!parser)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!out)) return SCL_ERR_NULL_PTR;
+    *out = parser->snapshot_id;
     return SCL_OK;
 }
 
-scl_error_t scl_parse_icelake_get_schema(scl_parse_icelake_t *parser, const char **out, size_t *out_len) {
-    if (__builtin_expect(!parser, 0)) return SCL_ERR_NULL_PTR;
-    if (__builtin_expect(!out, 0)) return SCL_ERR_NULL_PTR;
-    if (!parser->schema_json) return SCL_ERR_NOT_FOUND;
-    *out = parser->schema_json;
-    if (out_len) *out_len = parser->schema_len;
+scl_error_t scl_parse_icelake_get_manifest_count(scl_parse_icelake_t *parser, int *out) {
+    if (scl_unlikely(!parser)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!out)) return SCL_ERR_NULL_PTR;
+    *out = parser->num_manifest_files;
+    return SCL_OK;
+}
+
+scl_error_t scl_parse_icelake_get_manifest_path(scl_parse_icelake_t *parser, int index,
+                                                  const char **out, size_t *out_len) {
+    if (scl_unlikely(!parser)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!out)) return SCL_ERR_NULL_PTR;
+    if (index < 0 || index >= parser->num_manifest_files) return SCL_ERR_INVALID_INDEX;
+    if (!parser->manifest_files[index]) return SCL_ERR_NOT_FOUND;
+    *out = parser->manifest_files[index];
+    if (out_len) *out_len = scl_strlen(parser->manifest_files[index]);
+    return SCL_OK;
+}
+
+scl_error_t scl_parse_icelake_get_data_file_path(scl_parse_icelake_t *parser, int index,
+                                                   const char **out, size_t *out_len) {
+    if (scl_unlikely(!parser)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!out)) return SCL_ERR_NULL_PTR;
+    if (index < 0 || index >= parser->num_data_files) return SCL_ERR_INVALID_INDEX;
+    if (!parser->data_files[index]) return SCL_ERR_NOT_FOUND;
+    *out = parser->data_files[index];
+    if (out_len) *out_len = scl_strlen(parser->data_files[index]);
     return SCL_OK;
 }
 
 scl_error_t scl_parse_icelake_close(scl_parse_icelake_t *parser) {
-    if (__builtin_expect(!parser, 0)) return SCL_ERR_NULL_PTR;
-    free(parser->metadata_path); parser->metadata_path = NULL;
-    free(parser->raw_json); parser->raw_json = NULL;
-    free(parser->schema_json); parser->schema_json = NULL;
-    parser->raw_len = parser->schema_len = 0;
-    parser->format_version = 0;
-    parser->current_snapshot_id = 0;
-    parser->snapshot_count = 0;
+    if (scl_unlikely(!parser)) return SCL_ERR_NULL_PTR;
+    scl_free(parser->alloc, parser->filename); parser->filename = NULL;
+    scl_free(parser->alloc, parser->manifest_json); parser->manifest_json = NULL;
+    if (parser->manifest_files) {
+        for (int i = 0; i < parser->num_manifest_files; i++)
+            scl_free(parser->alloc, parser->manifest_files[i]);
+        scl_free(parser->alloc, parser->manifest_files);
+        parser->manifest_files = NULL;
+    }
+    if (parser->data_files) {
+        for (int i = 0; i < parser->num_data_files; i++)
+            scl_free(parser->alloc, parser->data_files[i]);
+        scl_free(parser->alloc, parser->data_files);
+        parser->data_files = NULL;
+    }
+    parser->manifest_len = 0;
     return SCL_OK;
 }

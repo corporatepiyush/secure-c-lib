@@ -15,9 +15,9 @@ typedef struct {
     size_t count;
 } scl_stack_t;
 
-scl_error_t scl_stack_init(scl_stack_t *stack, size_t element_size, size_t initial_capacity) SCL_WARN_UNUSED;
-void        scl_stack_destroy(scl_stack_t *stack);
-scl_error_t scl_stack_push(scl_stack_t *stack, const void *element) SCL_WARN_UNUSED;
+scl_error_t scl_stack_init(scl_allocator_t *alloc, scl_stack_t *stack, size_t element_size, size_t initial_capacity) SCL_WARN_UNUSED;
+void        scl_stack_destroy(scl_allocator_t *alloc, scl_stack_t *stack);
+scl_error_t scl_stack_push(scl_allocator_t *alloc, scl_stack_t *stack, const void *element) SCL_WARN_UNUSED;
 scl_error_t scl_stack_pop(scl_stack_t *stack, void *out) SCL_WARN_UNUSED;
 scl_error_t scl_stack_peek(const scl_stack_t *stack, void *out) SCL_WARN_UNUSED;
 size_t      scl_stack_count(const scl_stack_t *stack);

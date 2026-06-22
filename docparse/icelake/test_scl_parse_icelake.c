@@ -1,85 +1,58 @@
+#include "../../testlib/scl_test.h"
 #include "scl_parse_icelake.h"
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <assert.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
-static int tests_passed = 0;
-static int tests_failed = 0;
-
-#define TEST(name) do { printf("  TEST: %s ... ", name); } while(0)
-#define PASS() do { printf("PASSED\n"); tests_passed++; } while(0)
-#define FAIL(msg) do { printf("FAILED: %s\n", msg); tests_failed++; } while(0)
-
-static void create_minimal_iceberg_v2(const char *path) {
-    FILE *f = fopen(path, "wb");
+static void create_metadata_json(const char *path) {
+    FILE *f = fopen(path, "w");
     if (!f) return;
-
-    const char *json = "{"
-        "\"format-version\": 2,"
-        "\"table-uuid\": \"abc123\","
-        "\"location\": \"/tmp/table\","
-        "\"last-sequence-number\": 1,"
-        "\"last-updated-ms\": 1000,"
-        "\"current-snapshot-id\": 42,"
-        "\"snapshots\": [{\"snapshot-id\": 42, \"timestamp-ms\": 1000}],"
-        "\"schemas\": [{\"schema-id\": 0, \"type\": \"struct\", \"fields\": [{\"id\": 1, \"name\": \"col1\", \"type\": \"int\"}]}],"
-        "\"default-spec-id\": 0,"
-        "\"partition-specs\": [],"
-        "\"last-partition-id\": 0"
-        "}";
-    fwrite(json, 1, strlen(json), f);
+    fwrite("{\"snapshot-id\":\"42\",\"manifests\":[{\"manifest-path\":\"s3://bucket/m1.avro\"}]"
+           ",\"entries\":[{\"file-path\":\"s3://bucket/d1.parquet\"}]}", 1, 107, f);
     fclose(f);
 }
 
 int main(void) {
-    printf("=== scl_parse_icelake tests ===\n");
+    scl_test_runner_t tr;
+    scl_test_init(&tr);
 
-    TEST("file not found");
+    scl_allocator_t *alloc = scl_allocator_default();
+
+    scl_test_group("file not found");
     {
-        scl_parse_icelake_t ice;
-        scl_error_t e = scl_parse_icelake_open(&ice, "/tmp/nonexistent.metadata.json");
-        if (e == SCL_ERR_NOT_FOUND) { PASS(); }
-        else { FAIL("expected NOT_FOUND"); }
+        scl_parse_icelake_t il;
+        scl_error_t e = scl_parse_icelake_open(alloc, &il, "/tmp/nonexistent_ice");
+        SCL_EXPECT_TRUE(&tr, e == SCL_ERR_NOT_FOUND);
     }
 
-    TEST("open minimal v2 metadata");
+    scl_test_group("open minimal icelake");
     {
-        const char *path = "/tmp/test_iceberg_v2.metadata.json";
-        create_minimal_iceberg_v2(path);
-        scl_parse_icelake_t ice;
-        scl_error_t e = scl_parse_icelake_open(&ice, path);
-        if (e == SCL_OK) {
-            int snap_count = 0;
-            scl_parse_icelake_get_snapshot_count(&ice, &snap_count);
-            if (snap_count == 1) { PASS(); }
-            else { FAIL("snapshot count mismatch"); }
-        } else { FAIL("open failed"); }
-        scl_parse_icelake_close(&ice);
-        remove(path);
+        const char *dir = "/tmp/test_ice";
+        mkdir(dir, 0755);
+        char meta_path[256];
+        snprintf(meta_path, sizeof(meta_path), "%s/metadata.json", dir);
+        create_metadata_json(meta_path);
+
+        scl_parse_icelake_t il;
+        scl_error_t e = scl_parse_icelake_open(alloc, &il, dir);
+        SCL_EXPECT_TRUE(&tr, e == SCL_OK);
+
+        int64_t sid;
+        scl_parse_icelake_get_snapshot_id(&il, &sid);
+        SCL_EXPECT_EQ_I(&tr, sid, 42);
+
+        SCL_EXPECT_TRUE(&tr, il.manifest_files != NULL);
+
+        scl_parse_icelake_close(&il);
+
+        remove(meta_path);
+        rmdir(dir);
     }
 
-    TEST("get schema");
+    scl_test_group("NULL checks");
     {
-        const char *path = "/tmp/test_iceberg_schema.metadata.json";
-        create_minimal_iceberg_v2(path);
-        scl_parse_icelake_t ice;
-        scl_parse_icelake_open(&ice, path);
-        const char *schema = NULL;
-        size_t slen = 0;
-        scl_error_t e = scl_parse_icelake_get_schema(&ice, &schema, &slen);
-        if (e == SCL_OK && schema && slen > 0) { PASS(); }
-        else { FAIL("get schema failed"); }
-        scl_parse_icelake_close(&ice);
-        remove(path);
+        SCL_EXPECT_TRUE(&tr, scl_parse_icelake_open(alloc, NULL, "test") == SCL_ERR_NULL_PTR);
     }
 
-    TEST("NULL checks");
-    {
-        if (scl_parse_icelake_open(NULL, "test.json") == SCL_ERR_NULL_PTR) { PASS(); }
-        else { FAIL("expected NULL_PTR"); }
-    }
-
-    printf("Results: %d passed, %d failed\n", tests_passed, tests_failed);
-    return tests_failed > 0 ? 1 : 0;
+    scl_test_summary(&tr);
+    return tr.failed > 0 ? 1 : 0;
 }

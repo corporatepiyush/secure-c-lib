@@ -1,5 +1,4 @@
 #include "scl_hash.h"
-#include <stdlib.h>
 #include <string.h>
 
 #if defined(__GNUC__) && !defined(__clang__)
@@ -20,7 +19,7 @@ bool scl_hash_eq_mem(const void *a, const void *b, size_t key_size)
     return memcmp(a, b, key_size) == 0;
 }
 
-scl_error_t scl_hash_init(scl_hash_t *ht, size_t key_size, size_t value_size,
+scl_error_t scl_hash_init(scl_allocator_t *alloc, scl_hash_t *ht, size_t key_size, size_t value_size,
                           size_t initial_buckets, scl_hash_func_t hf,
                           scl_hash_eq_func_t eq)
 {
@@ -28,7 +27,7 @@ scl_error_t scl_hash_init(scl_hash_t *ht, size_t key_size, size_t value_size,
     if (key_size == 0 || value_size == 0 || initial_buckets == 0 || !hf)
         return SCL_ERR_INVALID_ARG;
 
-    ht->buckets = calloc(initial_buckets, sizeof(scl_hash_entry_t *));
+    ht->buckets = scl_calloc(alloc, initial_buckets, sizeof(scl_hash_entry_t *), alignof(max_align_t));
     if (!ht->buckets) return SCL_ERR_OUT_OF_MEMORY;
 
     ht->bucket_count = initial_buckets;
@@ -41,28 +40,28 @@ scl_error_t scl_hash_init(scl_hash_t *ht, size_t key_size, size_t value_size,
     return SCL_OK;
 }
 
-void scl_hash_destroy(scl_hash_t *ht)
+void scl_hash_destroy(scl_allocator_t *alloc, scl_hash_t *ht)
 {
     if (!ht) return;
     for (size_t i = 0; i < ht->bucket_count; i++) {
         scl_hash_entry_t *e = ht->buckets[i];
         while (e) {
             scl_hash_entry_t *next = e->next;
-            free(e->key);
-            free(e->value);
-            free(e);
+            scl_free(alloc, e->key);
+            scl_free(alloc, e->value);
+            scl_free(alloc, e);
             e = next;
         }
     }
-    free(ht->buckets);
+    scl_free(alloc, ht->buckets);
     ht->buckets = NULL;
     ht->count = 0;
 }
 
-static scl_error_t scl_hash_rehash(scl_hash_t *ht)
+static scl_error_t scl_hash_rehash(scl_allocator_t *alloc, scl_hash_t *ht)
 {
     size_t new_count = ht->bucket_count * 2;
-    scl_hash_entry_t **new_buckets = calloc(new_count, sizeof(scl_hash_entry_t *));
+    scl_hash_entry_t **new_buckets = scl_calloc(alloc, new_count, sizeof(scl_hash_entry_t *), alignof(max_align_t));
     if (!new_buckets) return SCL_ERR_OUT_OF_MEMORY;
 
     for (size_t i = 0; i < ht->bucket_count; i++) {
@@ -76,18 +75,18 @@ static scl_error_t scl_hash_rehash(scl_hash_t *ht)
         }
     }
 
-    free(ht->buckets);
+    scl_free(alloc, ht->buckets);
     ht->buckets = new_buckets;
     ht->bucket_count = new_count;
     return SCL_OK;
 }
 
-scl_error_t scl_hash_insert(scl_hash_t *ht, const void *key, const void *value)
+scl_error_t scl_hash_insert(scl_allocator_t *alloc, scl_hash_t *ht, const void *key, const void *value)
 {
     if (!ht || !key || !value) return SCL_ERR_NULL_PTR;
 
     if ((float)ht->count / (float)ht->bucket_count > ht->load_factor) {
-        scl_error_t err = scl_hash_rehash(ht);
+        scl_error_t err = scl_hash_rehash(alloc, ht);
         if (err != SCL_OK) return err;
     }
 
@@ -102,15 +101,15 @@ scl_error_t scl_hash_insert(scl_hash_t *ht, const void *key, const void *value)
         e = e->next;
     }
 
-    e = malloc(sizeof(scl_hash_entry_t));
+    e = scl_alloc(alloc, sizeof(scl_hash_entry_t), alignof(max_align_t));
     if (!e) return SCL_ERR_OUT_OF_MEMORY;
 
-    e->key = malloc(ht->key_size);
-    e->value = malloc(ht->value_size);
+    e->key = scl_alloc(alloc, ht->key_size, alignof(max_align_t));
+    e->value = scl_alloc(alloc, ht->value_size, alignof(max_align_t));
     if (!e->key || !e->value) {
-        free(e->key);
-        free(e->value);
-        free(e);
+        scl_free(alloc, e->key);
+        scl_free(alloc, e->value);
+        scl_free(alloc, e);
         return SCL_ERR_OUT_OF_MEMORY;
     }
 
@@ -140,7 +139,7 @@ scl_error_t scl_hash_get(const scl_hash_t *ht, const void *key, void *out_value)
     return SCL_ERR_NOT_FOUND;
 }
 
-scl_error_t scl_hash_remove(scl_hash_t *ht, const void *key)
+scl_error_t scl_hash_remove(scl_allocator_t *alloc, scl_hash_t *ht, const void *key)
 {
     if (!ht || !key) return SCL_ERR_NULL_PTR;
 
@@ -151,9 +150,9 @@ scl_error_t scl_hash_remove(scl_hash_t *ht, const void *key)
     while (e) {
         if (ht->eq_func(e->key, key, ht->key_size)) {
             *prev = e->next;
-            free(e->key);
-            free(e->value);
-            free(e);
+            scl_free(alloc, e->key);
+            scl_free(alloc, e->value);
+            scl_free(alloc, e);
             ht->count--;
             return SCL_OK;
         }

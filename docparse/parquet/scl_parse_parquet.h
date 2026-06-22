@@ -7,11 +7,9 @@
 #endif
 
 #include "../../common/scl_common.h"
-#include <stddef.h>
-#include <stdio.h>
-#include <stdint.h>
 
 typedef struct {
+    scl_allocator_t *alloc;
     char *filename;
     FILE *fp;
     unsigned char *buf;
@@ -22,7 +20,7 @@ typedef struct {
     int *column_types;
 } scl_parse_parquet_t;
 
-scl_error_t scl_parse_parquet_open(scl_parse_parquet_t *parser, const char *filename);
+scl_error_t scl_parse_parquet_open(scl_allocator_t *alloc, scl_parse_parquet_t *parser, const char *filename);
 scl_error_t scl_parse_parquet_get_row_count(scl_parse_parquet_t *parser, int64_t *out);
 scl_error_t scl_parse_parquet_get_column_count(scl_parse_parquet_t *parser, int *out);
 scl_error_t scl_parse_parquet_get_column_name(scl_parse_parquet_t *parser, int index, const char **out, size_t *out_len);

@@ -1,5 +1,4 @@
 #include "concurrent_rbtree.h"
-#include <stdlib.h>
 #include <string.h>
 
 #if defined(__GNUC__) && !defined(__clang__)
@@ -9,7 +8,7 @@
 static inline void spin_lock(atomic_flag *lock)
 {
     while (atomic_flag_test_and_set_explicit(lock, memory_order_acquire)) {
-        __asm__ volatile("yield");
+        scl_cpu_pause();
     }
 }
 
@@ -18,30 +17,51 @@ static inline void spin_unlock(atomic_flag *lock)
     atomic_flag_clear_explicit(lock, memory_order_release);
 }
 
-static scl_concurrent_rbtree_node_t *create_node(const void *data, size_t element_size)
+static scl_atomic_rbtree_node_t *create_node(scl_allocator_t *alloc, const void *data, size_t element_size)
 {
-    scl_concurrent_rbtree_node_t *n = malloc(sizeof(scl_concurrent_rbtree_node_t));
+    scl_atomic_rbtree_node_t *n = scl_alloc(alloc, sizeof(scl_atomic_rbtree_node_t), alignof(max_align_t));
     if (!n) return NULL;
-    n->data = malloc(element_size);
-    if (!n->data) { free(n); return NULL; }
+    n->data = scl_alloc(alloc, element_size, alignof(max_align_t));
+    if (!n->data) { scl_free(alloc, n); return NULL; }
     memcpy(n->data, data, element_size);
     n->left = n->right = n->parent = NULL;
-    n->color = SCL_CONCURRENT_RB_RED;
+    n->color = SCL_RB_RED;
     return n;
 }
 
-static void destroy_subtree(scl_concurrent_rbtree_node_t *n)
+void scl_atomic_rbtree_destroy(scl_allocator_t *alloc, scl_atomic_rbtree_t *tree)
 {
-    if (!n) return;
-    destroy_subtree(n->left);
-    destroy_subtree(n->right);
-    free(n->data);
-    free(n);
+    if (!tree) return;
+    spin_lock(&tree->lock);
+    if (tree->root) {
+        scl_atomic_rbtree_node_t *stack[256];
+        int sp = -1;
+        scl_atomic_rbtree_node_t *cur = tree->root;
+        scl_atomic_rbtree_node_t *last = NULL;
+        while (cur || sp >= 0) {
+            while (cur) {
+                stack[++sp] = cur;
+                cur = cur->left;
+            }
+            scl_atomic_rbtree_node_t *peek = stack[sp];
+            if (peek->right && last != peek->right) {
+                cur = peek->right;
+            } else {
+                sp--;
+                scl_free(alloc, peek->data);
+                scl_free(alloc, peek);
+                last = peek;
+            }
+        }
+    }
+    tree->root = NULL;
+    atomic_store_explicit(&tree->count, 0, memory_order_relaxed);
+    spin_unlock(&tree->lock);
 }
 
-static void rotate_left(scl_concurrent_rbtree_node_t **root, scl_concurrent_rbtree_node_t *x)
+static void rotate_left(scl_atomic_rbtree_node_t **root, scl_atomic_rbtree_node_t *x)
 {
-    scl_concurrent_rbtree_node_t *y = x->right;
+    scl_atomic_rbtree_node_t *y = x->right;
     x->right = y->left;
     if (y->left) y->left->parent = x;
     y->parent = x->parent;
@@ -52,9 +72,9 @@ static void rotate_left(scl_concurrent_rbtree_node_t **root, scl_concurrent_rbtr
     x->parent = y;
 }
 
-static void rotate_right(scl_concurrent_rbtree_node_t **root, scl_concurrent_rbtree_node_t *x)
+static void rotate_right(scl_atomic_rbtree_node_t **root, scl_atomic_rbtree_node_t *x)
 {
-    scl_concurrent_rbtree_node_t *y = x->left;
+    scl_atomic_rbtree_node_t *y = x->left;
     x->left = y->right;
     if (y->right) y->right->parent = x;
     y->parent = x->parent;
@@ -65,42 +85,42 @@ static void rotate_right(scl_concurrent_rbtree_node_t **root, scl_concurrent_rbt
     x->parent = y;
 }
 
-static void insert_fixup(scl_concurrent_rbtree_node_t **root, scl_concurrent_rbtree_node_t *z)
+static void insert_fixup(scl_atomic_rbtree_node_t **root, scl_atomic_rbtree_node_t *z)
 {
-    while (z->parent && z->parent->color == SCL_CONCURRENT_RB_RED) {
+    while (z->parent && z->parent->color == SCL_RB_RED) {
         if (!z->parent->parent) break;
         if (z->parent == z->parent->parent->left) {
-            scl_concurrent_rbtree_node_t *y = z->parent->parent->right;
-            if (y && y->color == SCL_CONCURRENT_RB_RED) {
-                z->parent->color = SCL_CONCURRENT_RB_BLACK;
-                y->color = SCL_CONCURRENT_RB_BLACK;
-                z->parent->parent->color = SCL_CONCURRENT_RB_RED;
+            scl_atomic_rbtree_node_t *y = z->parent->parent->right;
+            if (y && y->color == SCL_RB_RED) {
+                z->parent->color = SCL_RB_BLACK;
+                y->color = SCL_RB_BLACK;
+                z->parent->parent->color = SCL_RB_RED;
                 z = z->parent->parent;
             } else {
                 if (z == z->parent->right) { z = z->parent; rotate_left(root, z); }
-                z->parent->color = SCL_CONCURRENT_RB_BLACK;
-                z->parent->parent->color = SCL_CONCURRENT_RB_RED;
+                z->parent->color = SCL_RB_BLACK;
+                z->parent->parent->color = SCL_RB_RED;
                 rotate_right(root, z->parent->parent);
             }
         } else {
-            scl_concurrent_rbtree_node_t *y = z->parent->parent->left;
-            if (y && y->color == SCL_CONCURRENT_RB_RED) {
-                z->parent->color = SCL_CONCURRENT_RB_BLACK;
-                y->color = SCL_CONCURRENT_RB_BLACK;
-                z->parent->parent->color = SCL_CONCURRENT_RB_RED;
+            scl_atomic_rbtree_node_t *y = z->parent->parent->left;
+            if (y && y->color == SCL_RB_RED) {
+                z->parent->color = SCL_RB_BLACK;
+                y->color = SCL_RB_BLACK;
+                z->parent->parent->color = SCL_RB_RED;
                 z = z->parent->parent;
             } else {
                 if (z == z->parent->left) { z = z->parent; rotate_right(root, z); }
-                z->parent->color = SCL_CONCURRENT_RB_BLACK;
-                z->parent->parent->color = SCL_CONCURRENT_RB_RED;
+                z->parent->color = SCL_RB_BLACK;
+                z->parent->parent->color = SCL_RB_RED;
                 rotate_left(root, z->parent->parent);
             }
         }
     }
-    (*root)->color = SCL_CONCURRENT_RB_BLACK;
+    (*root)->color = SCL_RB_BLACK;
 }
 
-static void transplant(scl_concurrent_rbtree_node_t **root, scl_concurrent_rbtree_node_t *u, scl_concurrent_rbtree_node_t *v)
+static void transplant(scl_atomic_rbtree_node_t **root, scl_atomic_rbtree_node_t *u, scl_atomic_rbtree_node_t *v)
 {
     if (!u->parent) *root = v;
     else if (u == u->parent->left) u->parent->left = v;
@@ -108,80 +128,80 @@ static void transplant(scl_concurrent_rbtree_node_t **root, scl_concurrent_rbtre
     if (v) v->parent = u->parent;
 }
 
-static scl_concurrent_rbtree_node_t *tree_min(scl_concurrent_rbtree_node_t *n)
+static scl_atomic_rbtree_node_t *tree_min(scl_atomic_rbtree_node_t *n)
 {
     while (n->left) n = n->left;
     return n;
 }
 
-static void remove_fixup(scl_concurrent_rbtree_node_t **root, scl_concurrent_rbtree_node_t *x, scl_concurrent_rbtree_node_t *xp, scl_concurrent_rbtree_node_t *x_parent)
+static void remove_fixup(scl_atomic_rbtree_node_t **root, scl_atomic_rbtree_node_t *x, scl_atomic_rbtree_node_t *x_parent)
 {
-    (void)xp;
-    while (x != *root && (!x || x->color == SCL_CONCURRENT_RB_BLACK)) {
-        scl_concurrent_rbtree_node_t *parent = x_parent;
+    while (x != *root && (!x || x->color == SCL_RB_BLACK)) {
+        scl_atomic_rbtree_node_t *parent = x_parent;
         if (!parent) break;
         if (x == parent->left) {
-            scl_concurrent_rbtree_node_t *w = parent->right;
-            if (w && w->color == SCL_CONCURRENT_RB_RED) {
-                w->color = SCL_CONCURRENT_RB_BLACK;
-                parent->color = SCL_CONCURRENT_RB_RED;
+            scl_atomic_rbtree_node_t *w = parent->right;
+            if (w && w->color == SCL_RB_RED) {
+                w->color = SCL_RB_BLACK;
+                parent->color = SCL_RB_RED;
                 rotate_left(root, parent);
                 w = parent->right;
             }
-            if (w && (!w->left || w->left->color == SCL_CONCURRENT_RB_BLACK) &&
-                     (!w->right || w->right->color == SCL_CONCURRENT_RB_BLACK)) {
-                w->color = SCL_CONCURRENT_RB_RED;
+            if (w && (!w->left || w->left->color == SCL_RB_BLACK) &&
+                     (!w->right || w->right->color == SCL_RB_BLACK)) {
+                w->color = SCL_RB_RED;
                 x = parent;
                 x_parent = x->parent;
             } else {
-                if (w && (!w->right || w->right->color == SCL_CONCURRENT_RB_BLACK)) {
-                    if (w->left) w->left->color = SCL_CONCURRENT_RB_BLACK;
-                    w->color = SCL_CONCURRENT_RB_RED;
+                if (w && (!w->right || w->right->color == SCL_RB_BLACK)) {
+                    if (w->left) w->left->color = SCL_RB_BLACK;
+                    w->color = SCL_RB_RED;
                     rotate_right(root, w);
                     w = parent->right;
                 }
                 if (w) w->color = parent->color;
-                parent->color = SCL_CONCURRENT_RB_BLACK;
-                if (w && w->right) w->right->color = SCL_CONCURRENT_RB_BLACK;
+                parent->color = SCL_RB_BLACK;
+                if (w && w->right) w->right->color = SCL_RB_BLACK;
                 rotate_left(root, parent);
                 x = *root;
                 x_parent = NULL;
             }
         } else {
-            scl_concurrent_rbtree_node_t *w = parent->left;
-            if (w && w->color == SCL_CONCURRENT_RB_RED) {
-                w->color = SCL_CONCURRENT_RB_BLACK;
-                parent->color = SCL_CONCURRENT_RB_RED;
+            scl_atomic_rbtree_node_t *w = parent->left;
+            if (w && w->color == SCL_RB_RED) {
+                w->color = SCL_RB_BLACK;
+                parent->color = SCL_RB_RED;
                 rotate_right(root, parent);
                 w = parent->left;
             }
-            if (w && (!w->right || w->right->color == SCL_CONCURRENT_RB_BLACK) &&
-                     (!w->left || w->left->color == SCL_CONCURRENT_RB_BLACK)) {
-                w->color = SCL_CONCURRENT_RB_RED;
+            if (w && (!w->right || w->right->color == SCL_RB_BLACK) &&
+                     (!w->left || w->left->color == SCL_RB_BLACK)) {
+                w->color = SCL_RB_RED;
                 x = parent;
                 x_parent = x->parent;
             } else {
-                if (w && (!w->left || w->left->color == SCL_CONCURRENT_RB_BLACK)) {
-                    if (w->right) w->right->color = SCL_CONCURRENT_RB_BLACK;
-                    w->color = SCL_CONCURRENT_RB_RED;
+                if (w && (!w->left || w->left->color == SCL_RB_BLACK)) {
+                    if (w->right) w->right->color = SCL_RB_BLACK;
+                    w->color = SCL_RB_RED;
                     rotate_left(root, w);
                     w = parent->left;
                 }
                 if (w) w->color = parent->color;
-                parent->color = SCL_CONCURRENT_RB_BLACK;
-                if (w && w->left) w->left->color = SCL_CONCURRENT_RB_BLACK;
+                parent->color = SCL_RB_BLACK;
+                if (w && w->left) w->left->color = SCL_RB_BLACK;
                 rotate_right(root, parent);
                 x = *root;
                 x_parent = NULL;
             }
         }
     }
-    if (x) x->color = SCL_CONCURRENT_RB_BLACK;
+    if (x) x->color = SCL_RB_BLACK;
 }
 
-scl_error_t scl_concurrent_rbtree_init(scl_concurrent_rbtree_t *tree, size_t element_size,
-                                       scl_concurrent_cmp_func_t cmp)
+scl_error_t scl_atomic_rbtree_init(scl_allocator_t *alloc, scl_atomic_rbtree_t *tree, size_t element_size,
+                            scl_cmp_func_t cmp)
 {
+    (void)alloc;
     if (!tree) return SCL_ERR_NULL_PTR;
     if (element_size == 0 || !cmp) return SCL_ERR_INVALID_ARG;
     tree->root = NULL;
@@ -192,30 +212,20 @@ scl_error_t scl_concurrent_rbtree_init(scl_concurrent_rbtree_t *tree, size_t ele
     return SCL_OK;
 }
 
-void scl_concurrent_rbtree_destroy(scl_concurrent_rbtree_t *tree)
-{
-    if (!tree) return;
-    spin_lock(&tree->lock);
-    destroy_subtree(tree->root);
-    tree->root = NULL;
-    atomic_store_explicit(&tree->count, 0, memory_order_relaxed);
-    spin_unlock(&tree->lock);
-}
-
-scl_error_t scl_concurrent_rbtree_insert(scl_concurrent_rbtree_t *tree, const void *element)
+scl_error_t scl_atomic_rbtree_insert(scl_allocator_t *alloc, scl_atomic_rbtree_t *tree, const void *element)
 {
     if (!tree || !element) return SCL_ERR_NULL_PTR;
-    scl_concurrent_rbtree_node_t *z = create_node(element, tree->element_size);
+    scl_atomic_rbtree_node_t *z = create_node(alloc, element, tree->element_size);
     if (!z) return SCL_ERR_OUT_OF_MEMORY;
     spin_lock(&tree->lock);
-    scl_concurrent_rbtree_node_t *y = NULL;
-    scl_concurrent_rbtree_node_t *x = tree->root;
+    scl_atomic_rbtree_node_t *y = NULL;
+    scl_atomic_rbtree_node_t *x = tree->root;
     while (x) {
         y = x;
         int c = tree->cmp(element, x->data);
         if (c == 0) {
             memcpy(x->data, element, tree->element_size);
-            free(z->data); free(z);
+            scl_free(alloc, z->data); scl_free(alloc, z);
             spin_unlock(&tree->lock);
             return SCL_OK;
         }
@@ -231,21 +241,21 @@ scl_error_t scl_concurrent_rbtree_insert(scl_concurrent_rbtree_t *tree, const vo
     return SCL_OK;
 }
 
-scl_error_t scl_concurrent_rbtree_remove(scl_concurrent_rbtree_t *tree, const void *key)
+scl_error_t scl_atomic_rbtree_remove(scl_allocator_t *alloc, scl_atomic_rbtree_t *tree, const void *key)
 {
     if (!tree || !key) return SCL_ERR_NULL_PTR;
     spin_lock(&tree->lock);
-    scl_concurrent_rbtree_node_t *z = tree->root;
+    scl_atomic_rbtree_node_t *z = tree->root;
     while (z) {
         int c = tree->cmp(key, z->data);
         if (c == 0) break;
         z = (c < 0) ? z->left : z->right;
     }
     if (!z) { spin_unlock(&tree->lock); return SCL_ERR_NOT_FOUND; }
-    scl_concurrent_rbtree_node_t *y = z;
-    scl_concurrent_rb_color_t y_orig = y->color;
-    scl_concurrent_rbtree_node_t *x = NULL;
-    scl_concurrent_rbtree_node_t *x_parent = NULL;
+    scl_atomic_rbtree_node_t *y = z;
+    scl_rb_color_t y_orig = y->color;
+    scl_atomic_rbtree_node_t *x = NULL;
+    scl_atomic_rbtree_node_t *x_parent = NULL;
     if (!z->left) {
         x = z->right;
         x_parent = z->parent;
@@ -272,20 +282,20 @@ scl_error_t scl_concurrent_rbtree_remove(scl_concurrent_rbtree_t *tree, const vo
         y->left->parent = y;
         y->color = z->color;
     }
-    free(z->data);
-    free(z);
-    if (y_orig == SCL_CONCURRENT_RB_BLACK)
-        remove_fixup(&tree->root, x, NULL, x_parent);
+    scl_free(alloc, z->data);
+    scl_free(alloc, z);
+    if (y_orig == SCL_RB_BLACK)
+        remove_fixup(&tree->root, x, x_parent);
     atomic_fetch_sub_explicit(&tree->count, 1, memory_order_relaxed);
     spin_unlock(&tree->lock);
     return SCL_OK;
 }
 
-bool scl_concurrent_rbtree_contains(scl_concurrent_rbtree_t *tree, const void *key)
+bool scl_atomic_rbtree_contains(scl_atomic_rbtree_t *tree, const void *key)
 {
     if (!tree || !key) return false;
     spin_lock(&tree->lock);
-    scl_concurrent_rbtree_node_t *cur = tree->root;
+    scl_atomic_rbtree_node_t *cur = tree->root;
     while (cur) {
         int c = tree->cmp(key, cur->data);
         if (c == 0) { spin_unlock(&tree->lock); return true; }
@@ -295,11 +305,11 @@ bool scl_concurrent_rbtree_contains(scl_concurrent_rbtree_t *tree, const void *k
     return false;
 }
 
-scl_error_t scl_concurrent_rbtree_find(scl_concurrent_rbtree_t *tree, const void *key, void *out)
+scl_error_t scl_atomic_rbtree_find(scl_atomic_rbtree_t *tree, const void *key, void *out)
 {
     if (!tree || !key || !out) return SCL_ERR_NULL_PTR;
     spin_lock(&tree->lock);
-    scl_concurrent_rbtree_node_t *cur = tree->root;
+    scl_atomic_rbtree_node_t *cur = tree->root;
     while (cur) {
         int c = tree->cmp(key, cur->data);
         if (c == 0) { memcpy(out, cur->data, tree->element_size); spin_unlock(&tree->lock); return SCL_OK; }
@@ -309,12 +319,12 @@ scl_error_t scl_concurrent_rbtree_find(scl_concurrent_rbtree_t *tree, const void
     return SCL_ERR_NOT_FOUND;
 }
 
-size_t scl_concurrent_rbtree_count(const scl_concurrent_rbtree_t *tree)
+size_t scl_atomic_rbtree_count(const scl_atomic_rbtree_t *tree)
 {
     return tree ? atomic_load_explicit(&tree->count, memory_order_relaxed) : 0;
 }
 
-bool scl_concurrent_rbtree_empty(const scl_concurrent_rbtree_t *tree)
+bool scl_atomic_rbtree_empty(const scl_atomic_rbtree_t *tree)
 {
     return tree ? atomic_load_explicit(&tree->count, memory_order_relaxed) == 0 : true;
 }

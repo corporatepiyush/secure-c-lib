@@ -1,12 +1,11 @@
 #include "scl_array.h"
-#include <stdlib.h>
 #include <string.h>
 
 #if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC optimize ("O3", "unroll-loops", "tree-vectorize", "inline")
 #endif
 
-scl_error_t scl_array_init(scl_array_t *arr, size_t element_size, size_t initial_capacity)
+scl_error_t scl_array_init(scl_allocator_t *alloc, scl_array_t *arr, size_t element_size, size_t initial_capacity)
 {
     if (!arr) return SCL_ERR_NULL_PTR;
     if (element_size == 0) return SCL_ERR_INVALID_ARG;
@@ -20,33 +19,35 @@ scl_error_t scl_array_init(scl_array_t *arr, size_t element_size, size_t initial
         size_t bytes;
         if (scl_mul_overflow(initial_capacity, element_size, &bytes))
             return SCL_ERR_SIZE_OVERFLOW;
-        arr->data = malloc(bytes);
+        arr->data = scl_alloc(alloc, bytes, alignof(max_align_t));
         if (!arr->data) return SCL_ERR_OUT_OF_MEMORY;
         arr->capacity = initial_capacity;
     }
     return SCL_OK;
 }
 
-void scl_array_destroy(scl_array_t *arr)
+void scl_array_destroy(scl_allocator_t *alloc, scl_array_t *arr)
 {
     if (arr) {
-        free(arr->data);
+        scl_free(alloc, arr->data);
         arr->data = NULL;
         arr->capacity = 0;
         arr->count = 0;
     }
 }
 
-scl_error_t scl_array_reserve(scl_array_t *arr, size_t new_capacity)
+scl_error_t scl_array_reserve(scl_allocator_t *alloc, scl_array_t *arr, size_t new_capacity)
 {
     if (!arr) return SCL_ERR_NULL_PTR;
     if (new_capacity <= arr->capacity) return SCL_OK;
 
-    size_t bytes;
-    if (scl_mul_overflow(new_capacity, arr->element_size, &bytes))
+    size_t old_bytes, new_bytes;
+    if (scl_mul_overflow(arr->capacity, arr->element_size, &old_bytes))
+        old_bytes = 0;
+    if (scl_mul_overflow(new_capacity, arr->element_size, &new_bytes))
         return SCL_ERR_SIZE_OVERFLOW;
 
-    unsigned char *tmp = realloc(arr->data, bytes);
+    unsigned char *tmp = scl_realloc(alloc, arr->data, old_bytes, new_bytes, alignof(max_align_t));
     if (!tmp) return SCL_ERR_OUT_OF_MEMORY;
 
     arr->data = tmp;
@@ -54,7 +55,7 @@ scl_error_t scl_array_reserve(scl_array_t *arr, size_t new_capacity)
     return SCL_OK;
 }
 
-scl_error_t scl_array_push(scl_array_t *arr, const void *element)
+scl_error_t scl_array_push(scl_allocator_t *alloc, scl_array_t *arr, const void *element)
 {
     if (!arr || !element) return SCL_ERR_NULL_PTR;
 
@@ -64,7 +65,7 @@ scl_error_t scl_array_push(scl_array_t *arr, const void *element)
             if (arr->capacity == 0) new_cap = 4;
             else return SCL_ERR_SIZE_OVERFLOW;
         }
-        scl_error_t err = scl_array_reserve(arr, new_cap);
+        scl_error_t err = scl_array_reserve(alloc, arr, new_cap);
         if (err != SCL_OK) return err;
     }
 
@@ -117,14 +118,14 @@ scl_error_t scl_array_set(scl_array_t *arr, size_t index, const void *element)
     return SCL_OK;
 }
 
-scl_error_t scl_array_insert(scl_array_t *arr, size_t index, const void *element)
+scl_error_t scl_array_insert(scl_allocator_t *alloc, scl_array_t *arr, size_t index, const void *element)
 {
     if (!arr || !element) return SCL_ERR_NULL_PTR;
     if (index > arr->count) return SCL_ERR_INVALID_INDEX;
 
     if (arr->count == arr->capacity) {
         size_t new_cap = arr->capacity == 0 ? 4 : arr->capacity * 2;
-        scl_error_t err = scl_array_reserve(arr, new_cap);
+        scl_error_t err = scl_array_reserve(alloc, arr, new_cap);
         if (err != SCL_OK) return err;
     }
 
@@ -165,23 +166,25 @@ scl_error_t scl_array_remove(scl_array_t *arr, size_t index, void *out)
     return SCL_OK;
 }
 
-scl_error_t scl_array_shrink(scl_array_t *arr)
+scl_error_t scl_array_shrink(scl_allocator_t *alloc, scl_array_t *arr)
 {
     if (!arr) return SCL_ERR_NULL_PTR;
     if (arr->count == arr->capacity) return SCL_OK;
 
-    size_t bytes;
-    if (scl_mul_overflow(arr->count, arr->element_size, &bytes))
+    size_t old_bytes, new_bytes;
+    if (scl_mul_overflow(arr->capacity, arr->element_size, &old_bytes))
+        old_bytes = 0;
+    if (scl_mul_overflow(arr->count, arr->element_size, &new_bytes))
         return SCL_ERR_SIZE_OVERFLOW;
 
     if (arr->count == 0) {
-        free(arr->data);
+        scl_free(alloc, arr->data);
         arr->data = NULL;
         arr->capacity = 0;
         return SCL_OK;
     }
 
-    unsigned char *tmp = realloc(arr->data, bytes);
+    unsigned char *tmp = scl_realloc(alloc, arr->data, old_bytes, new_bytes, alignof(max_align_t));
     if (!tmp) return SCL_ERR_OUT_OF_MEMORY;
 
     arr->data = tmp;

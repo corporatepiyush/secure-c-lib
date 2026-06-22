@@ -1,9 +1,4 @@
-#if defined(__GNUC__) && !defined(__clang__)
-#pragma GCC optimize ("O3", "unroll-loops", "tree-vectorize", "inline")
-#endif
-
 #include "scl_search_hash_search.h"
-#include <stdlib.h>
 #include <string.h>
 
 static size_t hash_str(const char *s, size_t cap)
@@ -15,16 +10,26 @@ static size_t hash_str(const char *s, size_t cap)
     return h % cap;
 }
 
-scl_error_t scl_search_ht_init(scl_search_ht_t **ht, size_t capacity)
+static char *str_dup(scl_allocator_t *alloc, const char *s)
+{
+    size_t len = strlen(s) + 1;
+    char *copy = (char *)scl_alloc(alloc, len, alignof(max_align_t));
+    if (!copy) return NULL;
+    memcpy(copy, s, len);
+    return copy;
+}
+
+scl_error_t scl_search_ht_init(scl_allocator_t *alloc, scl_search_ht_t **ht, size_t capacity)
 {
     if (__builtin_expect(ht == NULL, 0)) return SCL_ERR_NULL_PTR;
     if (__builtin_expect(capacity == 0, 0)) return SCL_ERR_INVALID_ARG;
-    scl_search_ht_t *t = (scl_search_ht_t *)malloc(sizeof(scl_search_ht_t));
+    scl_search_ht_t *t = (scl_search_ht_t *)scl_alloc(alloc, sizeof(scl_search_ht_t), alignof(max_align_t));
     if (!t) return SCL_ERR_OUT_OF_MEMORY;
-    t->entries = (scl_search_ht_entry_t *)calloc(capacity, sizeof(scl_search_ht_entry_t));
-    if (!t->entries) { free(t); return SCL_ERR_OUT_OF_MEMORY; }
+    t->entries = (scl_search_ht_entry_t *)scl_calloc(alloc, capacity, sizeof(scl_search_ht_entry_t), alignof(max_align_t));
+    if (!t->entries) { scl_free(alloc, t); return SCL_ERR_OUT_OF_MEMORY; }
     t->capacity = capacity;
     t->count = 0;
+    t->alloc = alloc;
     *ht = t;
     return SCL_OK;
 }
@@ -39,7 +44,7 @@ scl_error_t scl_search_ht_insert(scl_search_ht_t *ht, const char *key, void *val
     for (size_t i = 0; i < ht->capacity; i++) {
         size_t probe = (idx + i) % ht->capacity;
         if (!ht->entries[probe].occupied || ht->entries[probe].deleted) {
-            ht->entries[probe].key = strdup(key);
+            ht->entries[probe].key = str_dup(ht->alloc, key);
             if (!ht->entries[probe].key) return SCL_ERR_OUT_OF_MEMORY;
             ht->entries[probe].value = value;
             ht->entries[probe].occupied = true;
@@ -86,7 +91,7 @@ scl_error_t scl_search_ht_delete(scl_search_ht_t *ht, const char *key)
         if (!ht->entries[probe].occupied) return SCL_ERR_NOT_FOUND;
         if (!ht->entries[probe].deleted && strcmp(ht->entries[probe].key, key) == 0) {
             ht->entries[probe].deleted = true;
-            free(ht->entries[probe].key);
+            scl_free(ht->alloc, ht->entries[probe].key);
             ht->entries[probe].key = NULL;
             ht->count--;
             return SCL_OK;
@@ -100,8 +105,8 @@ void scl_search_ht_destroy(scl_search_ht_t *ht)
     if (!ht) return;
     for (size_t i = 0; i < ht->capacity; i++) {
         if (ht->entries[i].occupied && !ht->entries[i].deleted)
-            free(ht->entries[i].key);
+            scl_free(ht->alloc, ht->entries[i].key);
     }
-    free(ht->entries);
-    free(ht);
+    scl_free(ht->alloc, ht->entries);
+    scl_free(ht->alloc, ht);
 }

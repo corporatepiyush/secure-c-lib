@@ -23,80 +23,80 @@ static int cmp_int(const void *a, const void *b)
 static void test_init_destroy(void)
 {
     TEST("init and destroy");
-    scl_concurrent_rbtree_t tree;
-    assert(scl_concurrent_rbtree_init(&tree, sizeof(int), cmp_int) == SCL_OK);
-    assert(scl_concurrent_rbtree_empty(&tree));
-    scl_concurrent_rbtree_destroy(&tree);
+    scl_atomic_rbtree_t tree;
+    assert(scl_atomic_rbtree_init(scl_allocator_default(), &tree, sizeof(int), cmp_int) == SCL_OK);
+    assert(scl_atomic_rbtree_empty(&tree));
+    scl_atomic_rbtree_destroy(scl_allocator_default(), &tree);
     PASS();
 }
 
 static void test_insert_contains_find(void)
 {
     TEST("insert, contains, find");
-    scl_concurrent_rbtree_t tree;
-    scl_concurrent_rbtree_init(&tree, sizeof(int), cmp_int);
+    scl_atomic_rbtree_t tree;
+    scl_atomic_rbtree_init(scl_allocator_default(), &tree, sizeof(int), cmp_int);
     int vals[] = {50, 30, 70, 20, 40, 60, 80};
-    for (int i = 0; i < 7; i++) assert(scl_concurrent_rbtree_insert(&tree, &vals[i]) == SCL_OK);
-    assert(scl_concurrent_rbtree_count(&tree) == 7);
-    for (int i = 0; i < 7; i++) assert(scl_concurrent_rbtree_contains(&tree, &vals[i]));
+    for (int i = 0; i < 7; i++) assert(scl_atomic_rbtree_insert(scl_allocator_default(), &tree, &vals[i]) == SCL_OK);
+    assert(scl_atomic_rbtree_count(&tree) == 7);
+    for (int i = 0; i < 7; i++) assert(scl_atomic_rbtree_contains(&tree, &vals[i]));
     int v;
-    for (int i = 0; i < 7; i++) { assert(scl_concurrent_rbtree_find(&tree, &vals[i], &v) == SCL_OK); assert(v == vals[i]); }
+    for (int i = 0; i < 7; i++) { assert(scl_atomic_rbtree_find(&tree, &vals[i], &v) == SCL_OK); assert(v == vals[i]); }
     int nk = 99;
-    assert(!scl_concurrent_rbtree_contains(&tree, &nk));
-    scl_concurrent_rbtree_destroy(&tree);
+    assert(!scl_atomic_rbtree_contains(&tree, &nk));
+    scl_atomic_rbtree_destroy(scl_allocator_default(), &tree);
     PASS();
 }
 
 static void test_remove(void)
 {
     TEST("remove");
-    scl_concurrent_rbtree_t tree;
-    scl_concurrent_rbtree_init(&tree, sizeof(int), cmp_int);
-    for (int i = 0; i < 10; i++) scl_concurrent_rbtree_insert(&tree, &i);
-    for (int i = 0; i < 10; i += 2) assert(scl_concurrent_rbtree_remove(&tree, &i) == SCL_OK);
-    assert(scl_concurrent_rbtree_count(&tree) == 5);
+    scl_atomic_rbtree_t tree;
+    scl_atomic_rbtree_init(scl_allocator_default(), &tree, sizeof(int), cmp_int);
+    for (int i = 0; i < 10; i++) scl_atomic_rbtree_insert(scl_allocator_default(), &tree, &i);
+    for (int i = 0; i < 10; i += 2) assert(scl_atomic_rbtree_remove(scl_allocator_default(), &tree, &i) == SCL_OK);
+    assert(scl_atomic_rbtree_count(&tree) == 5);
     for (int i = 0; i < 10; i++) {
-        if (i % 2 == 0) assert(!scl_concurrent_rbtree_contains(&tree, &i));
-        else assert(scl_concurrent_rbtree_contains(&tree, &i));
+        if (i % 2 == 0) assert(!scl_atomic_rbtree_contains(&tree, &i));
+        else assert(scl_atomic_rbtree_contains(&tree, &i));
     }
-    scl_concurrent_rbtree_destroy(&tree);
+    scl_atomic_rbtree_destroy(scl_allocator_default(), &tree);
     PASS();
 }
 
 static void test_null(void)
 {
     TEST("null checks");
-    assert(scl_concurrent_rbtree_init(NULL, sizeof(int), cmp_int) == SCL_ERR_NULL_PTR);
-    scl_concurrent_rbtree_destroy(NULL);
+    assert(scl_atomic_rbtree_init(scl_allocator_default(), NULL, sizeof(int), cmp_int) == SCL_ERR_NULL_PTR);
+    scl_atomic_rbtree_destroy(scl_allocator_default(), NULL);
     PASS();
 }
 
 static void *insert_thread(void *arg)
 {
-    scl_concurrent_rbtree_t *tree = (scl_concurrent_rbtree_t *)arg;
-    for (int i = 0; i < 50; i++) scl_concurrent_rbtree_insert(tree, &i);
+    scl_atomic_rbtree_t *tree = (scl_atomic_rbtree_t *)arg;
+    for (int i = 0; i < 50; i++) scl_atomic_rbtree_insert(scl_allocator_default(), tree, &i);
     return NULL;
 }
 
 static void test_concurrent_insert(void)
 {
     TEST("concurrent insert 2 threads");
-    scl_concurrent_rbtree_t tree;
-    scl_concurrent_rbtree_init(&tree, sizeof(int), cmp_int);
+    scl_atomic_rbtree_t tree;
+    scl_atomic_rbtree_init(scl_allocator_default(), &tree, sizeof(int), cmp_int);
     pthread_t t1, t2;
     pthread_create(&t1, NULL, insert_thread, &tree);
     pthread_create(&t2, NULL, insert_thread, &tree);
     pthread_join(t1, NULL);
     pthread_join(t2, NULL);
-    assert(scl_concurrent_rbtree_count(&tree) == 50);
-    for (int i = 0; i < 50; i++) assert(scl_concurrent_rbtree_contains(&tree, &i));
-    scl_concurrent_rbtree_destroy(&tree);
+    assert(scl_atomic_rbtree_count(&tree) == 50);
+    for (int i = 0; i < 50; i++) assert(scl_atomic_rbtree_contains(&tree, &i));
+    scl_atomic_rbtree_destroy(scl_allocator_default(), &tree);
     PASS();
 }
 
 int main(void)
 {
-    printf("=== scl_concurrent_rbtree tests ===\n");
+    printf("=== scl_rbtree tests ===\n");
     test_init_destroy();
     test_insert_contains_find();
     test_remove();

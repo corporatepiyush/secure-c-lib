@@ -7,8 +7,6 @@
 #endif
 
 #include "../../common/scl_common.h"
-#include <stddef.h>
-#include <stdint.h>
 
 typedef enum {
     SCL_JSON_NULL,
@@ -35,7 +33,7 @@ typedef struct scl_parse_json_value {
     char **keys;
 } scl_parse_json_value_t;
 
-scl_error_t scl_parse_json_parse(const char *json_str, scl_parse_json_value_t **out_root);
+scl_error_t scl_parse_json_parse(scl_allocator_t *alloc, const char *json_str, scl_parse_json_value_t **out_root);
 scl_parse_json_type_t scl_parse_json_get_type(const scl_parse_json_value_t *val);
 int64_t scl_parse_json_get_int(const scl_parse_json_value_t *val);
 double scl_parse_json_get_double(const scl_parse_json_value_t *val);
@@ -45,7 +43,7 @@ scl_parse_json_value_t *scl_parse_json_object_get(const scl_parse_json_value_t *
 scl_parse_json_value_t *scl_parse_json_array_get(const scl_parse_json_value_t *arr, size_t index);
 size_t scl_parse_json_array_len(const scl_parse_json_value_t *arr);
 size_t scl_parse_json_object_len(const scl_parse_json_value_t *obj);
-void scl_parse_json_free(scl_parse_json_value_t *root);
+void scl_parse_json_free(scl_allocator_t *alloc, scl_parse_json_value_t *root);
 
 #ifdef __GNUC__
 #pragma GCC diagnostic pop

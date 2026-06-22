@@ -1,15 +1,5 @@
 #include "scl_bst.h"
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <assert.h>
-
-static int tests_passed = 0;
-static int tests_failed = 0;
-
-#define TEST(name) do { printf("  TEST: %s ... ", name); } while(0)
-#define PASS() do { printf("PASSED\n"); tests_passed++; } while(0)
-#define FAIL(msg) do { printf("FAILED: %s\n", msg); tests_failed++; } while(0)
+#include "../../testlib/scl_test.h"
 
 static int cmp_int(const void *a, const void *b)
 {
@@ -26,38 +16,41 @@ static void visit_fill(void *data, void *ctx)
     arr[*(int *)data] = *(int *)data;
 }
 
-static void test_insert_inorder(void)
+static void test_insert_inorder(scl_test_runner_t *tr)
 {
-    TEST("insert and inorder");
+    scl_allocator_t *alloc = scl_allocator_default();
     scl_bst_t t;
-    scl_bst_init(&t, sizeof(int), cmp_int);
+    SCL_EXPECT_OK(tr, scl_bst_init(alloc, &t, sizeof(int), cmp_int));
     int data[] = {5, 3, 7, 2, 4, 6, 8};
-    for (size_t i = 0; i < 7; i++) scl_bst_insert(&t, &data[i]);
-    assert(scl_bst_count(&t) == 7);
+    for (size_t i = 0; i < 7; i++)
+        SCL_EXPECT_OK(tr, scl_bst_insert(alloc, &t, &data[i]));
+    SCL_EXPECT_EQ_SZ(tr, scl_bst_count(&t), 7);
     int sorted[7] = {0};
-    scl_bst_inorder(&t, visit_fill, sorted);
-    scl_bst_destroy(&t);
-    PASS();
+    SCL_EXPECT_OK(tr, scl_bst_inorder(&t, visit_fill, sorted));
+    scl_bst_destroy(alloc, &t);
 }
 
-static void test_remove(void)
+static void test_remove(scl_test_runner_t *tr)
 {
-    TEST("remove");
+    scl_allocator_t *alloc = scl_allocator_default();
     scl_bst_t t;
-    scl_bst_init(&t, sizeof(int), cmp_int);
-    for (int i = 0; i < 10; i++) scl_bst_insert(&t, &i);
-    scl_bst_remove(&t, &(int){5});
-    assert(!scl_bst_contains(&t, &(int){5}));
-    assert(scl_bst_count(&t) == 9);
-    scl_bst_destroy(&t);
-    PASS();
+    SCL_EXPECT_OK(tr, scl_bst_init(alloc, &t, sizeof(int), cmp_int));
+    for (int i = 0; i < 10; i++)
+        SCL_EXPECT_OK(tr, scl_bst_insert(alloc, &t, &i));
+    int five = 5;
+    SCL_EXPECT_OK(tr, scl_bst_remove(alloc, &t, &five));
+    SCL_EXPECT_FALSE(tr, scl_bst_contains(&t, &five));
+    SCL_EXPECT_EQ_SZ(tr, scl_bst_count(&t), 9);
+    scl_bst_destroy(alloc, &t);
 }
 
 int main(void)
 {
-    printf("=== scl_bst tests ===\n");
-    test_insert_inorder();
-    test_remove();
-    printf("Results: %d passed, %d failed\n", tests_passed, tests_failed);
-    return tests_failed > 0 ? 1 : 0;
+    scl_test_runner_t tr;
+    scl_test_init(&tr);
+    scl_test_group("scl_bst tests");
+    test_insert_inorder(&tr);
+    test_remove(&tr);
+    scl_test_summary(&tr);
+    return tr.failed > 0 ? 1 : 0;
 }

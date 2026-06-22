@@ -1,15 +1,7 @@
+#include "../../testlib/scl_test.h"
 #include "scl_search_bellman_ford.h"
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <inttypes.h>
-
-static int tests_passed = 0;
-static int tests_failed = 0;
-
-#define TEST(name) do { printf("  TEST: %s ... ", name); } while(0)
-#define PASS() do { printf("PASSED\n"); tests_passed++; } while(0)
-#define FAIL(msg) do { printf("FAILED: %s\n", msg); tests_failed++; } while(0)
 
 static scl_error_t make_graph(scl_graph_t *g, size_t n)
 {
@@ -50,7 +42,8 @@ static scl_error_t add_edge(scl_graph_t *g, size_t from, size_t to, int weight)
 
 int main(void)
 {
-    printf("=== scl_search_bellman_ford tests ===\n");
+    scl_test_runner_t tr;
+    scl_test_init(&tr);
 
     {
         scl_graph_t g;
@@ -67,10 +60,13 @@ int main(void)
         add_edge(&g, 4, 2, 7);
         int64_t dist[5];
         int prev[5];
-        TEST("bellman-ford distances");
-        scl_error_t err = scl_search_bellman_ford(&g, 0, dist, prev);
-        if (err == SCL_OK && dist[0] == 0 && dist[1] == 2 && dist[2] == 4 && dist[3] == 7 && dist[4] == -2) PASS();
-        else FAIL("incorrect distances");
+        scl_test_group("bellman_ford");
+        SCL_EXPECT_OK(&tr, scl_search_bellman_ford(&g, 0, dist, prev));
+        SCL_EXPECT_EQ_I(&tr, 0, dist[0]);
+        SCL_EXPECT_EQ_I(&tr, 2, dist[1]);
+        SCL_EXPECT_EQ_I(&tr, 4, dist[2]);
+        SCL_EXPECT_EQ_I(&tr, 7, dist[3]);
+        SCL_EXPECT_EQ_I(&tr, -2, dist[4]);
         destroy_graph(&g);
     }
     {
@@ -81,10 +77,7 @@ int main(void)
         add_edge(&g, 2, 0, -1);
         int64_t dist[3];
         int prev[3];
-        TEST("bellman-ford negative cycle");
-        scl_error_t err = scl_search_bellman_ford(&g, 0, dist, prev);
-        if (err == SCL_ERR_INVALID_STATE) PASS();
-        else FAIL("expected INVALID_STATE");
+        SCL_EXPECT_EQ_I(&tr, SCL_ERR_INVALID_STATE, scl_search_bellman_ford(&g, 0, dist, prev));
         destroy_graph(&g);
     }
     {
@@ -93,10 +86,10 @@ int main(void)
         add_edge(&g, 0, 1, 5);
         int64_t dist[3];
         int prev[3];
-        TEST("bellman-ford unreachable");
-        scl_error_t err = scl_search_bellman_ford(&g, 0, dist, prev);
-        if (err == SCL_OK && dist[0] == 0 && dist[1] == 5 && dist[2] == INT64_MAX) PASS();
-        else FAIL("expected unreachable");
+        SCL_EXPECT_OK(&tr, scl_search_bellman_ford(&g, 0, dist, prev));
+        SCL_EXPECT_EQ_I(&tr, 0, dist[0]);
+        SCL_EXPECT_EQ_I(&tr, 5, dist[1]);
+        SCL_EXPECT_EQ_I(&tr, INT64_MAX, dist[2]);
         destroy_graph(&g);
     }
     {
@@ -104,18 +97,14 @@ int main(void)
         make_graph(&g, 1);
         int64_t dist[1];
         int prev[1];
-        TEST("bellman-ford single node");
-        scl_error_t err = scl_search_bellman_ford(&g, 0, dist, prev);
-        if (err == SCL_OK && dist[0] == 0) PASS();
-        else FAIL("expected 0");
+        SCL_EXPECT_OK(&tr, scl_search_bellman_ford(&g, 0, dist, prev));
+        SCL_EXPECT_EQ_I(&tr, 0, dist[0]);
         destroy_graph(&g);
     }
     {
-        TEST("null");
-        if (SCL_ERR_NULL_PTR == scl_search_bellman_ford(NULL, 0, (int64_t*)(uintptr_t)1, (int*)(uintptr_t)1)) PASS();
-        else FAIL("expected NULL_PTR");
+        SCL_EXPECT_EQ_I(&tr, SCL_ERR_NULL_PTR, scl_search_bellman_ford(NULL, 0, (int64_t*)(uintptr_t)1, (int*)(uintptr_t)1));
     }
 
-    printf("Results: %d passed, %d failed\n", tests_passed, tests_failed);
-    return tests_failed > 0 ? 1 : 0;
+    scl_test_summary(&tr);
+    return tr.failed > 0 ? 1 : 0;
 }

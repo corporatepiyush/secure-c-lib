@@ -8,8 +8,6 @@
 
 #include "../../common/scl_common.h"
 #include "../prng/scl_rand_prng.h"
-#include <string.h>
-#include <math.h>
 
 typedef struct {
     scl_rand_prng_t rng;
@@ -22,7 +20,7 @@ double scl_rand_dist_exponential(scl_rand_dist_t *dist, double lambda);
 bool scl_rand_dist_bernoulli(scl_rand_dist_t *dist, double p);
 int64_t scl_rand_dist_poisson(scl_rand_dist_t *dist, double lambda);
 scl_error_t scl_rand_dist_shuffle(scl_rand_dist_t *dist, void *base, size_t count, size_t elem_size) SCL_WARN_UNUSED;
-scl_error_t scl_rand_dist_sample(scl_rand_dist_t *dist, size_t n, size_t k, size_t *out_indices) SCL_WARN_UNUSED;
+scl_error_t scl_rand_dist_sample(scl_allocator_t *alloc, scl_rand_dist_t *dist, size_t n, size_t k, size_t *out_indices) SCL_WARN_UNUSED;
 
 #ifdef __GNUC__
 #pragma GCC diagnostic pop

@@ -14,51 +14,45 @@ static int tests_failed = 0;
 int main(void) {
     printf("=== scl_alloc_buddy tests ===\n");
 
-    TEST("init and destroy");
+    TEST("create and destroy");
     {
-        scl_alloc_buddy_t buddy;
-        scl_error_t e = scl_alloc_buddy_init(&buddy, 16);
-        if (e == SCL_OK) { PASS(); } else { FAIL("init failed"); }
-        scl_alloc_buddy_destroy(&buddy);
+        scl_allocator_t *buddy = scl_alloc_buddy_create(scl_allocator_default(), 1UL << 20);
+        if (buddy) { PASS(); } else { FAIL("create failed"); }
+        scl_alloc_buddy_destroy(buddy);
     }
 
     TEST("alloc and free");
     {
-        scl_alloc_buddy_t buddy;
-        scl_alloc_buddy_init(&buddy, 16);
-        void *p = NULL;
-        scl_error_t e = scl_alloc_buddy_alloc(&buddy, 128, &p);
-        if (e == SCL_OK && p) {
+        scl_allocator_t *buddy = scl_alloc_buddy_create(scl_allocator_default(), 1UL << 20);
+        void *p = scl_alloc(buddy, 128, 16);
+        if (p) {
             memset(p, 0xCC, 128);
-            e = scl_alloc_buddy_free(&buddy, p);
-            if (e == SCL_OK) { PASS(); } else { FAIL("free failed"); }
+            scl_free(buddy, p);
+            PASS();
         } else { FAIL("alloc failed"); }
-        scl_alloc_buddy_destroy(&buddy);
+        scl_alloc_buddy_destroy(buddy);
     }
 
     TEST("stress 500 allocs");
     {
-        scl_alloc_buddy_t buddy;
-        scl_alloc_buddy_init(&buddy, 18);
+        scl_allocator_t *buddy = scl_alloc_buddy_create(scl_allocator_default(), 1UL << 22);
         void *ptrs[500];
         int ok = 1;
         for (int i = 0; i < 500; i++) {
             size_t sz = (size_t)(1 << ((i % 10) + 4));
-            if (scl_alloc_buddy_alloc(&buddy, sz, &ptrs[i]) != SCL_OK) {
-                ok = 0; break;
-            }
+            ptrs[i] = scl_alloc(buddy, sz, 16);
+            if (!ptrs[i]) { ok = 0; break; }
         }
         for (int i = 0; i < 500; i++)
-            scl_alloc_buddy_free(&buddy, ptrs[i]);
+            scl_free(buddy, ptrs[i]);
         if (ok) { PASS(); } else { FAIL("stress failed"); }
-        scl_alloc_buddy_destroy(&buddy);
+        scl_alloc_buddy_destroy(buddy);
     }
 
-    TEST("NULL checks");
+    TEST("NULL backing returns NULL");
     {
-        void *p;
-        if (scl_alloc_buddy_alloc(NULL, 64, &p) == SCL_ERR_NULL_PTR) { PASS(); }
-        else { FAIL("expected NULL_PTR"); }
+        scl_allocator_t *buddy = scl_alloc_buddy_create(NULL, 1UL << 20);
+        if (!buddy) { PASS(); } else { FAIL("expected NULL"); }
     }
 
     printf("Results: %d passed, %d failed\n", tests_passed, tests_failed);

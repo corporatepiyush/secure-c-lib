@@ -10,8 +10,6 @@
 
 #define SCL_SKIPLIST_MAX_LEVEL 16
 
-typedef int (*scl_cmp_func_t)(const void *a, const void *b);
-
 typedef struct scl_skiplist_node {
     void *data;
     struct scl_skiplist_node **forward;
@@ -26,11 +24,11 @@ typedef struct {
     size_t level;
 } scl_skiplist_t;
 
-scl_error_t scl_skiplist_init(scl_skiplist_t *sl, size_t element_size,
+scl_error_t scl_skiplist_init(scl_allocator_t *alloc, scl_skiplist_t *sl, size_t element_size,
                               scl_cmp_func_t cmp) SCL_WARN_UNUSED;
-void        scl_skiplist_destroy(scl_skiplist_t *sl);
-scl_error_t scl_skiplist_insert(scl_skiplist_t *sl, const void *element) SCL_WARN_UNUSED;
-scl_error_t scl_skiplist_remove(scl_skiplist_t *sl, const void *key) SCL_WARN_UNUSED;
+void        scl_skiplist_destroy(scl_allocator_t *alloc, scl_skiplist_t *sl);
+scl_error_t scl_skiplist_insert(scl_allocator_t *alloc, scl_skiplist_t *sl, const void *element) SCL_WARN_UNUSED;
+scl_error_t scl_skiplist_remove(scl_allocator_t *alloc, scl_skiplist_t *sl, const void *key) SCL_WARN_UNUSED;
 bool        scl_skiplist_contains(const scl_skiplist_t *sl, const void *key);
 scl_error_t scl_skiplist_find(const scl_skiplist_t *sl, const void *key, void *out) SCL_WARN_UNUSED;
 size_t      scl_skiplist_count(const scl_skiplist_t *sl);

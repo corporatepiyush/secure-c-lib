@@ -1,5 +1,4 @@
 #include "concurrent_btree.h"
-#include <stdlib.h>
 #include <string.h>
 
 #if defined(__GNUC__) && !defined(__clang__)
@@ -9,7 +8,7 @@
 static inline void spin_lock(atomic_flag *lock)
 {
     while (atomic_flag_test_and_set_explicit(lock, memory_order_acquire)) {
-        __asm__ volatile("yield");
+        scl_cpu_pause();
     }
 }
 
@@ -18,47 +17,73 @@ static inline void spin_unlock(atomic_flag *lock)
     atomic_flag_clear_explicit(lock, memory_order_release);
 }
 
-static scl_concurrent_btree_node_t *create_node(bool leaf, int t)
+static scl_atomic_btree_node_t *create_node(scl_allocator_t *alloc, bool leaf, int t,
+                                             size_t key_size, size_t value_size)
 {
-    scl_concurrent_btree_node_t *n = malloc(sizeof(scl_concurrent_btree_node_t));
+    scl_atomic_btree_node_t *n = scl_alloc(alloc, sizeof(scl_atomic_btree_node_t), alignof(max_align_t));
     if (!n) return NULL;
-    n->keys = calloc(2 * t - 1, sizeof(void *));
-    n->values = calloc(2 * t - 1, sizeof(void *));
-    n->children = calloc(2 * t, sizeof(scl_concurrent_btree_node_t *));
+    n->keys = scl_calloc(alloc, 2 * t - 1, sizeof(void *), alignof(max_align_t));
+    n->values = scl_calloc(alloc, 2 * t - 1, sizeof(void *), alignof(max_align_t));
+    n->children = scl_calloc(alloc, 2 * t, sizeof(scl_atomic_btree_node_t *), alignof(max_align_t));
     if (!n->keys || !n->values || !n->children) {
-        free(n->keys); free(n->values); free(n->children); free(n);
+        scl_free(alloc, n->keys); scl_free(alloc, n->values); scl_free(alloc, n->children); scl_free(alloc, n);
         return NULL;
+    }
+    for (size_t i = 0; i < (size_t)(2 * t - 1); i++) {
+        n->keys[i] = scl_alloc(alloc, key_size, alignof(max_align_t));
+        n->values[i] = scl_alloc(alloc, value_size, alignof(max_align_t));
     }
     n->count = 0;
     n->leaf = leaf;
     return n;
 }
 
-static void destroy_node(scl_concurrent_btree_node_t *n, int t)
+void scl_atomic_btree_destroy(scl_allocator_t *alloc, scl_atomic_btree_t *tree)
 {
-    if (!n) return;
-    if (!n->leaf) {
-        for (size_t i = 0; i < n->count + 1; i++)
-            destroy_node(n->children[i], t);
+    if (!tree || !tree->root) return;
+
+    scl_atomic_btree_node_t *stack[256];
+    int sp = 0;
+    stack[sp++] = tree->root;
+    scl_atomic_btree_node_t *stack2[256];
+    int sp2 = 0;
+
+    while (sp > 0) {
+        scl_atomic_btree_node_t *node = stack[--sp];
+        stack2[sp2++] = node;
+        if (!node->leaf) {
+            for (size_t i = 0; i <= node->count; i++)
+                if (node->children[i])
+                    stack[sp++] = node->children[i];
+        }
     }
-    for (size_t i = 0; i < n->count; i++) {
-        free(n->keys[i]);
-        free(n->values[i]);
+
+    while (sp2 > 0) {
+        scl_atomic_btree_node_t *node = stack2[--sp2];
+        size_t max_keys = 2 * tree->t - 1;
+        for (size_t i = 0; i < max_keys; i++) {
+            scl_free(alloc, node->keys[i]);
+            scl_free(alloc, node->values[i]);
+        }
+        scl_free(alloc, node->keys);
+        scl_free(alloc, node->values);
+        scl_free(alloc, node->children);
+        scl_free(alloc, node);
     }
-    free(n->keys);
-    free(n->values);
-    free(n->children);
-    free(n);
+
+    tree->root = NULL;
+    atomic_store_explicit(&tree->count, 0, memory_order_relaxed);
 }
 
-static void split_child(scl_concurrent_btree_node_t *x, int i, int t)
+static void split_child(scl_allocator_t *alloc, scl_atomic_btree_node_t *x, int i, int t,
+                         size_t key_size, size_t value_size)
 {
-    scl_concurrent_btree_node_t *y = x->children[i];
-    scl_concurrent_btree_node_t *z = create_node(y->leaf, t);
+    scl_atomic_btree_node_t *y = x->children[i];
+    scl_atomic_btree_node_t *z = create_node(alloc, y->leaf, t, key_size, value_size);
     z->count = t - 1;
     for (int j = 0; j < t - 1; j++) {
-        z->keys[j] = y->keys[j + t];
-        z->values[j] = y->values[j + t];
+        memcpy(z->keys[j], y->keys[j + t], key_size);
+        memcpy(z->values[j], y->values[j + t], value_size);
     }
     if (!y->leaf) {
         for (int j = 0; j < t; j++)
@@ -69,52 +94,21 @@ static void split_child(scl_concurrent_btree_node_t *x, int i, int t)
         x->children[j + 1] = x->children[j];
     x->children[i + 1] = z;
     for (int j = (int)x->count - 1; j >= i; j--) {
-        x->keys[j + 1] = x->keys[j];
-        x->values[j + 1] = x->values[j];
+        memcpy(x->keys[j + 1], x->keys[j], key_size);
+        memcpy(x->values[j + 1], x->values[j], value_size);
     }
-    x->keys[i] = y->keys[t - 1];
-    x->values[i] = y->values[t - 1];
+    memcpy(x->keys[i], y->keys[t - 1], key_size);
+    memcpy(x->values[i], y->values[t - 1], value_size);
     x->count++;
 }
 
-static bool insert_nonfull(scl_concurrent_btree_node_t *x, const void *key, const void *value,
-                           size_t key_size, size_t value_size, int t, scl_concurrent_cmp_func_t cmp)
-{
-    int i;
-    for (i = (int)x->count - 1; i >= 0; i--) {
-        int c = cmp(key, x->keys[i]);
-        if (c == 0) { memcpy(x->values[i], value, value_size); return false; }
-        if (c > 0) break;
-    }
-    i++;
-    if (x->leaf) {
-        for (int j = (int)x->count - 1; j >= i; j--) {
-            x->keys[j + 1] = x->keys[j];
-            x->values[j + 1] = x->values[j];
-        }
-        x->keys[i] = malloc(key_size);
-        x->values[i] = malloc(value_size);
-        memcpy(x->keys[i], key, key_size);
-        memcpy(x->values[i], value, value_size);
-        x->count++;
-        return true;
-    }
-    if (x->children[i]->count == (size_t)(2 * t - 1)) {
-        split_child(x, i, t);
-        int c = cmp(key, x->keys[i]);
-        if (c == 0) { memcpy(x->values[i], value, value_size); return false; }
-        if (c > 0) i++;
-    }
-    return insert_nonfull(x->children[i], key, value, key_size, value_size, t, cmp);
-}
-
-scl_error_t scl_concurrent_btree_init(scl_concurrent_btree_t *tree, size_t key_size, size_t value_size,
-                                      int degree, scl_concurrent_cmp_func_t cmp)
+scl_error_t scl_atomic_btree_init(scl_allocator_t *alloc, scl_atomic_btree_t *tree, size_t key_size, size_t value_size,
+                           int degree, scl_cmp_func_t cmp)
 {
     if (!tree) return SCL_ERR_NULL_PTR;
     if (key_size == 0 || value_size == 0 || degree < 2 || !cmp) return SCL_ERR_INVALID_ARG;
     tree->t = degree;
-    tree->root = create_node(true, degree);
+    tree->root = create_node(alloc, true, degree, key_size, value_size);
     if (!tree->root) return SCL_ERR_OUT_OF_MEMORY;
     tree->key_size = key_size;
     tree->value_size = value_size;
@@ -124,73 +118,109 @@ scl_error_t scl_concurrent_btree_init(scl_concurrent_btree_t *tree, size_t key_s
     return SCL_OK;
 }
 
-void scl_concurrent_btree_destroy(scl_concurrent_btree_t *tree)
-{
-    if (!tree) return;
-    spin_lock(&tree->lock);
-    destroy_node(tree->root, tree->t);
-    tree->root = NULL;
-    atomic_store_explicit(&tree->count, 0, memory_order_relaxed);
-    spin_unlock(&tree->lock);
-}
-
-scl_error_t scl_concurrent_btree_insert(scl_concurrent_btree_t *tree, const void *key, const void *value)
+scl_error_t scl_atomic_btree_insert(scl_allocator_t *alloc, scl_atomic_btree_t *tree, const void *key, const void *value)
 {
     if (!tree || !key || !value) return SCL_ERR_NULL_PTR;
     spin_lock(&tree->lock);
+
     if (tree->root->count == (size_t)(2 * tree->t - 1)) {
-        scl_concurrent_btree_node_t *s = create_node(false, tree->t);
+        scl_atomic_btree_node_t *s = create_node(alloc, false, tree->t, tree->key_size, tree->value_size);
         if (!s) { spin_unlock(&tree->lock); return SCL_ERR_OUT_OF_MEMORY; }
         s->children[0] = tree->root;
         tree->root = s;
-        split_child(s, 0, tree->t);
+        split_child(alloc, s, 0, tree->t, tree->key_size, tree->value_size);
     }
-    if (insert_nonfull(tree->root, key, value, tree->key_size, tree->value_size, tree->t, tree->cmp))
+
+    scl_atomic_btree_node_t *node = tree->root;
+    bool inserted = false;
+
+    while (1) {
+        int i = (int)node->count - 1;
+        if (node->leaf) {
+            while (i >= 0 && tree->cmp(key, node->keys[i]) < 0) {
+                memcpy(node->keys[i + 1], node->keys[i], tree->key_size);
+                memcpy(node->values[i + 1], node->values[i], tree->value_size);
+                i--;
+            }
+            i++;
+            if (i < (int)node->count && tree->cmp(key, node->keys[i]) == 0) {
+                memcpy(node->values[i], value, tree->value_size);
+                spin_unlock(&tree->lock);
+                return SCL_OK;
+            }
+            memcpy(node->keys[i], key, tree->key_size);
+            memcpy(node->values[i], value, tree->value_size);
+            node->count++;
+            inserted = true;
+            break;
+        } else {
+            while (i >= 0 && tree->cmp(key, node->keys[i]) < 0)
+                i--;
+            i++;
+            if (i < (int)node->count && tree->cmp(key, node->keys[i]) == 0) {
+                memcpy(node->values[i], value, tree->value_size);
+                spin_unlock(&tree->lock);
+                return SCL_OK;
+            }
+            if (node->children[i]->count == (size_t)(2 * tree->t - 1)) {
+                split_child(alloc, node, i, tree->t, tree->key_size, tree->value_size);
+                if (tree->cmp(key, node->keys[i]) > 0)
+                    i++;
+            }
+            node = node->children[i];
+        }
+    }
+
+    if (inserted)
         atomic_fetch_add_explicit(&tree->count, 1, memory_order_relaxed);
     spin_unlock(&tree->lock);
     return SCL_OK;
 }
 
-static scl_error_t btree_get_helper(scl_concurrent_btree_node_t *x, const void *key,
-                                    void *out_value, size_t value_size, scl_concurrent_cmp_func_t cmp)
-{
-    int i = 0;
-    while (i < (int)x->count && cmp(key, x->keys[i]) > 0) i++;
-    if (i < (int)x->count && cmp(key, x->keys[i]) == 0) {
-        memcpy(out_value, x->values[i], value_size);
-        return SCL_OK;
-    }
-    if (x->leaf) return SCL_ERR_NOT_FOUND;
-    return btree_get_helper(x->children[i], key, out_value, value_size, cmp);
-}
-
-scl_error_t scl_concurrent_btree_get(const scl_concurrent_btree_t *tree, const void *key, void *out_value)
+scl_error_t scl_atomic_btree_get(const scl_atomic_btree_t *tree, const void *key, void *out_value)
 {
     if (!tree || !key || !out_value) return SCL_ERR_NULL_PTR;
-    spin_lock((atomic_flag *)&tree->lock);
-    scl_error_t err = btree_get_helper(tree->root, key, out_value, tree->value_size, tree->cmp);
-    spin_unlock((atomic_flag *)&tree->lock);
-    return err;
+
+    scl_atomic_btree_node_t *node = tree->root;
+    while (node) {
+        int i = 0;
+        while (i < (int)node->count && tree->cmp(key, node->keys[i]) > 0)
+            i++;
+        if (i < (int)node->count && tree->cmp(key, node->keys[i]) == 0) {
+            memcpy(out_value, node->values[i], tree->value_size);
+            return SCL_OK;
+        }
+        if (node->leaf) break;
+        node = node->children[i];
+    }
+    return SCL_ERR_NOT_FOUND;
 }
 
-bool scl_concurrent_btree_contains(const scl_concurrent_btree_t *tree, const void *key)
+bool scl_atomic_btree_contains(const scl_atomic_btree_t *tree, const void *key)
 {
     if (!tree || !key) return false;
-    void *tmp = malloc(tree->value_size);
-    if (!tmp) return false;
-    bool found = btree_get_helper(tree->root, key, tmp, tree->value_size, tree->cmp) == SCL_OK;
-    free(tmp);
-    return found;
+    scl_atomic_btree_node_t *node = tree->root;
+    while (node) {
+        int i = 0;
+        while (i < (int)node->count && tree->cmp(key, node->keys[i]) > 0)
+            i++;
+        if (i < (int)node->count && tree->cmp(key, node->keys[i]) == 0)
+            return true;
+        if (node->leaf) break;
+        node = node->children[i];
+    }
+    return false;
 }
 
-scl_error_t scl_concurrent_btree_remove(scl_concurrent_btree_t *tree, const void *key)
+scl_error_t scl_atomic_btree_remove(scl_allocator_t *alloc, scl_atomic_btree_t *tree, const void *key)
 {
+    (void)alloc;
     (void)tree;
     (void)key;
     return SCL_ERR_NOT_IMPLEMENTED;
 }
 
-size_t scl_concurrent_btree_count(const scl_concurrent_btree_t *tree)
+size_t scl_atomic_btree_count(const scl_atomic_btree_t *tree)
 {
     return tree ? atomic_load_explicit(&tree->count, memory_order_relaxed) : 0;
 }

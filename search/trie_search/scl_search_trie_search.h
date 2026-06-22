@@ -18,9 +18,10 @@ typedef struct scl_search_trie_node {
 
 typedef struct {
     scl_search_trie_node_t *root;
+    scl_allocator_t *alloc;
 } scl_search_trie_t;
 
-scl_error_t scl_search_trie_init(scl_search_trie_t **trie) SCL_WARN_UNUSED;
+scl_error_t scl_search_trie_init(scl_allocator_t *alloc, scl_search_trie_t **trie) SCL_WARN_UNUSED;
 scl_error_t scl_search_trie_insert(scl_search_trie_t *trie, const char *word) SCL_WARN_UNUSED;
 bool scl_search_trie_search(const scl_search_trie_t *trie, const char *word);
 bool scl_search_trie_starts_with(const scl_search_trie_t *trie, const char *prefix);

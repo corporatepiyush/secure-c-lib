@@ -14,81 +14,75 @@ static int tests_failed = 0;
 int main(void) {
     printf("=== scl_alloc_slab tests ===\n");
 
-    TEST("init and destroy");
+    TEST("create and destroy");
     {
-        scl_alloc_slab_t slab;
-        scl_error_t e = scl_alloc_slab_init(&slab);
-        if (e == SCL_OK) { PASS(); } else { FAIL("init failed"); }
-        scl_alloc_slab_destroy(&slab);
+        scl_allocator_t *slab = scl_alloc_slab_create(scl_allocator_default(), NULL, 0);
+        if (slab) { PASS(); } else { FAIL("create failed"); }
+        scl_alloc_slab_destroy(slab);
     }
 
-    TEST("alloc small (8 bytes)");
+    TEST("alloc small (16 bytes)");
     {
-        scl_alloc_slab_t slab;
-        scl_alloc_slab_init(&slab);
-        void *p = NULL;
-        if (scl_alloc_slab_alloc(&slab, 8, &p) == SCL_OK && p) {
-            memset(p, 0x42, 8);
-            scl_alloc_slab_free(&slab, p);
+        scl_allocator_t *slab = scl_alloc_slab_create(scl_allocator_default(), NULL, 0);
+        void *p = scl_alloc(slab, 16, 16);
+        if (p) {
+            memset(p, 0x42, 16);
+            scl_free(slab, p);
             PASS();
-        } else { FAIL("alloc 8 failed"); }
-        scl_alloc_slab_destroy(&slab);
+        } else { FAIL("alloc 16 failed"); }
+        scl_alloc_slab_destroy(slab);
     }
 
     TEST("alloc various sizes");
     {
-        scl_alloc_slab_t slab;
-        scl_alloc_slab_init(&slab);
-        void *p1, *p2, *p3;
-        int ok = 1;
-        ok = ok && (scl_alloc_slab_alloc(&slab, 8, &p1) == SCL_OK);
-        ok = ok && (scl_alloc_slab_alloc(&slab, 64, &p2) == SCL_OK);
-        ok = ok && (scl_alloc_slab_alloc(&slab, 1024, &p3) == SCL_OK);
-        if (ok) {
-            memset(p1, 0x11, 8);
+        scl_allocator_t *slab = scl_alloc_slab_create(scl_allocator_default(), NULL, 0);
+        void *p1 = scl_alloc(slab, 16, 16);
+        void *p2 = scl_alloc(slab, 64, 16);
+        void *p3 = scl_alloc(slab, 1024, 16);
+        if (p1 && p2 && p3) {
+            memset(p1, 0x11, 16);
             memset(p2, 0x22, 64);
             memset(p3, 0x33, 1024);
-            scl_alloc_slab_free(&slab, p1);
-            scl_alloc_slab_free(&slab, p2);
-            scl_alloc_slab_free(&slab, p3);
+            scl_free(slab, p1);
+            scl_free(slab, p2);
+            scl_free(slab, p3);
             PASS();
         } else { FAIL("multi alloc failed"); }
-        scl_alloc_slab_destroy(&slab);
+        scl_alloc_slab_destroy(slab);
     }
 
     TEST("stress 5000 allocs/frees across classes");
     {
-        scl_alloc_slab_t slab;
-        scl_alloc_slab_init(&slab);
+        scl_allocator_t *slab = scl_alloc_slab_create(scl_allocator_default(), NULL, 0);
         void *ptrs[5000];
         int ok = 1;
         for (int i = 0; i < 5000; i++) {
-            size_t sz = (size_t)(1 << ((i % 9) + 3)); // 8 to 2048
-            if (scl_alloc_slab_alloc(&slab, sz, &ptrs[i]) != SCL_OK) {
-                ok = 0; break;
-            }
+            size_t sz = (size_t)(1 << ((i % 9) + 4));
+            ptrs[i] = scl_alloc(slab, sz, 16);
+            if (!ptrs[i]) { ok = 0; break; }
         }
         for (int i = 0; i < 5000; i++)
-            scl_alloc_slab_free(&slab, ptrs[i]);
+            scl_free(slab, ptrs[i]);
         if (ok) { PASS(); } else { FAIL("stress failed"); }
-        scl_alloc_slab_destroy(&slab);
+        scl_alloc_slab_destroy(slab);
     }
 
-    TEST("NULL slab returns ERR_NULL_PTR");
+    TEST("NULL slab returns NULL on alloc");
     {
-        void *p;
-        if (scl_alloc_slab_alloc(NULL, 32, &p) == SCL_ERR_NULL_PTR) { PASS(); }
-        else { FAIL("expected NULL_PTR"); }
+        void *p = scl_alloc(NULL, 32, 16);
+        if (!p) { PASS(); } else { FAIL("expected NULL"); }
     }
 
-    TEST("free from wrong slab returns ERR_INVALID_ARG");
+    TEST("custom bucket sizes");
     {
-        scl_alloc_slab_t slab;
-        scl_alloc_slab_init(&slab);
-        int dummy;
-        if (scl_alloc_slab_free(&slab, &dummy) == SCL_ERR_INVALID_ARG) { PASS(); }
-        else { FAIL("expected INVALID_ARG"); }
-        scl_alloc_slab_destroy(&slab);
+        size_t buckets[] = {32, 64, 128};
+        scl_allocator_t *slab = scl_alloc_slab_create(scl_allocator_default(), buckets, 3);
+        void *p = scl_alloc(slab, 32, 16);
+        void *q = scl_alloc(slab, 64, 16);
+        if (p && q) { PASS(); } else { FAIL("custom buckets failed"); }
+        scl_free(slab, p);
+        scl_free(slab, q);
+        scl_alloc_slab_destroy(slab);
     }
 
     printf("Results: %d passed, %d failed\n", tests_passed, tests_failed);

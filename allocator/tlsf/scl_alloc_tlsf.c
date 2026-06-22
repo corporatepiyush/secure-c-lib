@@ -1,46 +1,66 @@
-#if defined(__GNUC__) && !defined(__clang__)
-#pragma GCC optimize ("O3", "unroll-loops", "tree-vectorize", "inline")
-#endif
-
 #include "scl_alloc_tlsf.h"
-#include <stdlib.h>
 #include <string.h>
 #include <stdalign.h>
 #include <limits.h>
 
-#define TLSF_BLOCK_HDR_SZ offsetof(scl_tlsf_block_hdr_t, next_free)
+#define TLSF_FL_MAX 32
+#define TLSF_SL_COUNT 32
+#define TLSF_SL_LOG2 5
+#define TLSF_SMALL_BLOCK 256
+
+typedef struct scl_tlsf_block_hdr {
+    struct scl_tlsf_block_hdr *prev_phys;
+    size_t size;
+    struct scl_tlsf_block_hdr *next_free;
+    struct scl_tlsf_block_hdr *prev_free;
+} tlsf_block_hdr_t;
+
+#define TLSF_BLOCK_HDR_SZ offsetof(tlsf_block_hdr_t, next_free)
 #define TLSF_MIN_BLOCK_SIZE (TLSF_BLOCK_HDR_SZ + sizeof(void *))
-#define TLSF_FLI_SHIFT 5
 
-static inline int tlsf_fls_size(size_t v) {
+typedef struct {
+    scl_allocator_t *backing;
+    void *pool;
+    size_t pool_size;
+    unsigned int fl_bitmap;
+    unsigned int sl_bitmap[TLSF_FL_MAX];
+    tlsf_block_hdr_t *bins[TLSF_FL_MAX][TLSF_SL_COUNT];
+    tlsf_block_hdr_t *block_sentinel;
+} tlsf_state_t;
+
+static int tlsf_fls_size(size_t v) {
     if (v == 0) return 0;
-    return (int)(sizeof(size_t) * CHAR_BIT - 1 - __builtin_clzll((unsigned long long)v));
+    return (int)scl_log2_sz(v);
 }
 
-static inline void tlsf_mapping(size_t size, int *fl, int *sl) {
-    if (size < SCL_TLSF_SMALL_BLOCK) {
+static int tlsf_ctz(unsigned int v) {
+    return v ? (int)__builtin_ctz(v) : 0;
+}
+
+static void tlsf_mapping(size_t size, int *fl, int *sl) {
+    if (size < TLSF_SMALL_BLOCK) {
         *fl = 0;
-        *sl = (int)(size / (SCL_TLSF_SMALL_BLOCK / SCL_TLSF_SL_COUNT));
+        *sl = (int)(size / (TLSF_SMALL_BLOCK / TLSF_SL_COUNT));
     } else {
         int s = tlsf_fls_size(size);
-        *fl = s - (SCL_TLSF_SL_LOG2 - 1);
-        *sl = (int)((size >> (s - SCL_TLSF_SL_LOG2)) ^ (1 << SCL_TLSF_SL_LOG2));
-        if (*sl >= SCL_TLSF_SL_COUNT) *sl = SCL_TLSF_SL_COUNT - 1;
+        *fl = s - (TLSF_SL_LOG2 - 1);
+        *sl = (int)((size >> (s - TLSF_SL_LOG2)) ^ (1 << TLSF_SL_LOG2));
+        if (*sl >= TLSF_SL_COUNT) *sl = TLSF_SL_COUNT - 1;
     }
 }
 
-static inline void tlsf_mapping_insert(size_t size, int *fl, int *sl) {
-    if (size < SCL_TLSF_SMALL_BLOCK) {
+static void tlsf_mapping_insert(size_t size, int *fl, int *sl) {
+    if (size < TLSF_SMALL_BLOCK) {
         *fl = 0;
-        *sl = (int)(size / (SCL_TLSF_SMALL_BLOCK / SCL_TLSF_SL_COUNT));
+        *sl = (int)(size / (TLSF_SMALL_BLOCK / TLSF_SL_COUNT));
     } else {
         int s = tlsf_fls_size(size);
-        *fl = s - (SCL_TLSF_SL_LOG2 - 1);
-        *sl = (int)((size >> (s - SCL_TLSF_SL_LOG2)) - (1 << SCL_TLSF_SL_LOG2));
+        *fl = s - (TLSF_SL_LOG2 - 1);
+        *sl = (int)((size >> (s - TLSF_SL_LOG2)) - (1 << TLSF_SL_LOG2));
     }
 }
 
-static void tlsf_remove_free(scl_alloc_tlsf_t *tlsf, scl_tlsf_block_hdr_t *block) {
+static void tlsf_remove_free(tlsf_state_t *tlsf, tlsf_block_hdr_t *block) {
     int fl, sl;
     tlsf_mapping_insert(block->size & ~3UL, &fl, &sl);
 
@@ -60,7 +80,9 @@ static void tlsf_remove_free(scl_alloc_tlsf_t *tlsf, scl_tlsf_block_hdr_t *block
     block->prev_free = NULL;
 }
 
-static void tlsf_insert_free(scl_alloc_tlsf_t *tlsf, scl_tlsf_block_hdr_t *block) {
+static void tlsf_free_fn(void *state, void *ptr);
+
+static void tlsf_insert_free(tlsf_state_t *tlsf, tlsf_block_hdr_t *block) {
     size_t size = block->size & ~3UL;
     int fl, sl;
     tlsf_mapping_insert(size, &fl, &sl);
@@ -75,15 +97,7 @@ static void tlsf_insert_free(scl_alloc_tlsf_t *tlsf, scl_tlsf_block_hdr_t *block
     tlsf->fl_bitmap |= (1U << fl);
 }
 
-static inline int tlsf_ctz(unsigned int v) {
-    return v ? __builtin_ctz(v) : 0;
-}
-
-static inline int tlsf_clz(unsigned int v) {
-    return v ? __builtin_clz(v) : sizeof(unsigned int) * CHAR_BIT;
-}
-
-static scl_error_t tlsf_search_and_remove(scl_alloc_tlsf_t *tlsf, size_t size, scl_tlsf_block_hdr_t **out) {
+static int tlsf_search_and_remove(tlsf_state_t *tlsf, size_t size, tlsf_block_hdr_t **out) {
     int fl, sl;
     tlsf_mapping(size, &fl, &sl);
 
@@ -98,18 +112,18 @@ static scl_error_t tlsf_search_and_remove(scl_alloc_tlsf_t *tlsf, size_t size, s
         } else {
             fl_mask = tlsf->fl_bitmap & ((1U << fl) - 1);
             if (fl_mask) {
-                fl = (int)(sizeof(unsigned int) * CHAR_BIT - 1 - tlsf_clz(fl_mask));
+                fl = (int)scl_log2_u32(fl_mask);
             } else {
                 unsigned int all_above = tlsf->fl_bitmap & ~((1U << (fl + 1)) - 1);
-                if (!all_above) return SCL_ERR_OUT_OF_MEMORY;
+                if (!all_above) return 0;
                 fl = tlsf_ctz(all_above);
             }
         }
         sl = tlsf_ctz(tlsf->sl_bitmap[fl]);
     }
 
-    scl_tlsf_block_hdr_t *block = tlsf->bins[fl][sl];
-    if (__builtin_expect(!block, 0)) return SCL_ERR_OUT_OF_MEMORY;
+    tlsf_block_hdr_t *block = tlsf->bins[fl][sl];
+    if (!block) return 0;
 
     tlsf_remove_free(tlsf, block);
 
@@ -117,14 +131,14 @@ static scl_error_t tlsf_search_and_remove(scl_alloc_tlsf_t *tlsf, size_t size, s
     size_t remaining = block_size - size;
 
     if (remaining >= TLSF_MIN_BLOCK_SIZE) {
-        scl_tlsf_block_hdr_t *new_block = (scl_tlsf_block_hdr_t *)((unsigned char *)block + size);
+        tlsf_block_hdr_t *new_block = (tlsf_block_hdr_t *)((unsigned char *)block + size);
         new_block->prev_phys = block;
         new_block->size = remaining | 1;
         if (block->size & 2) new_block->size |= 2;
 
         block->size = size | 1 | (block->size & 2);
 
-        scl_tlsf_block_hdr_t *next_phys = (scl_tlsf_block_hdr_t *)((unsigned char *)new_block + remaining);
+        tlsf_block_hdr_t *next_phys = (tlsf_block_hdr_t *)((unsigned char *)new_block + remaining);
         if ((unsigned char *)next_phys < (unsigned char *)tlsf->block_sentinel) {
             next_phys->prev_phys = new_block;
             if (next_phys->size & 1) {
@@ -138,87 +152,75 @@ static scl_error_t tlsf_search_and_remove(scl_alloc_tlsf_t *tlsf, size_t size, s
         size = block_size;
     }
 
-    scl_tlsf_block_hdr_t *next = (scl_tlsf_block_hdr_t *)((unsigned char *)block + size);
+    tlsf_block_hdr_t *next = (tlsf_block_hdr_t *)((unsigned char *)block + size);
     if ((unsigned char *)next < (unsigned char *)tlsf->block_sentinel)
         next->size |= 2;
 
     *out = block;
-    return SCL_OK;
+    return 1;
 }
 
-scl_error_t scl_alloc_tlsf_init(scl_alloc_tlsf_t *tlsf, size_t pool_size) {
-    if (__builtin_expect(!tlsf, 0)) return SCL_ERR_NULL_PTR;
-    if (__builtin_expect(pool_size < 4096, 0)) return SCL_ERR_INVALID_ARG;
+static void *tlsf_malloc_fn(void *state, size_t size, size_t alignment) {
+    tlsf_state_t *t = (tlsf_state_t *)state;
+    if (!t || size == 0) return NULL;
+    (void)alignment;
 
-    memset(tlsf, 0, sizeof(*tlsf));
-
-    size_t actual = pool_size;
+    size_t aligned = size;
     size_t align = alignof(max_align_t);
-    if (actual % align != 0) actual += align - (actual % align);
+    size_t mod = aligned % align;
+    if (mod) aligned += align - mod;
 
-    tlsf->pool = malloc(actual);
-    if (__builtin_expect(!tlsf->pool, 0)) return SCL_ERR_OUT_OF_MEMORY;
-    tlsf->pool_size = actual;
-
-    unsigned char *ptr = (unsigned char *)tlsf->pool;
-    scl_tlsf_block_hdr_t *start = (scl_tlsf_block_hdr_t *)ptr;
-    size_t block_sz = actual - TLSF_BLOCK_HDR_SZ;
-
-    start->prev_phys = NULL;
-    start->size = block_sz | 1;
-    start->next_free = NULL;
-    start->prev_free = NULL;
-
-    tlsf->block_sentinel = (scl_tlsf_block_hdr_t *)(ptr + actual);
-    tlsf->block_sentinel->size = 0;
-    tlsf->block_sentinel->prev_phys = start;
-
-    tlsf_insert_free(tlsf, start);
-
-    return SCL_OK;
-}
-
-scl_error_t scl_alloc_tlsf_alloc(scl_alloc_tlsf_t *tlsf, size_t size, void **out_ptr) {
-    if (__builtin_expect(!tlsf, 0)) return SCL_ERR_NULL_PTR;
-    if (__builtin_expect(!out_ptr, 0)) return SCL_ERR_NULL_PTR;
-    if (__builtin_expect(size == 0, 0)) size = 1;
-
-    size_t aligned = (size + alignof(max_align_t) - 1) & ~(alignof(max_align_t) - 1);
     size_t req = TLSF_BLOCK_HDR_SZ + aligned;
     if (req < TLSF_MIN_BLOCK_SIZE) req = TLSF_MIN_BLOCK_SIZE;
 
-    scl_tlsf_block_hdr_t *block;
-    scl_error_t err = tlsf_search_and_remove(tlsf, req, &block);
-    if (__builtin_expect(err != SCL_OK, 0)) return err;
+    tlsf_block_hdr_t *block;
+    if (!tlsf_search_and_remove(t, req, &block)) return NULL;
 
-    *out_ptr = (void *)((unsigned char *)block + TLSF_BLOCK_HDR_SZ);
-    return SCL_OK;
+    return (void *)((unsigned char *)block + TLSF_BLOCK_HDR_SZ);
 }
 
-scl_error_t scl_alloc_tlsf_free(scl_alloc_tlsf_t *tlsf, void *ptr) {
-    if (__builtin_expect(!tlsf, 0)) return SCL_ERR_NULL_PTR;
-    if (__builtin_expect(!ptr, 0)) return SCL_ERR_NULL_PTR;
+static void *tlsf_calloc_fn(void *state, size_t count, size_t size, size_t alignment) {
+    size_t total;
+    if (scl_mul_overflow(count, size, &total)) return NULL;
+    void *ptr = tlsf_malloc_fn(state, total, alignment);
+    if (ptr) memset(ptr, 0, total);
+    return ptr;
+}
 
-    scl_tlsf_block_hdr_t *block = (scl_tlsf_block_hdr_t *)((unsigned char *)ptr - TLSF_BLOCK_HDR_SZ);
+static void *tlsf_realloc_fn(void *state, void *ptr, size_t old_size, size_t new_size, size_t alignment) {
+    if (!ptr) return tlsf_malloc_fn(state, new_size, alignment);
+    if (new_size == 0) { tlsf_free_fn(state, ptr); return NULL; }
+    void *new_ptr = tlsf_malloc_fn(state, new_size, alignment);
+    if (new_ptr) {
+        size_t copy = old_size < new_size ? old_size : new_size;
+        memcpy(new_ptr, ptr, copy);
+        tlsf_free_fn(state, ptr);
+    }
+    return new_ptr;
+}
+
+static void tlsf_free_fn(void *state, void *ptr) {
+    tlsf_state_t *t = (tlsf_state_t *)state;
+    if (!t || !ptr) return;
+
+    tlsf_block_hdr_t *block = (tlsf_block_hdr_t *)((unsigned char *)ptr - TLSF_BLOCK_HDR_SZ);
     size_t block_size = block->size & ~3UL;
 
-    // Coalesce with previous if free
     int prev_free = (block->size & 2);
     if (prev_free && block->prev_phys) {
-        scl_tlsf_block_hdr_t *prev = block->prev_phys;
+        tlsf_block_hdr_t *prev = block->prev_phys;
         size_t prev_size = prev->size & ~3UL;
-        tlsf_remove_free(tlsf, prev);
+        tlsf_remove_free(t, prev);
         prev->size = (prev_size + block_size) | 1;
         block_size = prev_size + block_size;
         block = prev;
     }
 
-    // Coalesce with next if free
-    scl_tlsf_block_hdr_t *next = (scl_tlsf_block_hdr_t *)((unsigned char *)block + block_size);
-    if ((unsigned char *)next < (unsigned char *)tlsf->block_sentinel &&
+    tlsf_block_hdr_t *next = (tlsf_block_hdr_t *)((unsigned char *)block + block_size);
+    if ((unsigned char *)next < (unsigned char *)t->block_sentinel &&
         (next->size & 1)) {
         size_t next_size = next->size & ~3UL;
-        tlsf_remove_free(tlsf, next);
+        tlsf_remove_free(t, next);
         block->size = (block_size + next_size) | 1;
         block_size = block_size + next_size;
     }
@@ -227,19 +229,71 @@ scl_error_t scl_alloc_tlsf_free(scl_alloc_tlsf_t *tlsf, void *ptr) {
     if (block->prev_phys && (block->prev_phys->size & 1))
         block->prev_phys->size |= 2;
 
-    scl_tlsf_block_hdr_t *nxt = (scl_tlsf_block_hdr_t *)((unsigned char *)block + block_size);
-    if ((unsigned char *)nxt < (unsigned char *)tlsf->block_sentinel) {
+    tlsf_block_hdr_t *nxt = (tlsf_block_hdr_t *)((unsigned char *)block + block_size);
+    if ((unsigned char *)nxt < (unsigned char *)t->block_sentinel) {
         nxt->prev_phys = block;
         nxt->size |= 2;
     }
 
-    tlsf_insert_free(tlsf, block);
-    return SCL_OK;
+    tlsf_insert_free(t, block);
 }
 
-scl_error_t scl_alloc_tlsf_destroy(scl_alloc_tlsf_t *tlsf) {
-    if (__builtin_expect(!tlsf, 0)) return SCL_ERR_NULL_PTR;
-    free(tlsf->pool);
-    memset(tlsf, 0, sizeof(*tlsf));
-    return SCL_OK;
+scl_allocator_t *scl_alloc_tlsf_create(scl_allocator_t *backing, size_t memory_size) {
+    if (!backing || memory_size < 4096) return NULL;
+
+    tlsf_state_t *state = (tlsf_state_t *)backing->malloc_fn(backing->state, sizeof(tlsf_state_t), alignof(max_align_t));
+    if (!state) return NULL;
+
+    memset(state, 0, sizeof(tlsf_state_t));
+    state->backing = backing;
+
+    size_t actual = memory_size;
+    size_t align = alignof(max_align_t);
+    size_t mod = actual % align;
+    if (mod != 0) actual += align - mod;
+
+    state->pool = backing->malloc_fn(backing->state, actual, alignof(max_align_t));
+    if (!state->pool) {
+        backing->free_fn(backing->state, state);
+        return NULL;
+    }
+    state->pool_size = actual;
+
+    unsigned char *ptr = (unsigned char *)state->pool;
+    tlsf_block_hdr_t *start = (tlsf_block_hdr_t *)ptr;
+    size_t block_sz = actual - TLSF_BLOCK_HDR_SZ;
+
+    start->prev_phys = NULL;
+    start->size = block_sz | 1;
+    start->next_free = NULL;
+    start->prev_free = NULL;
+
+    state->block_sentinel = (tlsf_block_hdr_t *)(ptr + actual);
+    state->block_sentinel->size = 0;
+    state->block_sentinel->prev_phys = start;
+
+    tlsf_insert_free(state, start);
+
+    scl_allocator_t *alloc = (scl_allocator_t *)backing->malloc_fn(backing->state, sizeof(scl_allocator_t), alignof(max_align_t));
+    if (!alloc) {
+        backing->free_fn(backing->state, state->pool);
+        backing->free_fn(backing->state, state);
+        return NULL;
+    }
+
+    alloc->malloc_fn = tlsf_malloc_fn;
+    alloc->calloc_fn = tlsf_calloc_fn;
+    alloc->realloc_fn = tlsf_realloc_fn;
+    alloc->free_fn = tlsf_free_fn;
+    alloc->state = state;
+    return alloc;
+}
+
+void scl_alloc_tlsf_destroy(scl_allocator_t *alloc) {
+    if (!alloc) return;
+    tlsf_state_t *s = (tlsf_state_t *)alloc->state;
+    scl_allocator_t *backing = s->backing;
+    if (s->pool) backing->free_fn(backing->state, s->pool);
+    backing->free_fn(backing->state, s);
+    backing->free_fn(backing->state, alloc);
 }

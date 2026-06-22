@@ -1,15 +1,6 @@
 #include "scl_stack.h"
-#include <stdio.h>
-#include <stdlib.h>
+#include "../testlib/scl_test.h"
 #include <string.h>
-#include <assert.h>
-
-static int tests_passed = 0;
-static int tests_failed = 0;
-
-#define TEST(name) do { printf("  TEST: %s ... ", name); } while(0)
-#define PASS() do { printf("PASSED\n"); tests_passed++; } while(0)
-#define FAIL(msg) do { printf("FAILED: %s\n", msg); tests_failed++; } while(0)
 
 static int cmp_int(const void *a, const void *b)
 {
@@ -20,43 +11,46 @@ static int cmp_int(const void *a, const void *b)
     return 0;
 }
 
-static void test_basic(void)
+static void test_basic(scl_test_runner_t *tr)
 {
-    TEST("basic LIFO");
+    scl_test_group("basic LIFO");
+    scl_allocator_t *a = scl_allocator_default();
     scl_stack_t s;
-    scl_stack_init(&s, sizeof(int), 0);
-    assert(scl_stack_empty(&s));
-    for (int i = 0; i < 100; i++) assert(scl_stack_push(&s, &i) == SCL_OK);
-    assert(scl_stack_count(&s) == 100);
+    scl_stack_init(a, &s, sizeof(int), 0);
+    SCL_EXPECT_TRUE(tr, scl_stack_empty(&s));
+    for (int i = 0; i < 100; i++) SCL_EXPECT_OK(tr, scl_stack_push(a, &s, &i));
+    SCL_EXPECT_EQ_SZ(tr, scl_stack_count(&s), 100);
     for (int i = 99; i >= 0; i--) {
-        int v; scl_stack_pop(&s, &v); assert(v == i);
+        int v; scl_stack_pop(&s, &v); SCL_EXPECT_EQ_I(tr, v, i);
     }
-    assert(scl_stack_empty(&s));
-    assert(scl_stack_pop(&s, &(int){0}) == SCL_ERR_EMPTY);
-    scl_stack_destroy(&s);
-    PASS();
+    SCL_EXPECT_TRUE(tr, scl_stack_empty(&s));
+    SCL_EXPECT_ERROR(tr, scl_stack_pop(&s, &(int){0}), SCL_ERR_EMPTY);
+    scl_stack_destroy(a, &s);
 }
 
-static void test_search(void)
+static void test_search(scl_test_runner_t *tr)
 {
-    TEST("search");
+    scl_test_group("search");
+    scl_allocator_t *a = scl_allocator_default();
     scl_stack_t s;
-    scl_stack_init(&s, sizeof(int), 0);
-    for (int i = 0; i < 10; i++) scl_stack_push(&s, &i);
+    scl_stack_init(a, &s, sizeof(int), 0);
+    for (int i = 0; i < 10; i++) scl_stack_push(a, &s, &i);
     size_t idx;
     int key = 5;
-    assert(scl_stack_search(&s, &key, cmp_int, &idx) == SCL_OK && idx == 5);
+    SCL_EXPECT_OK(tr, scl_stack_search(&s, &key, cmp_int, &idx));
+    SCL_EXPECT_EQ_SZ(tr, idx, 5);
     key = 999;
-    assert(scl_stack_search(&s, &key, cmp_int, &idx) == SCL_ERR_NOT_FOUND);
-    scl_stack_destroy(&s);
-    PASS();
+    SCL_EXPECT_ERROR(tr, scl_stack_search(&s, &key, cmp_int, &idx), SCL_ERR_NOT_FOUND);
+    scl_stack_destroy(a, &s);
 }
 
 int main(void)
 {
-    printf("=== scl_stack tests ===\n");
-    test_basic();
-    test_search();
-    printf("Results: %d passed, %d failed\n", tests_passed, tests_failed);
-    return tests_failed > 0 ? 1 : 0;
+    scl_test_runner_t tr;
+    scl_test_init(&tr);
+    scl_test_group("=== scl_stack tests ===");
+    test_basic(&tr);
+    test_search(&tr);
+    scl_test_summary(&tr);
+    return tr.failed > 0 ? 1 : 0;
 }

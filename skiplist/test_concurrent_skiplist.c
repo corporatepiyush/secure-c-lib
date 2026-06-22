@@ -23,67 +23,67 @@ static int cmp_int(const void *a, const void *b)
 static void test_init_destroy(void)
 {
     TEST("init and destroy");
-    scl_concurrent_skiplist_t sl;
-    assert(scl_concurrent_skiplist_init(&sl, sizeof(int), cmp_int) == SCL_OK);
-    assert(scl_concurrent_skiplist_count(&sl) == 0);
-    scl_concurrent_skiplist_destroy(&sl);
+    scl_atomic_skiplist_t sl;
+    assert(scl_atomic_skiplist_init(scl_allocator_default(), &sl, sizeof(int), cmp_int) == SCL_OK);
+    assert(scl_atomic_skiplist_count(&sl) == 0);
+    scl_atomic_skiplist_destroy(scl_allocator_default(), &sl);
     PASS();
 }
 
 static void test_insert_contains_find_remove(void)
 {
     TEST("insert, contains, find, remove");
-    scl_concurrent_skiplist_t sl;
-    scl_concurrent_skiplist_init(&sl, sizeof(int), cmp_int);
+    scl_atomic_skiplist_t sl;
+    scl_atomic_skiplist_init(scl_allocator_default(), &sl, sizeof(int), cmp_int);
     int vals[] = {50, 30, 70, 20, 40, 60, 80};
-    for (int i = 0; i < 7; i++) assert(scl_concurrent_skiplist_insert(&sl, &vals[i]) == SCL_OK);
-    assert(scl_concurrent_skiplist_count(&sl) == 7);
-    for (int i = 0; i < 7; i++) assert(scl_concurrent_skiplist_contains(&sl, &vals[i]));
+    for (int i = 0; i < 7; i++) assert(scl_atomic_skiplist_insert(scl_allocator_default(), &sl, &vals[i]) == SCL_OK);
+    assert(scl_atomic_skiplist_count(&sl) == 7);
+    for (int i = 0; i < 7; i++) assert(scl_atomic_skiplist_contains(&sl, &vals[i]));
     int v;
-    for (int i = 0; i < 7; i++) { assert(scl_concurrent_skiplist_find(&sl, &vals[i], &v) == SCL_OK); assert(v == vals[i]); }
-    assert(!scl_concurrent_skiplist_contains(&sl, &(int){99}));
-    assert(scl_concurrent_skiplist_remove(&sl, &(int){99}) == SCL_ERR_NOT_FOUND);
-    assert(scl_concurrent_skiplist_remove(&sl, &vals[0]) == SCL_OK);
-    assert(scl_concurrent_skiplist_count(&sl) == 6);
-    assert(!scl_concurrent_skiplist_contains(&sl, &vals[0]));
-    scl_concurrent_skiplist_destroy(&sl);
+    for (int i = 0; i < 7; i++) { assert(scl_atomic_skiplist_find(&sl, &vals[i], &v) == SCL_OK); assert(v == vals[i]); }
+    assert(!scl_atomic_skiplist_contains(&sl, &(int){99}));
+    assert(scl_atomic_skiplist_remove(scl_allocator_default(), &sl, &(int){99}) == SCL_ERR_NOT_FOUND);
+    assert(scl_atomic_skiplist_remove(scl_allocator_default(), &sl, &vals[0]) == SCL_OK);
+    assert(scl_atomic_skiplist_count(&sl) == 6);
+    assert(!scl_atomic_skiplist_contains(&sl, &vals[0]));
+    scl_atomic_skiplist_destroy(scl_allocator_default(), &sl);
     PASS();
 }
 
 static void test_null(void)
 {
     TEST("null checks");
-    assert(scl_concurrent_skiplist_init(NULL, sizeof(int), cmp_int) == SCL_ERR_NULL_PTR);
-    scl_concurrent_skiplist_destroy(NULL);
+    assert(scl_atomic_skiplist_init(scl_allocator_default(), NULL, sizeof(int), cmp_int) == SCL_ERR_NULL_PTR);
+    scl_atomic_skiplist_destroy(scl_allocator_default(), NULL);
     PASS();
 }
 
 static void *insert_thread(void *arg)
 {
-    scl_concurrent_skiplist_t *sl = (scl_concurrent_skiplist_t *)arg;
-    for (int i = 0; i < 50; i++) scl_concurrent_skiplist_insert(sl, &i);
+    scl_atomic_skiplist_t *sl = (scl_atomic_skiplist_t *)arg;
+    for (int i = 0; i < 50; i++) scl_atomic_skiplist_insert(scl_allocator_default(), sl, &i);
     return NULL;
 }
 
 static void test_concurrent_insert(void)
 {
     TEST("concurrent insert 2 threads");
-    scl_concurrent_skiplist_t sl;
-    scl_concurrent_skiplist_init(&sl, sizeof(int), cmp_int);
+    scl_atomic_skiplist_t sl;
+    scl_atomic_skiplist_init(scl_allocator_default(), &sl, sizeof(int), cmp_int);
     pthread_t t1, t2;
     pthread_create(&t1, NULL, insert_thread, &sl);
     pthread_create(&t2, NULL, insert_thread, &sl);
     pthread_join(t1, NULL);
     pthread_join(t2, NULL);
-    assert(scl_concurrent_skiplist_count(&sl) == 50);
-    for (int i = 0; i < 50; i++) assert(scl_concurrent_skiplist_contains(&sl, &i));
-    scl_concurrent_skiplist_destroy(&sl);
+    assert(scl_atomic_skiplist_count(&sl) == 50);
+    for (int i = 0; i < 50; i++) assert(scl_atomic_skiplist_contains(&sl, &i));
+    scl_atomic_skiplist_destroy(scl_allocator_default(), &sl);
     PASS();
 }
 
 int main(void)
 {
-    printf("=== scl_concurrent_skiplist tests ===\n");
+    printf("=== scl_skiplist tests ===\n");
     test_init_destroy();
     test_insert_contains_find_remove();
     test_null();

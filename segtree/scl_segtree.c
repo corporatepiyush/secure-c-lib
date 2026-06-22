@@ -1,85 +1,101 @@
 #include "scl_segtree.h"
-#include <stdlib.h>
 #include <string.h>
 
-#if defined(__GNUC__) && !defined(__clang__)
-#pragma GCC optimize ("O3", "unroll-loops", "tree-vectorize", "inline")
-#endif
-
-scl_error_t scl_segtree_init(scl_segtree_t *st, const int64_t *data, size_t n,
-                             scl_segtree_op_t op, int64_t identity)
+scl_error_t scl_segtree_init(scl_allocator_t *alloc, scl_segtree_t *tree,
+                              size_t n, size_t element_size, const void *data,
+                              void (*combine)(void *out, const void *a, const void *b))
 {
-    if (!st || !data || !op) return SCL_ERR_NULL_PTR;
-    if (n == 0) return SCL_ERR_INVALID_ARG;
-
-    st->n = n;
-    st->op = op;
-    st->identity = identity;
+    if (!tree || !combine || !data) return SCL_ERR_NULL_PTR;
+    if (n == 0 || element_size == 0) return SCL_ERR_INVALID_ARG;
 
     size_t size = 1;
-    while (size < n) size *= 2;
-    st->size = size;
+    while (size < n) size <<= 1;
 
-    st->tree = calloc(2 * size, sizeof(int64_t));
-    if (!st->tree) return SCL_ERR_OUT_OF_MEMORY;
+    tree->data = scl_calloc(alloc, 2 * size, element_size, alignof(max_align_t));
+    if (!tree->data) return SCL_ERR_OUT_OF_MEMORY;
+    tree->n = n;
+    tree->size = size;
+    tree->element_size = element_size;
+    tree->combine = combine;
 
+    const unsigned char *src = data;
     for (size_t i = 0; i < n; i++)
-        st->tree[size + i] = data[i];
-    for (size_t i = n; i < size; i++)
-        st->tree[size + i] = identity;
+        memcpy(tree->data + (size + i) * element_size, src + i * element_size, element_size);
 
-    for (size_t i = size - 1; i > 0; i--)
-        st->tree[i] = op(st->tree[2 * i], st->tree[2 * i + 1]);
+    for (size_t i = size - 1; i >= 1; i--)
+        combine(tree->data + i * element_size,
+                tree->data + (2 * i) * element_size,
+                tree->data + (2 * i + 1) * element_size);
 
     return SCL_OK;
 }
 
-void scl_segtree_destroy(scl_segtree_t *st)
+void scl_segtree_destroy(scl_allocator_t *alloc, scl_segtree_t *tree)
 {
-    if (st) {
-        free(st->tree);
-        st->tree = NULL;
-        st->n = 0;
-        st->size = 0;
-    }
+    if (!tree || !tree->data) return;
+    scl_free(alloc, tree->data);
+    tree->data = NULL;
+    tree->n = 0;
+    tree->size = 0;
 }
 
-scl_error_t scl_segtree_update(scl_segtree_t *st, size_t index, int64_t value)
+scl_error_t scl_segtree_update(scl_segtree_t *tree, size_t idx, const void *val)
 {
-    if (!st) return SCL_ERR_NULL_PTR;
-    if (index >= st->n) return SCL_ERR_INVALID_INDEX;
+    if (!tree || !val) return SCL_ERR_NULL_PTR;
+    if (idx >= tree->n) return SCL_ERR_INVALID_INDEX;
 
-    size_t pos = st->size + index;
-    st->tree[pos] = value;
-    pos /= 2;
+    size_t esize = tree->element_size;
+    size_t p = tree->size + idx;
+    memcpy(tree->data + p * esize, val, esize);
 
-    while (pos > 0) {
-        st->tree[pos] = st->op(st->tree[2 * pos], st->tree[2 * pos + 1]);
-        pos /= 2;
-    }
+    for (p >>= 1; p >= 1; p >>= 1)
+        tree->combine(tree->data + p * esize,
+                      tree->data + (2 * p) * esize,
+                      tree->data + (2 * p + 1) * esize);
+
     return SCL_OK;
 }
 
-scl_error_t scl_segtree_query(const scl_segtree_t *st, size_t l, size_t r, int64_t *out)
+scl_error_t scl_segtree_query(const scl_segtree_t *tree, size_t l, size_t r, void *out)
 {
-    if (!st || !out) return SCL_ERR_NULL_PTR;
-    if (l > r || r >= st->n) return SCL_ERR_INVALID_INDEX;
+    if (!tree || !out) return SCL_ERR_NULL_PTR;
+    if (l >= r || r > tree->n) return SCL_ERR_INVALID_ARG;
 
-    int64_t res_left = st->identity;
-    int64_t res_right = st->identity;
+    size_t esize = tree->element_size;
+    l += tree->size;
+    r += tree->size;
 
-    size_t left = st->size + l;
-    size_t right = st->size + r + 1;
+    size_t left_idx[64];
+    size_t right_idx[64];
+    int li = 0, ri = 0;
 
-    while (left < right) {
-        if (left & 1)
-            res_left = st->op(res_left, st->tree[left++]);
-        if (right & 1)
-            res_right = st->op(st->tree[--right], res_right);
-        left /= 2;
-        right /= 2;
+    while (l < r) {
+        if (l & 1) left_idx[li++] = l++;
+        if (r & 1) right_idx[ri++] = --r;
+        l >>= 1;
+        r >>= 1;
     }
 
-    *out = st->op(res_left, res_right);
-    return SCL_OK;
+    bool first = true;
+    unsigned char *acc = out;
+    for (int i = 0; i < li; i++) {
+        size_t idx = left_idx[i];
+        if (first) {
+            memcpy(acc, tree->data + idx * esize, esize);
+            first = false;
+        } else {
+            tree->combine(acc, acc, tree->data + idx * esize);
+        }
+    }
+    for (int i = ri - 1; i >= 0; i--) {
+        size_t idx = right_idx[i];
+        if (first) {
+            memcpy(acc, tree->data + idx * esize, esize);
+            first = false;
+        } else {
+            tree->combine(acc, acc, tree->data + idx * esize);
+        }
+    }
+
+    return first ? SCL_ERR_EMPTY : SCL_OK;
 }

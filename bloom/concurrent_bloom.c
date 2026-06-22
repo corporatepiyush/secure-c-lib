@@ -1,5 +1,4 @@
 #include "concurrent_bloom.h"
-#include <stdlib.h>
 #include <string.h>
 #include <math.h>
 
@@ -16,9 +15,9 @@ static size_t default_hash(const void *data, size_t len, size_t seed)
     return h;
 }
 
-scl_error_t scl_concurrent_bloom_init(scl_concurrent_bloom_t *bf, size_t expected_items,
-                                      double false_positive_rate,
-                                      scl_concurrent_bloom_hash_t hash_func)
+scl_error_t scl_atomic_bloom_init(scl_allocator_t *alloc, scl_atomic_bloom_t *bf, size_t expected_items,
+                           double false_positive_rate,
+                           scl_bloom_hash_t hash_func)
 {
     if (!bf) return SCL_ERR_NULL_PTR;
     if (expected_items == 0 || false_positive_rate <= 0.0 || false_positive_rate >= 1.0)
@@ -31,7 +30,7 @@ scl_error_t scl_concurrent_bloom_init(scl_concurrent_bloom_t *bf, size_t expecte
     size_t num_hashes = (size_t)(((double)bits / (double)expected_items) * ln2);
     if (num_hashes < 1) num_hashes = 1;
     if (num_hashes > 64) num_hashes = 64;
-    bf->bits = calloc(bytes, sizeof(atomic_uchar));
+    bf->bits = scl_calloc(alloc, bytes, sizeof(atomic_uchar), alignof(max_align_t));
     if (!bf->bits) return SCL_ERR_OUT_OF_MEMORY;
     bf->bit_count = bits;
     bf->byte_count = bytes;
@@ -41,17 +40,17 @@ scl_error_t scl_concurrent_bloom_init(scl_concurrent_bloom_t *bf, size_t expecte
     return SCL_OK;
 }
 
-void scl_concurrent_bloom_destroy(scl_concurrent_bloom_t *bf)
+void scl_atomic_bloom_destroy(scl_allocator_t *alloc, scl_atomic_bloom_t *bf)
 {
     if (!bf) return;
-    free(bf->bits);
+    scl_free(alloc, bf->bits);
     bf->bits = NULL;
     bf->bit_count = 0;
     bf->byte_count = 0;
     atomic_store_explicit(&bf->inserted, 0, memory_order_relaxed);
 }
 
-scl_error_t scl_concurrent_bloom_insert(scl_concurrent_bloom_t *bf, const void *data, size_t len)
+scl_error_t scl_atomic_bloom_insert(scl_atomic_bloom_t *bf, const void *data, size_t len)
 {
     if (!bf || !data) return SCL_ERR_NULL_PTR;
     for (size_t i = 0; i < bf->num_hashes; i++) {
@@ -64,7 +63,7 @@ scl_error_t scl_concurrent_bloom_insert(scl_concurrent_bloom_t *bf, const void *
     return SCL_OK;
 }
 
-bool scl_concurrent_bloom_maybe_contains(const scl_concurrent_bloom_t *bf, const void *data, size_t len)
+bool scl_atomic_bloom_maybe_contains(const scl_atomic_bloom_t *bf, const void *data, size_t len)
 {
     if (!bf || !data) return false;
     for (size_t i = 0; i < bf->num_hashes; i++) {
@@ -77,7 +76,7 @@ bool scl_concurrent_bloom_maybe_contains(const scl_concurrent_bloom_t *bf, const
     return true;
 }
 
-void scl_concurrent_bloom_clear(scl_concurrent_bloom_t *bf)
+void scl_atomic_bloom_clear(scl_atomic_bloom_t *bf)
 {
     if (!bf) return;
     for (size_t i = 0; i < bf->byte_count; i++)
@@ -85,7 +84,7 @@ void scl_concurrent_bloom_clear(scl_concurrent_bloom_t *bf)
     atomic_store_explicit(&bf->inserted, 0, memory_order_relaxed);
 }
 
-size_t scl_concurrent_bloom_count(const scl_concurrent_bloom_t *bf)
+size_t scl_atomic_bloom_count(const scl_atomic_bloom_t *bf)
 {
     return bf ? atomic_load_explicit(&bf->inserted, memory_order_relaxed) : 0;
 }

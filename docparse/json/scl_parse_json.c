@@ -3,29 +3,27 @@
 #endif
 
 #include "scl_parse_json.h"
-#include <stdlib.h>
-#include <string.h>
-#include <ctype.h>
-#include <errno.h>
+#include "../../stdlib/scl_stdlib.h"
+#include "../../string/scl_string.h"
 
 static void json_skip_ws(const char **p) {
     while (**p && (unsigned char)**p <= ' ') (*p)++;
 }
 
-static scl_parse_json_value_t *json_new_val(scl_parse_json_type_t type) {
-    scl_parse_json_value_t *v = (scl_parse_json_value_t *)calloc(1, sizeof(scl_parse_json_value_t));
+static scl_parse_json_value_t *json_new_val(scl_allocator_t *alloc, scl_parse_json_type_t type) {
+    scl_parse_json_value_t *v = (scl_parse_json_value_t *)scl_calloc(alloc, 1, sizeof(scl_parse_json_value_t), _Alignof(max_align_t));
     if (!v) return NULL;
     v->type = type;
     return v;
 }
 
-static int json_add_child(scl_parse_json_value_t *parent, scl_parse_json_value_t *child) {
+static int json_add_child(scl_allocator_t *alloc, scl_parse_json_value_t *parent, scl_parse_json_value_t *child) {
     if (parent->child_count >= parent->child_cap) {
         size_t nc = parent->child_cap ? parent->child_cap * 2 : 4;
-        scl_parse_json_value_t **ch = (scl_parse_json_value_t **)realloc(parent->children, nc * sizeof(void *));
+        scl_parse_json_value_t **ch = (scl_parse_json_value_t **)scl_realloc(alloc, parent->children, parent->child_cap * sizeof(void *), nc * sizeof(void *), _Alignof(max_align_t));
         if (!ch) return -1;
         if (parent->type == SCL_JSON_OBJECT) {
-            char **ks = (char **)realloc(parent->keys, nc * sizeof(char *));
+            char **ks = (char **)scl_realloc(alloc, parent->keys, parent->child_cap * sizeof(char *), nc * sizeof(char *), _Alignof(max_align_t));
             if (!ks) return -1;
             parent->keys = ks;
         }
@@ -37,19 +35,17 @@ static int json_add_child(scl_parse_json_value_t *parent, scl_parse_json_value_t
     return 0;
 }
 
-static int json_add_child_key(scl_parse_json_value_t *parent, scl_parse_json_value_t *child, char *key) {
-    if (json_add_child(parent, child) != 0) return -1;
+static int json_add_child_key(scl_allocator_t *alloc, scl_parse_json_value_t *parent, scl_parse_json_value_t *child, char *key) {
+    if (json_add_child(alloc, parent, child) != 0) return -1;
     parent->keys[parent->child_count - 1] = key;
     return 0;
 }
 
-static scl_error_t json_parse_value(const char **p, scl_parse_json_value_t **out);
-
-static char *json_parse_string(const char **p) {
+static char *json_parse_string(scl_allocator_t *alloc, const char **p) {
     if (**p != '"') return NULL;
     (*p)++;
     size_t cap = 256, len = 0;
-    char *s = (char *)malloc(cap);
+    char *s = (char *)scl_alloc(alloc, cap, _Alignof(max_align_t));
     if (!s) return NULL;
 
     while (**p && **p != '"') {
@@ -66,14 +62,11 @@ static char *json_parse_string(const char **p) {
             case 'r':  s[len++] = '\r'; break;
             case 't':  s[len++] = '\t'; break;
             case 'u': {
-                // Basic unicode parse - store raw
                 char hex[5] = {0};
                 for (int i = 0; i < 4; i++) { (*p)++; hex[i] = **p; }
-                unsigned long cp = strtoul(hex, NULL, 16);
+                unsigned long cp = scl_strtoul(hex, NULL, 16);
                 if (cp < 128) { s[len++] = (char)cp; }
-                else {
-                    s[len++] = '?'; // simplified
-                }
+                else { s[len++] = '?'; }
                 break;
             }
             default:   s[len++] = c; break;
@@ -83,8 +76,8 @@ static char *json_parse_string(const char **p) {
         }
         if (len + 4 >= cap) {
             cap *= 2;
-            char *ns = (char *)realloc(s, cap);
-            if (!ns) { free(s); return NULL; }
+            char *ns = (char *)scl_realloc(alloc, s, len, cap, _Alignof(max_align_t));
+            if (!ns) { scl_free(alloc, s); return NULL; }
             s = ns;
         }
         (*p)++;
@@ -92,159 +85,204 @@ static char *json_parse_string(const char **p) {
     if (**p == '"') (*p)++;
     s[len] = '\0';
 
-    char *ns = (char *)realloc(s, len + 1);
+    char *ns = (char *)scl_realloc(alloc, s, len + 1, len + 1, _Alignof(max_align_t));
     return ns ? ns : s;
 }
 
-static scl_error_t json_parse_number(const char **p, scl_parse_json_value_t *val) {
-    char *end;
-    errno = 0;
+static scl_error_t json_parse_number(scl_allocator_t *alloc, const char **p, scl_parse_json_value_t *val) {
     const char *start = *p;
-
     int is_float = 0;
-    while (**p && (isdigit((unsigned char)**p) || **p == '-' || **p == '+' || **p == '.' || **p == 'e' || **p == 'E')) {
+    while (**p && (scl_isdigit((unsigned char)**p) || **p == '-' || **p == '+' || **p == '.' || **p == 'e' || **p == 'E')) {
         if (**p == '.' || **p == 'e' || **p == 'E') is_float = 1;
         (*p)++;
     }
 
     size_t nlen = *p - start;
-    char *num = (char *)malloc(nlen + 1);
+    char *num = (char *)scl_alloc(alloc, nlen + 1, _Alignof(max_align_t));
     if (!num) return SCL_ERR_OUT_OF_MEMORY;
-    memcpy(num, start, nlen);
+    scl_memcpy(num, start, nlen);
     num[nlen] = '\0';
 
     if (is_float) {
         val->type = SCL_JSON_DOUBLE;
-        val->double_val = strtod(num, &end);
+        val->double_val = scl_strtod(num, NULL);
     } else {
         val->type = SCL_JSON_INT64;
-        val->int64_val = (int64_t)strtoll(num, &end, 10);
+        val->int64_val = (int64_t)scl_strtoll(num, NULL, 10);
     }
-    free(num);
+    scl_free(alloc, num);
     return SCL_OK;
 }
 
-static scl_error_t json_parse_object(const char **p, scl_parse_json_value_t *val) {
-    val->type = SCL_JSON_OBJECT;
-    (*p)++; // skip '{'
-    json_skip_ws(p);
-    if (**p == '}') { (*p)++; return SCL_OK; }
+#define JSON_STACK_MAX 256
 
-    while (1) {
-        json_skip_ws(p);
-        char *key = json_parse_string(p);
-        if (!key) return SCL_ERR_INVALID_ARG;
-        json_skip_ws(p);
-        if (**p != ':') { free(key); return SCL_ERR_INVALID_ARG; }
-        (*p)++;
-        json_skip_ws(p);
-        scl_parse_json_value_t *child = NULL;
-        scl_error_t err = json_parse_value(p, &child);
-        if (err != SCL_OK || !child) { free(key); return err; }
-        if (json_add_child_key(val, child, key) != 0) {
-            free(key); scl_parse_json_free(child); return SCL_ERR_OUT_OF_MEMORY;
-        }
-        json_skip_ws(p);
-        if (**p == '}') { (*p)++; return SCL_OK; }
-        if (**p != ',') return SCL_ERR_INVALID_ARG;
-        (*p)++;
+typedef enum {
+    JS_OBJ_START,
+    JS_OBJ_COLON,
+    JS_OBJ_VAL,
+    JS_OBJ_NEXT,
+    JS_ARR_VAL,
+    JS_ARR_NEXT
+} json_state_t;
+
+typedef struct {
+    scl_parse_json_value_t *container;
+    json_state_t state;
+    char *key;
+} json_frame_t;
+
+static int json_attach_value(json_frame_t *stack, int sp, scl_allocator_t *alloc,
+                              scl_parse_json_value_t *val, scl_parse_json_value_t **root) {
+    if (sp < 0) {
+        if (!*root) *root = val;
+        return 0;
     }
+    json_frame_t *f = &stack[sp];
+    if (f->state == JS_OBJ_VAL) {
+        if (json_add_child_key(alloc, f->container, val, f->key) != 0) return -1;
+        f->key = NULL;
+        f->state = JS_OBJ_NEXT;
+    } else if (f->state == JS_ARR_VAL) {
+        if (json_add_child(alloc, f->container, val) != 0) return -1;
+        f->state = JS_ARR_NEXT;
+    }
+    return 1;
 }
 
-static scl_error_t json_parse_array(const char **p, scl_parse_json_value_t *val) {
-    val->type = SCL_JSON_ARRAY;
-    (*p)++;
-    json_skip_ws(p);
-    if (**p == ']') { (*p)++; return SCL_OK; }
-
-    while (1) {
-        scl_parse_json_value_t *child = NULL;
-        scl_error_t err = json_parse_value(p, &child);
-        if (err != SCL_OK) return err;
-        if (!child) return SCL_ERR_INVALID_ARG;
-        if (json_add_child(val, child) != 0) {
-            scl_parse_json_free(child); return SCL_ERR_OUT_OF_MEMORY;
-        }
-        json_skip_ws(p);
-        if (**p == ']') { (*p)++; return SCL_OK; }
-        if (**p != ',') return SCL_ERR_INVALID_ARG;
-        (*p)++;
-    }
-}
-
-static scl_error_t json_parse_value(const char **p, scl_parse_json_value_t **out) {
-    json_skip_ws(p);
-    if (!**p) return SCL_ERR_EMPTY;
-
-    scl_parse_json_value_t *val = NULL;
-
-    switch (**p) {
-    case '{':
-        val = json_new_val(SCL_JSON_OBJECT);
-        if (!val) return SCL_ERR_OUT_OF_MEMORY;
-        return json_parse_object(p, val);
-    case '[':
-        val = json_new_val(SCL_JSON_ARRAY);
-        if (!val) return SCL_ERR_OUT_OF_MEMORY;
-        return json_parse_array(p, val);
-    case '"':
-        val = json_new_val(SCL_JSON_STRING);
-        if (!val) return SCL_ERR_OUT_OF_MEMORY;
-        val->string_val = json_parse_string(p);
-        if (!val->string_val) { free(val); return SCL_ERR_OUT_OF_MEMORY; }
-        *out = val;
-        return SCL_OK;
-    case 't':
-        if (strncmp(*p, "true", 4) == 0) {
-            val = json_new_val(SCL_JSON_BOOL);
-            if (!val) return SCL_ERR_OUT_OF_MEMORY;
-            val->bool_val = 1;
-            *p += 4;
-            *out = val;
-            return SCL_OK;
-        }
-        return SCL_ERR_INVALID_ARG;
-    case 'f':
-        if (strncmp(*p, "false", 5) == 0) {
-            val = json_new_val(SCL_JSON_BOOL);
-            if (!val) return SCL_ERR_OUT_OF_MEMORY;
-            val->bool_val = 0;
-            *p += 5;
-            *out = val;
-            return SCL_OK;
-        }
-        return SCL_ERR_INVALID_ARG;
-    case 'n':
-        if (strncmp(*p, "null", 4) == 0) {
-            val = json_new_val(SCL_JSON_NULL);
-            if (!val) return SCL_ERR_OUT_OF_MEMORY;
-            *p += 4;
-            *out = val;
-            return SCL_OK;
-        }
-        return SCL_ERR_INVALID_ARG;
-    default:
-        if (**p == '-' || isdigit((unsigned char)**p)) {
-            val = json_new_val(SCL_JSON_INT64);
-            if (!val) return SCL_ERR_OUT_OF_MEMORY;
-            scl_error_t err = json_parse_number(p, val);
-            if (err != SCL_OK) { scl_parse_json_free(val); return err; }
-            *out = val;
-            return SCL_OK;
-        }
-        return SCL_ERR_INVALID_ARG;
-    }
-}
-
-scl_error_t scl_parse_json_parse(const char *json_str, scl_parse_json_value_t **out_root) {
-    if (__builtin_expect(!json_str, 0)) return SCL_ERR_NULL_PTR;
-    if (__builtin_expect(!out_root, 0)) return SCL_ERR_NULL_PTR;
+scl_error_t scl_parse_json_parse(scl_allocator_t *alloc, const char *json_str, scl_parse_json_value_t **out_root) {
+    if (!json_str) return SCL_ERR_NULL_PTR;
+    if (!out_root) return SCL_ERR_NULL_PTR;
 
     const char *p = json_str;
+    json_skip_ws(&p);
+    if (!*p) return SCL_ERR_EMPTY;
+
     scl_parse_json_value_t *root = NULL;
-    scl_error_t err = json_parse_value(&p, &root);
-    if (err != SCL_OK) return err;
-    if (!root) return SCL_ERR_INVALID_ARG;
+    scl_parse_json_value_t *cur_val = NULL;
+    json_frame_t stack[JSON_STACK_MAX];
+    int sp = -1;
+
+    while (*p) {
+        json_skip_ws(&p);
+        if (!*p) break;
+
+        char c = *p;
+
+        if (c == '{') {
+            p++;
+            scl_parse_json_value_t *obj = json_new_val(alloc, SCL_JSON_OBJECT);
+            if (!obj) return SCL_ERR_OUT_OF_MEMORY;
+
+            json_skip_ws(&p);
+            if (*p == '}') { p++; cur_val = obj; }
+            else {
+                if (sp + 1 >= JSON_STACK_MAX) return SCL_ERR_SIZE_OVERFLOW;
+                sp++;
+                stack[sp].container = obj;
+                stack[sp].state = JS_OBJ_START;
+                stack[sp].key = NULL;
+                continue;
+            }
+        } else if (c == '[') {
+            p++;
+            scl_parse_json_value_t *arr = json_new_val(alloc, SCL_JSON_ARRAY);
+            if (!arr) return SCL_ERR_OUT_OF_MEMORY;
+
+            json_skip_ws(&p);
+            if (*p == ']') { p++; cur_val = arr; }
+            else {
+                if (sp + 1 >= JSON_STACK_MAX) return SCL_ERR_SIZE_OVERFLOW;
+                sp++;
+                stack[sp].container = arr;
+                stack[sp].state = JS_ARR_VAL;
+                stack[sp].key = NULL;
+                continue;
+            }
+        } else if (c == '"') {
+            if (sp >= 0 && stack[sp].state == JS_OBJ_START) {
+                char *key = json_parse_string(alloc, &p);
+                if (!key) return SCL_ERR_OUT_OF_MEMORY;
+                stack[sp].key = key;
+                stack[sp].state = JS_OBJ_COLON;
+                continue;
+            } else {
+                cur_val = json_new_val(alloc, SCL_JSON_STRING);
+                if (!cur_val) return SCL_ERR_OUT_OF_MEMORY;
+                cur_val->string_val = json_parse_string(alloc, &p);
+                if (!cur_val->string_val) { scl_free(alloc, cur_val); return SCL_ERR_OUT_OF_MEMORY; }
+            }
+        } else if (c == 't') {
+            if (scl_strncmp(p, "true", 4) == 0) {
+                cur_val = json_new_val(alloc, SCL_JSON_BOOL);
+                if (!cur_val) return SCL_ERR_OUT_OF_MEMORY;
+                cur_val->bool_val = 1;
+                p += 4;
+            } else return SCL_ERR_INVALID_ARG;
+        } else if (c == 'f') {
+            if (scl_strncmp(p, "false", 5) == 0) {
+                cur_val = json_new_val(alloc, SCL_JSON_BOOL);
+                if (!cur_val) return SCL_ERR_OUT_OF_MEMORY;
+                cur_val->bool_val = 0;
+                p += 5;
+            } else return SCL_ERR_INVALID_ARG;
+        } else if (c == 'n') {
+            if (scl_strncmp(p, "null", 4) == 0) {
+                cur_val = json_new_val(alloc, SCL_JSON_NULL);
+                if (!cur_val) return SCL_ERR_OUT_OF_MEMORY;
+                p += 4;
+            } else return SCL_ERR_INVALID_ARG;
+        } else if (c == '-' || scl_isdigit((unsigned char)c)) {
+            cur_val = json_new_val(alloc, SCL_JSON_INT64);
+            if (!cur_val) return SCL_ERR_OUT_OF_MEMORY;
+            scl_error_t err = json_parse_number(alloc, &p, cur_val);
+            if (err != SCL_OK) { scl_free(alloc, cur_val); return err; }
+        } else if (c == ':') {
+            if (sp >= 0 && stack[sp].state == JS_OBJ_COLON) {
+                p++;
+                stack[sp].state = JS_OBJ_VAL;
+                continue;
+            }
+            return SCL_ERR_INVALID_ARG;
+        } else if (c == ',') {
+            p++;
+            if (sp >= 0) {
+                if (stack[sp].state == JS_OBJ_NEXT) {
+                    stack[sp].state = JS_OBJ_START;
+                } else if (stack[sp].state == JS_ARR_NEXT) {
+                    stack[sp].state = JS_ARR_VAL;
+                } else return SCL_ERR_INVALID_ARG;
+            } else return SCL_ERR_INVALID_ARG;
+            continue;
+        } else if (c == '}') {
+            p++;
+            if (sp >= 0 && stack[sp].container->type == SCL_JSON_OBJECT) {
+                cur_val = stack[sp].container;
+                sp--;
+            } else return SCL_ERR_INVALID_ARG;
+        } else if (c == ']') {
+            p++;
+            if (sp >= 0 && stack[sp].container->type == SCL_JSON_ARRAY) {
+                cur_val = stack[sp].container;
+                sp--;
+            } else return SCL_ERR_INVALID_ARG;
+        } else {
+            return SCL_ERR_INVALID_ARG;
+        }
+
+        if (cur_val) {
+            int ret = json_attach_value(stack, sp, alloc, cur_val, &root);
+            if (ret < 0) return SCL_ERR_OUT_OF_MEMORY;
+            if (ret == 0 && sp < 0) {
+                json_skip_ws(&p);
+                if (*p) return SCL_ERR_INVALID_ARG;
+                *out_root = root;
+                return SCL_OK;
+            }
+            cur_val = NULL;
+        }
+    }
+
+    if (sp >= 0 || !root) return SCL_ERR_INVALID_ARG;
     *out_root = root;
     return SCL_OK;
 }
@@ -279,7 +317,7 @@ scl_parse_json_value_t *scl_parse_json_object_get(const scl_parse_json_value_t *
     if (!obj || !key) return NULL;
     if (obj->type != SCL_JSON_OBJECT) return NULL;
     for (size_t i = 0; i < obj->child_count; i++) {
-        if (obj->keys && obj->keys[i] && strcmp(obj->keys[i], key) == 0)
+        if (obj->keys && obj->keys[i] && scl_strcmp(obj->keys[i], key) == 0)
             return obj->children[i];
     }
     return NULL;
@@ -302,18 +340,34 @@ size_t scl_parse_json_object_len(const scl_parse_json_value_t *obj) {
     return obj->child_count;
 }
 
-void scl_parse_json_free(scl_parse_json_value_t *root) {
+void scl_parse_json_free(scl_allocator_t *alloc, scl_parse_json_value_t *root) {
     if (!root) return;
-    for (size_t i = 0; i < root->child_count; i++) {
-        scl_parse_json_free(root->children[i]);
+
+    scl_parse_json_value_t *order[4096];
+    size_t order_count = 0;
+    scl_parse_json_value_t *ws[4096];
+    size_t ws_top = 0;
+
+    ws[ws_top++] = root;
+    while (ws_top > 0 && order_count < 4096) {
+        scl_parse_json_value_t *node = ws[--ws_top];
+        order[order_count++] = node;
+        for (size_t i = 0; i < node->child_count; i++) {
+            if (order_count >= 4096 || ws_top >= 4096) break;
+            ws[ws_top++] = node->children[i];
+        }
     }
-    if (root->type == SCL_JSON_STRING && root->string_val)
-        free(root->string_val);
-    if (root->keys) {
-        for (size_t i = 0; i < root->child_count; i++)
-            free(root->keys[i]);
-        free(root->keys);
+
+    for (size_t i = order_count; i > 0; i--) {
+        scl_parse_json_value_t *node = order[i - 1];
+        if (node->type == SCL_JSON_STRING && node->string_val)
+            scl_free(alloc, node->string_val);
+        if (node->keys) {
+            for (size_t j = 0; j < node->child_count; j++)
+                scl_free(alloc, node->keys[j]);
+            scl_free(alloc, node->keys);
+        }
+        scl_free(alloc, node->children);
+        scl_free(alloc, node);
     }
-    free(root->children);
-    free(root);
 }

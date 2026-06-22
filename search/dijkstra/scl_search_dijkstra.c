@@ -1,12 +1,7 @@
-#if defined(__GNUC__) && !defined(__clang__)
-#pragma GCC optimize ("O3", "unroll-loops", "tree-vectorize", "inline")
-#endif
-
 #include "scl_search_dijkstra.h"
-#include <stdlib.h>
 #include <limits.h>
 
-scl_error_t scl_search_dijkstra(const scl_graph_t *graph, int start, int64_t *restrict dist, int *restrict prev)
+scl_error_t scl_search_dijkstra(scl_allocator_t *alloc, const scl_graph_t *graph, int start, int64_t *restrict dist, int *restrict prev)
 {
     if (__builtin_expect(graph == NULL, 0)) return SCL_ERR_NULL_PTR;
     if (__builtin_expect(dist == NULL, 0)) return SCL_ERR_NULL_PTR;
@@ -22,7 +17,7 @@ scl_error_t scl_search_dijkstra(const scl_graph_t *graph, int start, int64_t *re
     }
     dist[start] = 0;
 
-    bool *visited = (bool *)calloc(n, sizeof(bool));
+    bool *visited = (bool *)scl_calloc(alloc, n, sizeof(bool), alignof(max_align_t));
     if (__builtin_expect(visited == NULL, 0)) return SCL_ERR_OUT_OF_MEMORY;
 
     for (size_t count = 0; count < n; count++) {
@@ -49,6 +44,6 @@ scl_error_t scl_search_dijkstra(const scl_graph_t *graph, int start, int64_t *re
             node = node->next;
         }
     }
-    free(visited);
+    scl_free(alloc, visited);
     return SCL_OK;
 }

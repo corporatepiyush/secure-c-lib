@@ -1,20 +1,19 @@
 #include "concurrent_unionfind.h"
-#include <stdlib.h>
 #include <string.h>
 
 #if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC optimize ("O3", "unroll-loops", "tree-vectorize", "inline")
 #endif
 
-scl_error_t scl_concurrent_unionfind_init(scl_concurrent_unionfind_t *uf, size_t count)
+scl_error_t scl_atomic_unionfind_init(scl_allocator_t *alloc, scl_atomic_unionfind_t *uf, size_t count)
 {
     if (!uf) return SCL_ERR_NULL_PTR;
     if (count == 0) return SCL_ERR_INVALID_ARG;
-    uf->parent = malloc(count * sizeof(atomic_uint));
+    uf->parent = scl_alloc(alloc, count * sizeof(atomic_uint), alignof(max_align_t));
     if (!uf->parent) return SCL_ERR_OUT_OF_MEMORY;
-    uf->rank = malloc(count * sizeof(atomic_uint));
+    uf->rank = scl_alloc(alloc, count * sizeof(atomic_uint), alignof(max_align_t));
     if (!uf->rank) {
-        free(uf->parent);
+        scl_free(alloc, uf->parent);
         return SCL_ERR_OUT_OF_MEMORY;
     }
     for (size_t i = 0; i < count; i++) {
@@ -26,18 +25,18 @@ scl_error_t scl_concurrent_unionfind_init(scl_concurrent_unionfind_t *uf, size_t
     return SCL_OK;
 }
 
-void scl_concurrent_unionfind_destroy(scl_concurrent_unionfind_t *uf)
+void scl_atomic_unionfind_destroy(scl_allocator_t *alloc, scl_atomic_unionfind_t *uf)
 {
     if (!uf) return;
-    free(uf->parent);
-    free(uf->rank);
+    scl_free(alloc, uf->parent);
+    scl_free(alloc, uf->rank);
     uf->parent = NULL;
     uf->rank = NULL;
     uf->count = 0;
     atomic_store_explicit(&uf->sets, 0, memory_order_relaxed);
 }
 
-size_t scl_concurrent_unionfind_find(scl_concurrent_unionfind_t *uf, size_t x)
+size_t scl_atomic_unionfind_find(scl_atomic_unionfind_t *uf, size_t x)
 {
     if (!uf || x >= uf->count) return (size_t)-1;
     while (1) {
@@ -50,13 +49,13 @@ size_t scl_concurrent_unionfind_find(scl_concurrent_unionfind_t *uf, size_t x)
     }
 }
 
-scl_error_t scl_concurrent_unionfind_union(scl_concurrent_unionfind_t *uf, size_t x, size_t y)
+scl_error_t scl_atomic_unionfind_union(scl_atomic_unionfind_t *uf, size_t x, size_t y)
 {
     if (!uf) return SCL_ERR_NULL_PTR;
     if (x >= uf->count || y >= uf->count) return SCL_ERR_INVALID_INDEX;
     while (1) {
-        size_t rx = scl_concurrent_unionfind_find(uf, x);
-        size_t ry = scl_concurrent_unionfind_find(uf, y);
+        size_t rx = scl_atomic_unionfind_find(uf, x);
+        size_t ry = scl_atomic_unionfind_find(uf, y);
         if (rx == ry) return SCL_OK;
         unsigned int rank_rx = atomic_load_explicit(&uf->rank[rx], memory_order_relaxed);
         unsigned int rank_ry = atomic_load_explicit(&uf->rank[ry], memory_order_relaxed);
@@ -83,18 +82,18 @@ scl_error_t scl_concurrent_unionfind_union(scl_concurrent_unionfind_t *uf, size_
     }
 }
 
-bool scl_concurrent_unionfind_connected(scl_concurrent_unionfind_t *uf, size_t x, size_t y)
+bool scl_atomic_unionfind_connected(scl_atomic_unionfind_t *uf, size_t x, size_t y)
 {
     if (!uf || x >= uf->count || y >= uf->count) return false;
-    return scl_concurrent_unionfind_find(uf, x) == scl_concurrent_unionfind_find(uf, y);
+    return scl_atomic_unionfind_find(uf, x) == scl_atomic_unionfind_find(uf, y);
 }
 
-size_t scl_concurrent_unionfind_count(const scl_concurrent_unionfind_t *uf)
+size_t scl_atomic_unionfind_count(const scl_atomic_unionfind_t *uf)
 {
     return uf ? uf->count : 0;
 }
 
-size_t scl_concurrent_unionfind_sets(const scl_concurrent_unionfind_t *uf)
+size_t scl_atomic_unionfind_sets(const scl_atomic_unionfind_t *uf)
 {
     return uf ? atomic_load_explicit(&uf->sets, memory_order_relaxed) : 0;
 }

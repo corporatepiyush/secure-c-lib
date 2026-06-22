@@ -23,51 +23,51 @@ static int cmp_int(const void *a, const void *b)
 static void test_init_destroy(void)
 {
     TEST("init and destroy");
-    scl_concurrent_btree_t tree;
-    assert(scl_concurrent_btree_init(&tree, sizeof(int), sizeof(int), 4, cmp_int) == SCL_OK);
-    assert(scl_concurrent_btree_count(&tree) == 0);
-    scl_concurrent_btree_destroy(&tree);
+    scl_atomic_btree_t tree;
+    assert(scl_atomic_btree_init(scl_allocator_default(), &tree, sizeof(int), sizeof(int), 4, cmp_int) == SCL_OK);
+    assert(scl_atomic_btree_count(&tree) == 0);
+    scl_atomic_btree_destroy(scl_allocator_default(), &tree);
     PASS();
 }
 
 static void test_insert_get_contains(void)
 {
     TEST("insert, get, contains");
-    scl_concurrent_btree_t tree;
-    scl_concurrent_btree_init(&tree, sizeof(int), sizeof(int), 4, cmp_int);
+    scl_atomic_btree_t tree;
+    scl_atomic_btree_init(scl_allocator_default(), &tree, sizeof(int), sizeof(int), 4, cmp_int);
     int k, v;
     for (int i = 0; i < 50; i++) {
         k = i; v = i * 10;
-        assert(scl_concurrent_btree_insert(&tree, &k, &v) == SCL_OK);
+        assert(scl_atomic_btree_insert(scl_allocator_default(), &tree, &k, &v) == SCL_OK);
     }
     for (int i = 0; i < 50; i++) {
         int out;
         k = i;
-        assert(scl_concurrent_btree_get(&tree, &k, &out) == SCL_OK);
+        assert(scl_atomic_btree_get(&tree, &k, &out) == SCL_OK);
         assert(out == i * 10);
-        assert(scl_concurrent_btree_contains(&tree, &k));
+        assert(scl_atomic_btree_contains(&tree, &k));
     }
     k = 999;
-    assert(scl_concurrent_btree_get(&tree, &k, &v) == SCL_ERR_NOT_FOUND);
-    assert(!scl_concurrent_btree_contains(&tree, &k));
-    scl_concurrent_btree_destroy(&tree);
+    assert(scl_atomic_btree_get(&tree, &k, &v) == SCL_ERR_NOT_FOUND);
+    assert(!scl_atomic_btree_contains(&tree, &k));
+    scl_atomic_btree_destroy(scl_allocator_default(), &tree);
     PASS();
 }
 
 static void test_null(void)
 {
     TEST("null checks");
-    assert(scl_concurrent_btree_init(NULL, sizeof(int), sizeof(int), 4, cmp_int) == SCL_ERR_NULL_PTR);
-    scl_concurrent_btree_destroy(NULL);
+    assert(scl_atomic_btree_init(scl_allocator_default(), NULL, sizeof(int), sizeof(int), 4, cmp_int) == SCL_ERR_NULL_PTR);
+    scl_atomic_btree_destroy(scl_allocator_default(), NULL);
     PASS();
 }
 
 static void *insert_thread(void *arg)
 {
-    scl_concurrent_btree_t *tree = (scl_concurrent_btree_t *)arg;
+    scl_atomic_btree_t *tree = (scl_atomic_btree_t *)arg;
     for (int i = 0; i < 25; i++) {
         int v = i;
-        scl_concurrent_btree_insert(tree, &v, &v);
+        scl_atomic_btree_insert(scl_allocator_default(), tree, &v, &v);
     }
     return NULL;
 }
@@ -75,21 +75,21 @@ static void *insert_thread(void *arg)
 static void test_concurrent_insert(void)
 {
     TEST("concurrent insert 2 threads");
-    scl_concurrent_btree_t tree;
-    scl_concurrent_btree_init(&tree, sizeof(int), sizeof(int), 4, cmp_int);
+    scl_atomic_btree_t tree;
+    scl_atomic_btree_init(scl_allocator_default(), &tree, sizeof(int), sizeof(int), 4, cmp_int);
     pthread_t t1, t2;
     pthread_create(&t1, NULL, insert_thread, &tree);
     pthread_create(&t2, NULL, insert_thread, &tree);
     pthread_join(t1, NULL);
     pthread_join(t2, NULL);
-    assert(scl_concurrent_btree_count(&tree) == 25);
-    scl_concurrent_btree_destroy(&tree);
+    assert(scl_atomic_btree_count(&tree) == 25);
+    scl_atomic_btree_destroy(scl_allocator_default(), &tree);
     PASS();
 }
 
 int main(void)
 {
-    printf("=== scl_concurrent_btree tests ===\n");
+    printf("=== scl_btree tests ===\n");
     test_init_destroy();
     test_insert_get_contains();
     test_null();

@@ -1,12 +1,11 @@
 #include "scl_heap.h"
-#include <stdlib.h>
 #include <string.h>
 
 #if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC optimize ("O3", "unroll-loops", "tree-vectorize", "inline")
 #endif
 
-scl_error_t scl_heap_init(scl_heap_t *heap, size_t element_size, size_t initial_capacity,
+scl_error_t scl_heap_init(scl_allocator_t *alloc, scl_heap_t *heap, size_t element_size, size_t initial_capacity,
                           scl_cmp_func_t cmp)
 {
     if (!heap || !cmp) return SCL_ERR_NULL_PTR;
@@ -22,17 +21,17 @@ scl_error_t scl_heap_init(scl_heap_t *heap, size_t element_size, size_t initial_
         size_t bytes;
         if (scl_mul_overflow(initial_capacity, element_size, &bytes))
             return SCL_ERR_SIZE_OVERFLOW;
-        heap->data = malloc(bytes);
+        heap->data = scl_alloc(alloc, bytes, alignof(max_align_t));
         if (!heap->data) return SCL_ERR_OUT_OF_MEMORY;
         heap->capacity = initial_capacity;
     }
     return SCL_OK;
 }
 
-void scl_heap_destroy(scl_heap_t *heap)
+void scl_heap_destroy(scl_allocator_t *alloc, scl_heap_t *heap)
 {
     if (heap) {
-        free(heap->data);
+        scl_free(alloc, heap->data);
         heap->data = NULL;
         heap->capacity = 0;
         heap->count = 0;
@@ -84,16 +83,18 @@ static void scl_heap_sift_down(scl_heap_t *heap, size_t i)
     }
 }
 
-scl_error_t scl_heap_push(scl_heap_t *heap, const void *element)
+scl_error_t scl_heap_push(scl_allocator_t *alloc, scl_heap_t *heap, const void *element)
 {
     if (!heap || !element) return SCL_ERR_NULL_PTR;
 
     if (heap->count == heap->capacity) {
         size_t new_cap = heap->capacity == 0 ? 4 : heap->capacity * 2;
-        size_t bytes;
-        if (scl_mul_overflow(new_cap, heap->element_size, &bytes))
+        size_t old_bytes, new_bytes;
+        if (scl_mul_overflow(heap->capacity, heap->element_size, &old_bytes))
+            old_bytes = 0;
+        if (scl_mul_overflow(new_cap, heap->element_size, &new_bytes))
             return SCL_ERR_SIZE_OVERFLOW;
-        unsigned char *tmp = realloc(heap->data, bytes);
+        unsigned char *tmp = scl_realloc(alloc, heap->data, old_bytes, new_bytes, alignof(max_align_t));
         if (!tmp) return SCL_ERR_OUT_OF_MEMORY;
         heap->data = tmp;
         heap->capacity = new_cap;

@@ -15,73 +15,73 @@ static int tests_failed = 0;
 static void test_init_destroy(void)
 {
     TEST("init and destroy");
-    scl_concurrent_graph_t g;
-    assert(scl_concurrent_graph_init(&g, 5) == SCL_OK);
-    scl_concurrent_graph_destroy(&g);
+    scl_atomic_graph_t g;
+    assert(scl_atomic_graph_init(scl_allocator_default(), &g, 5) == SCL_OK);
+    scl_atomic_graph_destroy(scl_allocator_default(), &g);
     PASS();
 }
 
 static void test_add_remove_has_edge(void)
 {
     TEST("add/has/remove edge");
-    scl_concurrent_graph_t g;
-    scl_concurrent_graph_init(&g, 5);
-    assert(scl_concurrent_graph_add_edge(&g, 0, 1, 10) == SCL_OK);
-    assert(scl_concurrent_graph_add_edge(&g, 1, 2, 20) == SCL_OK);
-    assert(scl_concurrent_graph_has_edge(&g, 0, 1));
-    assert(scl_concurrent_graph_has_edge(&g, 1, 2));
-    assert(!scl_concurrent_graph_has_edge(&g, 0, 2));
-    assert(scl_concurrent_graph_remove_edge(&g, 0, 1) == SCL_OK);
-    assert(!scl_concurrent_graph_has_edge(&g, 0, 1));
-    assert(scl_concurrent_graph_remove_edge(&g, 0, 1) == SCL_ERR_NOT_FOUND);
-    scl_concurrent_graph_destroy(&g);
+    scl_atomic_graph_t g;
+    scl_atomic_graph_init(scl_allocator_default(), &g, 5);
+    assert(scl_atomic_graph_add_edge(scl_allocator_default(), &g, 0, 1, 10) == SCL_OK);
+    assert(scl_atomic_graph_add_edge(scl_allocator_default(), &g, 1, 2, 20) == SCL_OK);
+    assert(scl_atomic_graph_has_edge(&g, 0, 1));
+    assert(scl_atomic_graph_has_edge(&g, 1, 2));
+    assert(!scl_atomic_graph_has_edge(&g, 0, 2));
+    assert(scl_atomic_graph_remove_edge(scl_allocator_default(), &g, 0, 1) == SCL_OK);
+    assert(!scl_atomic_graph_has_edge(&g, 0, 1));
+    assert(scl_atomic_graph_remove_edge(scl_allocator_default(), &g, 0, 1) == SCL_ERR_NOT_FOUND);
+    scl_atomic_graph_destroy(scl_allocator_default(), &g);
     PASS();
 }
 
 static void test_invalid(void)
 {
     TEST("invalid args");
-    scl_concurrent_graph_t g;
-    scl_concurrent_graph_init(&g, 3);
-    assert(scl_concurrent_graph_add_edge(&g, 5, 0, 1) == SCL_ERR_INVALID_INDEX);
-    assert(!scl_concurrent_graph_has_edge(&g, 5, 0));
-    scl_concurrent_graph_destroy(&g);
+    scl_atomic_graph_t g;
+    scl_atomic_graph_init(scl_allocator_default(), &g, 3);
+    assert(scl_atomic_graph_add_edge(scl_allocator_default(), &g, 5, 0, 1) == SCL_ERR_INVALID_INDEX);
+    assert(!scl_atomic_graph_has_edge(&g, 5, 0));
+    scl_atomic_graph_destroy(scl_allocator_default(), &g);
     PASS();
 }
 
 static void test_null(void)
 {
     TEST("null checks");
-    assert(scl_concurrent_graph_init(NULL, 5) == SCL_ERR_NULL_PTR);
-    scl_concurrent_graph_destroy(NULL);
+    assert(scl_atomic_graph_init(scl_allocator_default(), NULL, 5) == SCL_ERR_NULL_PTR);
+    scl_atomic_graph_destroy(scl_allocator_default(), NULL);
     PASS();
 }
 
 static void *add_edge_thread(void *arg)
 {
-    scl_concurrent_graph_t *g = (scl_concurrent_graph_t *)arg;
-    for (size_t i = 0; i < 50; i++) scl_concurrent_graph_add_edge(g, 0, 1, 1);
+    scl_atomic_graph_t *g = (scl_atomic_graph_t *)arg;
+    for (size_t i = 0; i < 50; i++) scl_atomic_graph_add_edge(scl_allocator_default(), g, 0, 1, 1);
     return NULL;
 }
 
 static void test_concurrent_add(void)
 {
     TEST("concurrent add edge 2 threads");
-    scl_concurrent_graph_t g;
-    scl_concurrent_graph_init(&g, 5);
+    scl_atomic_graph_t g;
+    scl_atomic_graph_init(scl_allocator_default(), &g, 5);
     pthread_t t1, t2;
     pthread_create(&t1, NULL, add_edge_thread, &g);
     pthread_create(&t2, NULL, add_edge_thread, &g);
     pthread_join(t1, NULL);
     pthread_join(t2, NULL);
-    assert(scl_concurrent_graph_has_edge(&g, 0, 1));
-    scl_concurrent_graph_destroy(&g);
+    assert(scl_atomic_graph_has_edge(&g, 0, 1));
+    scl_atomic_graph_destroy(scl_allocator_default(), &g);
     PASS();
 }
 
 int main(void)
 {
-    printf("=== scl_concurrent_graph tests ===\n");
+    printf("=== scl_graph tests ===\n");
     test_init_destroy();
     test_add_remove_has_edge();
     test_invalid();

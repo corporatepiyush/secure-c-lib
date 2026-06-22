@@ -15,84 +15,84 @@ static int tests_failed = 0;
 static void test_init_destroy(void)
 {
     TEST("init and destroy");
-    scl_concurrent_ringbuf_t rb;
-    assert(scl_concurrent_ringbuf_init(&rb, sizeof(int), 100) == SCL_OK);
-    assert(scl_concurrent_ringbuf_empty(&rb));
-    scl_concurrent_ringbuf_destroy(&rb);
+    scl_atomic_ringbuf_t rb;
+    assert(scl_atomic_ringbuf_init(scl_allocator_default(), &rb, sizeof(int), 100) == SCL_OK);
+    assert(scl_atomic_ringbuf_empty(&rb));
+    scl_atomic_ringbuf_destroy(scl_allocator_default(), &rb);
     PASS();
 }
 
 static void test_push_pop_peek(void)
 {
     TEST("push, pop, peek");
-    scl_concurrent_ringbuf_t rb;
-    scl_concurrent_ringbuf_init(&rb, sizeof(int), 100);
+    scl_atomic_ringbuf_t rb;
+    scl_atomic_ringbuf_init(scl_allocator_default(), &rb, sizeof(int), 100);
     for (int i = 0; i < 100; i++)
-        assert(scl_concurrent_ringbuf_push(&rb, &i) == SCL_OK);
-    assert(scl_concurrent_ringbuf_count(&rb) == 100);
+        assert(scl_atomic_ringbuf_push( &rb, &i) == SCL_OK);
+    assert(scl_atomic_ringbuf_count(&rb) == 100);
     for (int i = 0; i < 100; i++) {
         int v;
-        assert(scl_concurrent_ringbuf_peek(&rb, 0, &v) == SCL_OK && v == i);
-        assert(scl_concurrent_ringbuf_pop(&rb, &v) == SCL_OK && v == i);
+        assert(scl_atomic_ringbuf_peek(&rb, 0, &v) == SCL_OK && v == i);
+        assert(scl_atomic_ringbuf_pop( &rb, &v) == SCL_OK && v == i);
     }
-    assert(scl_concurrent_ringbuf_empty(&rb));
-    scl_concurrent_ringbuf_destroy(&rb);
+    assert(scl_atomic_ringbuf_empty(&rb));
+    scl_atomic_ringbuf_destroy(scl_allocator_default(), &rb);
     PASS();
 }
 
 static void test_full_empty(void)
 {
     TEST("full and empty edge cases");
-    scl_concurrent_ringbuf_t rb;
-    scl_concurrent_ringbuf_init(&rb, sizeof(int), 3);
-    assert(scl_concurrent_ringbuf_pop(&rb, &(int){0}) == SCL_ERR_EMPTY);
-    for (int i = 0; i < 3; i++) assert(scl_concurrent_ringbuf_push(&rb, &i) == SCL_OK);
-    assert(scl_concurrent_ringbuf_push(&rb, &(int){3}) == SCL_ERR_FULL);
-    scl_concurrent_ringbuf_destroy(&rb);
+    scl_atomic_ringbuf_t rb;
+    scl_atomic_ringbuf_init(scl_allocator_default(), &rb, sizeof(int), 3);
+    assert(scl_atomic_ringbuf_pop( &rb, &(int){0}) == SCL_ERR_EMPTY);
+    for (int i = 0; i < 3; i++) assert(scl_atomic_ringbuf_push( &rb, &i) == SCL_OK);
+    assert(scl_atomic_ringbuf_push( &rb, &(int){3}) == SCL_ERR_FULL);
+    scl_atomic_ringbuf_destroy(scl_allocator_default(), &rb);
     PASS();
 }
 
 static void test_null(void)
 {
     TEST("null checks");
-    assert(scl_concurrent_ringbuf_init(NULL, sizeof(int), 10) == SCL_ERR_NULL_PTR);
-    scl_concurrent_ringbuf_destroy(NULL);
+    assert(scl_atomic_ringbuf_init(scl_allocator_default(), NULL, sizeof(int), 10) == SCL_ERR_NULL_PTR);
+    scl_atomic_ringbuf_destroy(scl_allocator_default(), NULL);
     PASS();
 }
 
 static void *producer_thread(void *arg)
 {
-    scl_concurrent_ringbuf_t *rb = (scl_concurrent_ringbuf_t *)arg;
-    for (int i = 0; i < 50; i++) scl_concurrent_ringbuf_push(rb, &i);
+    scl_atomic_ringbuf_t *rb = (scl_atomic_ringbuf_t *)arg;
+    for (int i = 0; i < 50; i++) scl_atomic_ringbuf_push( rb, &i);
     return NULL;
 }
 
 static void *consumer_thread(void *arg)
 {
-    scl_concurrent_ringbuf_t *rb = (scl_concurrent_ringbuf_t *)arg;
+    scl_atomic_ringbuf_t *rb = (scl_atomic_ringbuf_t *)arg;
     int v;
-    for (int i = 0; i < 50; i++) scl_concurrent_ringbuf_pop(rb, &v);
+    for (int i = 0; i < 50; i++) scl_atomic_ringbuf_pop( rb, &v);
     return NULL;
 }
 
 static void test_spsc(void)
 {
     TEST("SPSC producer/consumer");
-    scl_concurrent_ringbuf_t rb;
-    scl_concurrent_ringbuf_init(&rb, sizeof(int), 100);
+    scl_atomic_ringbuf_t rb;
+    scl_atomic_ringbuf_init(scl_allocator_default(), &rb, sizeof(int), 100);
     pthread_t prod, cons;
     pthread_create(&prod, NULL, producer_thread, &rb);
     pthread_create(&cons, NULL, consumer_thread, &rb);
     pthread_join(prod, NULL);
     pthread_join(cons, NULL);
-    assert(scl_concurrent_ringbuf_empty(&rb));
-    scl_concurrent_ringbuf_destroy(&rb);
+    assert(scl_atomic_ringbuf_empty(&rb));
+    scl_atomic_ringbuf_destroy(scl_allocator_default(), &rb);
     PASS();
 }
 
 int main(void)
 {
-    printf("=== scl_concurrent_ringbuf tests ===\n");
+    printf("=== scl_ringbuf tests ===\n");
     test_init_destroy();
     test_push_pop_peek();
     test_full_empty();

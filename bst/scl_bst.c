@@ -1,13 +1,13 @@
 #include "scl_bst.h"
-#include <stdlib.h>
 #include <string.h>
 
 #if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC optimize ("O3", "unroll-loops", "tree-vectorize", "inline")
 #endif
 
-scl_error_t scl_bst_init(scl_bst_t *tree, size_t element_size, scl_cmp_func_t cmp)
+scl_error_t scl_bst_init(scl_allocator_t *alloc, scl_bst_t *tree, size_t element_size, scl_cmp_func_t cmp)
 {
+    (void)alloc;
     if (!tree || !cmp) return SCL_ERR_NULL_PTR;
     if (element_size == 0) return SCL_ERR_INVALID_ARG;
 
@@ -18,32 +18,40 @@ scl_error_t scl_bst_init(scl_bst_t *tree, size_t element_size, scl_cmp_func_t cm
     return SCL_OK;
 }
 
-static void scl_bst_destroy_node(scl_bst_node_t *node)
+void scl_bst_destroy(scl_allocator_t *alloc, scl_bst_t *tree)
 {
-    if (!node) return;
-    scl_bst_destroy_node(node->left);
-    scl_bst_destroy_node(node->right);
-    free(node->data);
-    free(node);
-}
-
-void scl_bst_destroy(scl_bst_t *tree)
-{
-    if (tree) {
-        scl_bst_destroy_node(tree->root);
-        tree->root = NULL;
-        tree->count = 0;
+    if (!tree || !tree->root) return;
+    scl_bst_node_t *stack[256];
+    int sp = -1;
+    scl_bst_node_t *cur = tree->root;
+    scl_bst_node_t *last = NULL;
+    while (cur || sp >= 0) {
+        while (cur) {
+            stack[++sp] = cur;
+            cur = cur->left;
+        }
+        scl_bst_node_t *peek = stack[sp];
+        if (peek->right && last != peek->right) {
+            cur = peek->right;
+        } else {
+            sp--;
+            scl_free(alloc, peek->data);
+            scl_free(alloc, peek);
+            last = peek;
+        }
     }
+    tree->root = NULL;
+    tree->count = 0;
 }
 
-static scl_error_t scl_bst_create_node(scl_bst_node_t **out, const void *data, size_t element_size)
+static scl_error_t scl_bst_create_node(scl_allocator_t *alloc, scl_bst_node_t **out, const void *data, size_t element_size)
 {
-    scl_bst_node_t *node = malloc(sizeof(scl_bst_node_t));
+    scl_bst_node_t *node = scl_alloc(alloc, sizeof(scl_bst_node_t), alignof(max_align_t));
     if (!node) return SCL_ERR_OUT_OF_MEMORY;
 
-    node->data = malloc(element_size);
+    node->data = scl_alloc(alloc, element_size, alignof(max_align_t));
     if (!node->data) {
-        free(node);
+        scl_free(alloc, node);
         return SCL_ERR_OUT_OF_MEMORY;
     }
     memcpy(node->data, data, element_size);
@@ -53,12 +61,12 @@ static scl_error_t scl_bst_create_node(scl_bst_node_t **out, const void *data, s
     return SCL_OK;
 }
 
-scl_error_t scl_bst_insert(scl_bst_t *tree, const void *element)
+scl_error_t scl_bst_insert(scl_allocator_t *alloc, scl_bst_t *tree, const void *element)
 {
     if (!tree || !element) return SCL_ERR_NULL_PTR;
 
     scl_bst_node_t *node;
-    scl_error_t err = scl_bst_create_node(&node, element, tree->element_size);
+    scl_error_t err = scl_bst_create_node(alloc, &node, element, tree->element_size);
     if (err != SCL_OK) return err;
 
     if (!tree->root) {
@@ -78,8 +86,8 @@ scl_error_t scl_bst_insert(scl_bst_t *tree, const void *element)
             cur = cur->right;
         } else {
             memcpy(cur->data, element, tree->element_size);
-            free(node->data);
-            free(node);
+            scl_free(alloc, node->data);
+            scl_free(alloc, node);
             return SCL_OK;
         }
     }
@@ -87,7 +95,7 @@ scl_error_t scl_bst_insert(scl_bst_t *tree, const void *element)
     return SCL_OK;
 }
 
-scl_error_t scl_bst_remove(scl_bst_t *tree, const void *key)
+scl_error_t scl_bst_remove(scl_allocator_t *alloc, scl_bst_t *tree, const void *key)
 {
     if (!tree || !key) return SCL_ERR_NULL_PTR;
 
@@ -123,8 +131,8 @@ scl_error_t scl_bst_remove(scl_bst_t *tree, const void *key)
         parent->right = child;
     }
 
-    free(cur->data);
-    free(cur);
+    scl_free(alloc, cur->data);
+    scl_free(alloc, cur);
     tree->count--;
     return SCL_OK;
 }

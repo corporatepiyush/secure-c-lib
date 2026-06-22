@@ -1,37 +1,39 @@
 #include "scl_segtree.h"
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <assert.h>
+#include "../../testlib/scl_test.h"
 
-static int tests_passed = 0;
-static int tests_failed = 0;
-
-#define TEST(name) do { printf("  TEST: %s ... ", name); } while(0)
-#define PASS() do { printf("PASSED\n"); tests_passed++; } while(0)
-#define FAIL(msg) do { printf("FAILED: %s\n", msg); tests_failed++; } while(0)
-
-static int64_t sum_op(int64_t a, int64_t b) { return a + b; }
-
-static void test_range_sum(void)
+static void combine_int(void *out, const void *a, const void *b)
 {
-    TEST("range sum");
-    int64_t data[] = {1, 2, 3, 4, 5, 6, 7, 8};
-    scl_segtree_t st;
-    scl_segtree_init(&st, data, 8, sum_op, 0);
-    int64_t out;
-    scl_segtree_query(&st, 0, 3, &out); assert(out == 10);
-    scl_segtree_query(&st, 2, 5, &out); assert(out == 18);
-    scl_segtree_update(&st, 3, 10);
-    scl_segtree_query(&st, 0, 3, &out); assert(out == 16);
-    scl_segtree_destroy(&st);
-    PASS();
+    *(int *)out = *(const int *)a + *(const int *)b;
+}
+
+static void test_basic(scl_test_runner_t *tr)
+{
+    scl_allocator_t *alloc = scl_allocator_default();
+    int data[] = {1, 2, 3, 4, 5};
+    scl_segtree_t t;
+    SCL_EXPECT_OK(tr, scl_segtree_init(alloc, &t, 5, sizeof(int), data, combine_int));
+
+    int q;
+    SCL_EXPECT_OK(tr, scl_segtree_query(&t, 0, 3, &q));
+    SCL_EXPECT_EQ_I(tr, q, 1 + 2 + 3);
+
+    SCL_EXPECT_OK(tr, scl_segtree_query(&t, 2, 5, &q));
+    SCL_EXPECT_EQ_I(tr, q, 3 + 4 + 5);
+
+    int v = 10;
+    SCL_EXPECT_OK(tr, scl_segtree_update(&t, 2, &v));
+    SCL_EXPECT_OK(tr, scl_segtree_query(&t, 0, 5, &q));
+    SCL_EXPECT_EQ_I(tr, q, 1 + 2 + 10 + 4 + 5);
+
+    scl_segtree_destroy(alloc, &t);
 }
 
 int main(void)
 {
-    printf("=== scl_segtree tests ===\n");
-    test_range_sum();
-    printf("Results: %d passed, %d failed\n", tests_passed, tests_failed);
-    return tests_failed > 0 ? 1 : 0;
+    scl_test_runner_t tr;
+    scl_test_init(&tr);
+    scl_test_group("scl_segtree tests");
+    test_basic(&tr);
+    scl_test_summary(&tr);
+    return tr.failed > 0 ? 1 : 0;
 }

@@ -1,5 +1,4 @@
 #include "scl_dlist.h"
-#include <stdlib.h>
 #include <string.h>
 
 #if defined(__GNUC__) && !defined(__clang__)
@@ -18,14 +17,14 @@ scl_error_t scl_dlist_init(scl_dlist_t *list, size_t element_size)
     return SCL_OK;
 }
 
-void scl_dlist_destroy(scl_dlist_t *list)
+void scl_dlist_destroy(scl_allocator_t *alloc, scl_dlist_t *list)
 {
     if (!list) return;
     scl_dlist_node_t *cur = list->head;
     while (cur) {
         scl_dlist_node_t *next = cur->next;
-        free(cur->data);
-        free(cur);
+        scl_free(alloc, cur->data);
+        scl_free(alloc, cur);
         cur = next;
     }
     list->head = NULL;
@@ -33,14 +32,14 @@ void scl_dlist_destroy(scl_dlist_t *list)
     list->count = 0;
 }
 
-static scl_error_t scl_dlist_create_node(scl_dlist_node_t **out, const void *data, size_t element_size)
+static scl_error_t scl_dlist_create_node(scl_allocator_t *alloc, scl_dlist_node_t **out, const void *data, size_t element_size)
 {
-    scl_dlist_node_t *node = malloc(sizeof(scl_dlist_node_t));
+    scl_dlist_node_t *node = scl_alloc(alloc, sizeof(scl_dlist_node_t), alignof(max_align_t));
     if (!node) return SCL_ERR_OUT_OF_MEMORY;
 
-    node->data = malloc(element_size);
+    node->data = scl_alloc(alloc, element_size, alignof(max_align_t));
     if (!node->data) {
-        free(node);
+        scl_free(alloc, node);
         return SCL_ERR_OUT_OF_MEMORY;
     }
     memcpy(node->data, data, element_size);
@@ -50,12 +49,12 @@ static scl_error_t scl_dlist_create_node(scl_dlist_node_t **out, const void *dat
     return SCL_OK;
 }
 
-scl_error_t scl_dlist_push_front(scl_dlist_t *list, const void *element)
+scl_error_t scl_dlist_push_front(scl_allocator_t *alloc, scl_dlist_t *list, const void *element)
 {
     if (!list || !element) return SCL_ERR_NULL_PTR;
 
     scl_dlist_node_t *node;
-    scl_error_t err = scl_dlist_create_node(&node, element, list->element_size);
+    scl_error_t err = scl_dlist_create_node(alloc, &node, element, list->element_size);
     if (err != SCL_OK) return err;
 
     node->next = list->head;
@@ -68,12 +67,12 @@ scl_error_t scl_dlist_push_front(scl_dlist_t *list, const void *element)
     return SCL_OK;
 }
 
-scl_error_t scl_dlist_push_back(scl_dlist_t *list, const void *element)
+scl_error_t scl_dlist_push_back(scl_allocator_t *alloc, scl_dlist_t *list, const void *element)
 {
     if (!list || !element) return SCL_ERR_NULL_PTR;
 
     scl_dlist_node_t *node;
-    scl_error_t err = scl_dlist_create_node(&node, element, list->element_size);
+    scl_error_t err = scl_dlist_create_node(alloc, &node, element, list->element_size);
     if (err != SCL_OK) return err;
 
     node->prev = list->tail;
@@ -86,7 +85,7 @@ scl_error_t scl_dlist_push_back(scl_dlist_t *list, const void *element)
     return SCL_OK;
 }
 
-scl_error_t scl_dlist_pop_front(scl_dlist_t *list, void *out)
+scl_error_t scl_dlist_pop_front(scl_allocator_t *alloc, scl_dlist_t *list, void *out)
 {
     if (!list || !out) return SCL_ERR_NULL_PTR;
     if (!list->head) return SCL_ERR_EMPTY;
@@ -100,13 +99,13 @@ scl_error_t scl_dlist_pop_front(scl_dlist_t *list, void *out)
     else
         list->tail = NULL;
 
-    free(node->data);
-    free(node);
+    scl_free(alloc, node->data);
+    scl_free(alloc, node);
     list->count--;
     return SCL_OK;
 }
 
-scl_error_t scl_dlist_pop_back(scl_dlist_t *list, void *out)
+scl_error_t scl_dlist_pop_back(scl_allocator_t *alloc, scl_dlist_t *list, void *out)
 {
     if (!list || !out) return SCL_ERR_NULL_PTR;
     if (!list->tail) return SCL_ERR_EMPTY;
@@ -120,8 +119,8 @@ scl_error_t scl_dlist_pop_back(scl_dlist_t *list, void *out)
     else
         list->head = NULL;
 
-    free(node->data);
-    free(node);
+    scl_free(alloc, node->data);
+    scl_free(alloc, node);
     list->count--;
     return SCL_OK;
 }
@@ -142,13 +141,13 @@ scl_error_t scl_dlist_back(const scl_dlist_t *list, void *out)
     return SCL_OK;
 }
 
-scl_error_t scl_dlist_insert_at(scl_dlist_t *list, size_t index, const void *element)
+scl_error_t scl_dlist_insert_at(scl_allocator_t *alloc, scl_dlist_t *list, size_t index, const void *element)
 {
     if (!list || !element) return SCL_ERR_NULL_PTR;
     if (index > list->count) return SCL_ERR_INVALID_INDEX;
 
-    if (index == 0) return scl_dlist_push_front(list, element);
-    if (index == list->count) return scl_dlist_push_back(list, element);
+    if (index == 0) return scl_dlist_push_front(alloc, list, element);
+    if (index == list->count) return scl_dlist_push_back(alloc, list, element);
 
     scl_dlist_node_t *cur;
     if (index <= list->count / 2) {
@@ -160,7 +159,7 @@ scl_error_t scl_dlist_insert_at(scl_dlist_t *list, size_t index, const void *ele
     }
 
     scl_dlist_node_t *node;
-    scl_error_t err = scl_dlist_create_node(&node, element, list->element_size);
+    scl_error_t err = scl_dlist_create_node(alloc, &node, element, list->element_size);
     if (err != SCL_OK) return err;
 
     node->prev = cur->prev;
@@ -171,13 +170,13 @@ scl_error_t scl_dlist_insert_at(scl_dlist_t *list, size_t index, const void *ele
     return SCL_OK;
 }
 
-scl_error_t scl_dlist_remove_at(scl_dlist_t *list, size_t index, void *out)
+scl_error_t scl_dlist_remove_at(scl_allocator_t *alloc, scl_dlist_t *list, size_t index, void *out)
 {
     if (!list || !out) return SCL_ERR_NULL_PTR;
     if (index >= list->count) return SCL_ERR_INVALID_INDEX;
 
-    if (index == 0) return scl_dlist_pop_front(list, out);
-    if (index == list->count - 1) return scl_dlist_pop_back(list, out);
+    if (index == 0) return scl_dlist_pop_front(alloc, list, out);
+    if (index == list->count - 1) return scl_dlist_pop_back(alloc, list, out);
 
     scl_dlist_node_t *cur;
     if (index <= list->count / 2) {
@@ -191,13 +190,13 @@ scl_error_t scl_dlist_remove_at(scl_dlist_t *list, size_t index, void *out)
     memcpy(out, cur->data, list->element_size);
     cur->prev->next = cur->next;
     cur->next->prev = cur->prev;
-    free(cur->data);
-    free(cur);
+    scl_free(alloc, cur->data);
+    scl_free(alloc, cur);
     list->count--;
     return SCL_OK;
 }
 
-scl_error_t scl_dlist_remove(scl_dlist_t *list, const void *element,
+scl_error_t scl_dlist_remove(scl_allocator_t *alloc, scl_dlist_t *list, const void *element,
                              int (*cmp)(const void *, const void *))
 {
     if (!list || !element || !cmp) return SCL_ERR_NULL_PTR;
@@ -215,8 +214,8 @@ scl_error_t scl_dlist_remove(scl_dlist_t *list, const void *element,
             else
                 list->tail = cur->prev;
 
-            free(cur->data);
-            free(cur);
+            scl_free(alloc, cur->data);
+            scl_free(alloc, cur);
             list->count--;
             return SCL_OK;
         }

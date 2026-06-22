@@ -1,13 +1,8 @@
-#if defined(__GNUC__) && !defined(__clang__)
-#pragma GCC optimize ("O3", "unroll-loops", "tree-vectorize", "inline")
-#endif
-
 #include "scl_search_boyer_moore.h"
-#include <stdlib.h>
 #include <string.h>
 #include <limits.h>
 
-scl_error_t scl_search_boyer_moore(const char *restrict text, size_t tlen, const char *restrict pat, size_t plen, size_t *restrict pos)
+scl_error_t scl_search_boyer_moore(scl_allocator_t *alloc, const char *restrict text, size_t tlen, const char *restrict pat, size_t plen, size_t *restrict pos)
 {
     if (__builtin_expect(text == NULL, 0)) return SCL_ERR_NULL_PTR;
     if (__builtin_expect(pat == NULL, 0)) return SCL_ERR_NULL_PTR;
@@ -21,9 +16,9 @@ scl_error_t scl_search_boyer_moore(const char *restrict text, size_t tlen, const
     for (size_t i = 0; i < plen - 1; i++)
         bad_char[(unsigned char)pat[i]] = (int)(plen - 1 - i);
 
-    int *suffix = (int *)calloc(plen + 1, sizeof(int));
-    int *gs = (int *)calloc(plen + 1, sizeof(int));
-    if (!suffix || !gs) { free(suffix); free(gs); return SCL_ERR_OUT_OF_MEMORY; }
+    int *suffix = (int *)scl_alloc(alloc, (plen + 1) * sizeof(int), alignof(max_align_t));
+    int *gs = (int *)scl_alloc(alloc, (plen + 1) * sizeof(int), alignof(max_align_t));
+    if (!suffix || !gs) { scl_free(alloc, suffix); scl_free(alloc, gs); return SCL_ERR_OUT_OF_MEMORY; }
 
     suffix[plen - 1] = (int)plen;
     int g = (int)(plen - 1);
@@ -63,7 +58,7 @@ scl_error_t scl_search_boyer_moore(const char *restrict text, size_t tlen, const
         i += (shift_bc > shift_gs) ? (size_t)shift_bc : (size_t)shift_gs;
     }
 
-    free(suffix);
-    free(gs);
+    scl_free(alloc, suffix);
+    scl_free(alloc, gs);
     return result;
 }

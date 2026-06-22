@@ -1,5 +1,4 @@
 #include "concurrent_bst.h"
-#include <stdlib.h>
 #include <string.h>
 
 #if defined(__GNUC__) && !defined(__clang__)
@@ -9,7 +8,7 @@
 static inline void spin_lock(atomic_flag *lock)
 {
     while (atomic_flag_test_and_set_explicit(lock, memory_order_acquire)) {
-        __asm__ volatile("yield");
+        scl_cpu_pause();
     }
 }
 
@@ -18,57 +17,52 @@ static inline void spin_unlock(atomic_flag *lock)
     atomic_flag_clear_explicit(lock, memory_order_release);
 }
 
-static scl_concurrent_bst_node_t *create_node(const void *data, size_t element_size)
+static scl_atomic_bst_node_t *create_node(scl_allocator_t *alloc, const void *data, size_t element_size)
 {
-    scl_concurrent_bst_node_t *n = malloc(sizeof(scl_concurrent_bst_node_t));
+    scl_atomic_bst_node_t *n = scl_alloc(alloc, sizeof(scl_atomic_bst_node_t), alignof(max_align_t));
     if (!n) return NULL;
-    n->data = malloc(element_size);
-    if (!n->data) { free(n); return NULL; }
+    n->data = scl_alloc(alloc, element_size, alignof(max_align_t));
+    if (!n->data) { scl_free(alloc, n); return NULL; }
     memcpy(n->data, data, element_size);
     n->left = NULL;
     n->right = NULL;
     return n;
 }
 
-static void destroy_subtree(scl_concurrent_bst_node_t *n)
+void scl_atomic_bst_destroy(scl_allocator_t *alloc, scl_atomic_bst_t *tree)
 {
-    if (!n) return;
-    destroy_subtree(n->left);
-    destroy_subtree(n->right);
-    free(n->data);
-    free(n);
-}
-
-static scl_concurrent_bst_node_t *find_min(scl_concurrent_bst_node_t *n)
-{
-    while (n && n->left) n = n->left;
-    return n;
-}
-
-static scl_concurrent_bst_node_t *remove_node(scl_concurrent_bst_node_t *n, const void *key,
-                                               scl_concurrent_cmp_func_t cmp, size_t element_size, bool *found)
-{
-    if (!n) { *found = false; return NULL; }
-    int c = cmp(key, n->data);
-    if (c < 0)
-        n->left = remove_node(n->left, key, cmp, element_size, found);
-    else if (c > 0)
-        n->right = remove_node(n->right, key, cmp, element_size, found);
-    else {
-        *found = true;
-        scl_concurrent_bst_node_t *tmp;
-        if (!n->left) { tmp = n->right; free(n->data); free(n); return tmp; }
-        if (!n->right) { tmp = n->left; free(n->data); free(n); return tmp; }
-        tmp = find_min(n->right);
-        memcpy(n->data, tmp->data, element_size);
-        n->right = remove_node(n->right, tmp->data, cmp, element_size, &(bool){false});
+    if (!tree) return;
+    spin_lock(&tree->lock);
+    if (tree->root) {
+        scl_atomic_bst_node_t *stack[256];
+        int sp = -1;
+        scl_atomic_bst_node_t *cur = tree->root;
+        scl_atomic_bst_node_t *last = NULL;
+        while (cur || sp >= 0) {
+            while (cur) {
+                stack[++sp] = cur;
+                cur = cur->left;
+            }
+            scl_atomic_bst_node_t *peek = stack[sp];
+            if (peek->right && last != peek->right) {
+                cur = peek->right;
+            } else {
+                sp--;
+                scl_free(alloc, peek->data);
+                scl_free(alloc, peek);
+                last = peek;
+            }
+        }
     }
-    return n;
+    tree->root = NULL;
+    atomic_store_explicit(&tree->count, 0, memory_order_relaxed);
+    spin_unlock(&tree->lock);
 }
 
-scl_error_t scl_concurrent_bst_init(scl_concurrent_bst_t *tree, size_t element_size,
-                                    scl_concurrent_cmp_func_t cmp)
+scl_error_t scl_atomic_bst_init(scl_allocator_t *alloc, scl_atomic_bst_t *tree, size_t element_size,
+                         scl_cmp_func_t cmp)
 {
+    (void)alloc;
     if (!tree) return SCL_ERR_NULL_PTR;
     if (element_size == 0 || !cmp) return SCL_ERR_INVALID_ARG;
     tree->root = NULL;
@@ -79,20 +73,10 @@ scl_error_t scl_concurrent_bst_init(scl_concurrent_bst_t *tree, size_t element_s
     return SCL_OK;
 }
 
-void scl_concurrent_bst_destroy(scl_concurrent_bst_t *tree)
-{
-    if (!tree) return;
-    spin_lock(&tree->lock);
-    destroy_subtree(tree->root);
-    tree->root = NULL;
-    atomic_store_explicit(&tree->count, 0, memory_order_relaxed);
-    spin_unlock(&tree->lock);
-}
-
-scl_error_t scl_concurrent_bst_insert(scl_concurrent_bst_t *tree, const void *element)
+scl_error_t scl_atomic_bst_insert(scl_allocator_t *alloc, scl_atomic_bst_t *tree, const void *element)
 {
     if (!tree || !element) return SCL_ERR_NULL_PTR;
-    scl_concurrent_bst_node_t *n = create_node(element, tree->element_size);
+    scl_atomic_bst_node_t *n = create_node(alloc, element, tree->element_size);
     if (!n) return SCL_ERR_OUT_OF_MEMORY;
     spin_lock(&tree->lock);
     if (!tree->root) {
@@ -101,8 +85,8 @@ scl_error_t scl_concurrent_bst_insert(scl_concurrent_bst_t *tree, const void *el
         spin_unlock(&tree->lock);
         return SCL_OK;
     }
-    scl_concurrent_bst_node_t *cur = tree->root;
-    scl_concurrent_bst_node_t *parent = NULL;
+    scl_atomic_bst_node_t *cur = tree->root;
+    scl_atomic_bst_node_t *parent = NULL;
     while (cur) {
         parent = cur;
         int c = tree->cmp(element, cur->data);
@@ -110,7 +94,7 @@ scl_error_t scl_concurrent_bst_insert(scl_concurrent_bst_t *tree, const void *el
         else if (c > 0) cur = cur->right;
         else {
             memcpy(cur->data, element, tree->element_size);
-            free(n->data); free(n);
+            scl_free(alloc, n->data); scl_free(alloc, n);
             spin_unlock(&tree->lock);
             return SCL_OK;
         }
@@ -124,22 +108,56 @@ scl_error_t scl_concurrent_bst_insert(scl_concurrent_bst_t *tree, const void *el
     return SCL_OK;
 }
 
-scl_error_t scl_concurrent_bst_remove(scl_concurrent_bst_t *tree, const void *key)
+scl_error_t scl_atomic_bst_remove(scl_allocator_t *alloc, scl_atomic_bst_t *tree, const void *key)
 {
     if (!tree || !key) return SCL_ERR_NULL_PTR;
     spin_lock(&tree->lock);
+
+    scl_atomic_bst_node_t *parent = NULL;
+    scl_atomic_bst_node_t *cur = tree->root;
     bool found = false;
-    tree->root = remove_node(tree->root, key, tree->cmp, tree->element_size, &found);
-    if (found) atomic_fetch_sub_explicit(&tree->count, 1, memory_order_relaxed);
+
+    while (cur) {
+        int c = tree->cmp(key, cur->data);
+        if (c < 0) { parent = cur; cur = cur->left; }
+        else if (c > 0) { parent = cur; cur = cur->right; }
+        else { found = true; break; }
+    }
+
+    if (!found) { spin_unlock(&tree->lock); return SCL_ERR_NOT_FOUND; }
+
+    if (cur->left && cur->right) {
+        scl_atomic_bst_node_t *succ_parent = cur;
+        scl_atomic_bst_node_t *succ = cur->right;
+        while (succ->left) {
+            succ_parent = succ;
+            succ = succ->left;
+        }
+        memcpy(cur->data, succ->data, tree->element_size);
+        cur = succ;
+        parent = succ_parent;
+    }
+
+    scl_atomic_bst_node_t *child = cur->left ? cur->left : cur->right;
+    if (!parent)
+        tree->root = child;
+    else if (parent->left == cur)
+        parent->left = child;
+    else
+        parent->right = child;
+
+    scl_free(alloc, cur->data);
+    scl_free(alloc, cur);
+    atomic_fetch_sub_explicit(&tree->count, 1, memory_order_relaxed);
     spin_unlock(&tree->lock);
-    return found ? SCL_OK : SCL_ERR_NOT_FOUND;
+    return SCL_OK;
 }
 
-bool scl_concurrent_bst_contains(scl_concurrent_bst_t *tree, const void *key)
+bool scl_atomic_bst_contains(scl_atomic_bst_t *tree, const void *key)
 {
     if (!tree || !key) return false;
     spin_lock(&tree->lock);
-    scl_concurrent_bst_node_t *cur = tree->root;
+    scl_atomic_bst_node_t *cur = tree->root;
     while (cur) {
         int c = tree->cmp(key, cur->data);
         if (c == 0) { spin_unlock(&tree->lock); return true; }
@@ -149,11 +167,11 @@ bool scl_concurrent_bst_contains(scl_concurrent_bst_t *tree, const void *key)
     return false;
 }
 
-scl_error_t scl_concurrent_bst_find(scl_concurrent_bst_t *tree, const void *key, void *out)
+scl_error_t scl_atomic_bst_find(scl_atomic_bst_t *tree, const void *key, void *out)
 {
     if (!tree || !key || !out) return SCL_ERR_NULL_PTR;
     spin_lock(&tree->lock);
-    scl_concurrent_bst_node_t *cur = tree->root;
+    scl_atomic_bst_node_t *cur = tree->root;
     while (cur) {
         int c = tree->cmp(key, cur->data);
         if (c == 0) { memcpy(out, cur->data, tree->element_size); spin_unlock(&tree->lock); return SCL_OK; }
@@ -163,12 +181,12 @@ scl_error_t scl_concurrent_bst_find(scl_concurrent_bst_t *tree, const void *key,
     return SCL_ERR_NOT_FOUND;
 }
 
-size_t scl_concurrent_bst_count(const scl_concurrent_bst_t *tree)
+size_t scl_atomic_bst_count(const scl_atomic_bst_t *tree)
 {
     return tree ? atomic_load_explicit(&tree->count, memory_order_relaxed) : 0;
 }
 
-bool scl_concurrent_bst_empty(const scl_concurrent_bst_t *tree)
+bool scl_atomic_bst_empty(const scl_atomic_bst_t *tree)
 {
     return tree ? atomic_load_explicit(&tree->count, memory_order_relaxed) == 0 : true;
 }

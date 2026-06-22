@@ -8,8 +8,6 @@
 #pragma GCC diagnostic ignored "-Wpedantic"
 #endif
 
-typedef int (*scl_cmp_func_t)(const void *a, const void *b);
-
 typedef struct scl_avl_node {
     void *data;
     struct scl_avl_node *left;
@@ -24,10 +22,10 @@ typedef struct {
     scl_cmp_func_t cmp;
 } scl_avl_t;
 
-scl_error_t scl_avl_init(scl_avl_t *tree, size_t element_size, scl_cmp_func_t cmp) SCL_WARN_UNUSED;
-void        scl_avl_destroy(scl_avl_t *tree);
-scl_error_t scl_avl_insert(scl_avl_t *tree, const void *element) SCL_WARN_UNUSED;
-scl_error_t scl_avl_remove(scl_avl_t *tree, const void *key) SCL_WARN_UNUSED;
+scl_error_t scl_avl_init(scl_allocator_t *alloc, scl_avl_t *tree, size_t element_size, scl_cmp_func_t cmp) SCL_WARN_UNUSED;
+void        scl_avl_destroy(scl_allocator_t *alloc, scl_avl_t *tree);
+scl_error_t scl_avl_insert(scl_allocator_t *alloc, scl_avl_t *tree, const void *element) SCL_WARN_UNUSED;
+scl_error_t scl_avl_remove(scl_allocator_t *alloc, scl_avl_t *tree, const void *key) SCL_WARN_UNUSED;
 bool        scl_avl_contains(const scl_avl_t *tree, const void *key);
 scl_error_t scl_avl_find(const scl_avl_t *tree, const void *key, void *out) SCL_WARN_UNUSED;
 scl_error_t scl_avl_min(const scl_avl_t *tree, void *out) SCL_WARN_UNUSED;
@@ -35,7 +33,6 @@ scl_error_t scl_avl_max(const scl_avl_t *tree, void *out) SCL_WARN_UNUSED;
 size_t      scl_avl_count(const scl_avl_t *tree);
 bool        scl_avl_empty(const scl_avl_t *tree);
 
-typedef void (*scl_visit_func_t)(void *data, void *ctx);
 scl_error_t scl_avl_inorder(const scl_avl_t *tree, scl_visit_func_t visit, void *ctx) SCL_WARN_UNUSED;
 
 #ifdef __GNUC__

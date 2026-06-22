@@ -7,7 +7,6 @@
 #endif
 
 #include "../../common/scl_common.h"
-#include <string.h>
 
 typedef struct {
     uint64_t state[4];

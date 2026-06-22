@@ -1,11 +1,7 @@
-#if defined(__GNUC__) && !defined(__clang__)
-#pragma GCC optimize ("O3", "unroll-loops", "tree-vectorize", "inline")
-#endif
-
 #include "scl_search_a_star.h"
-#include <stdlib.h>
 #include <limits.h>
 #include <math.h>
+#include <string.h>
 
 #define A_STAR_MAX_OPEN 4096
 
@@ -19,7 +15,7 @@ static int heuristic(int x1, int y1, int x2, int y2)
     return abs(x1 - x2) + abs(y1 - y2);
 }
 
-scl_error_t scl_search_a_star(int sx, int sy, int gx, int gy, int **restrict grid, int w, int h, int *restrict px, int *restrict py, size_t *restrict plen, size_t maxplen)
+scl_error_t scl_search_a_star(scl_allocator_t *alloc, int sx, int sy, int gx, int gy, int **restrict grid, int w, int h, int *restrict px, int *restrict py, size_t *restrict plen, size_t maxplen)
 {
     if (__builtin_expect(grid == NULL, 0)) return SCL_ERR_NULL_PTR;
     if (__builtin_expect(px == NULL, 0)) return SCL_ERR_NULL_PTR;
@@ -31,20 +27,22 @@ scl_error_t scl_search_a_star(int sx, int sy, int gx, int gy, int **restrict gri
 
     if (grid[sy][sx] != 0 || grid[gy][gx] != 0) return SCL_ERR_INVALID_ARG;
 
-    int *g_score = (int *)calloc((size_t)(w * h), sizeof(int));
-    int *f_score = (int *)malloc((size_t)(w * h) * sizeof(int));
-    int *came_from_x = (int *)malloc((size_t)(w * h) * sizeof(int));
-    int *came_from_y = (int *)malloc((size_t)(w * h) * sizeof(int));
-    bool *closed = (bool *)calloc((size_t)(w * h), sizeof(bool));
-    a_star_node_t *open = (a_star_node_t *)malloc((size_t)A_STAR_MAX_OPEN * sizeof(a_star_node_t));
+    size_t cell_count = (size_t)(w * h);
+    int *g_score = (int *)scl_alloc(alloc, cell_count * sizeof(int), alignof(max_align_t));
+    int *f_score = (int *)scl_alloc(alloc, cell_count * sizeof(int), alignof(max_align_t));
+    int *came_from_x = (int *)scl_alloc(alloc, cell_count * sizeof(int), alignof(max_align_t));
+    int *came_from_y = (int *)scl_alloc(alloc, cell_count * sizeof(int), alignof(max_align_t));
+    bool *closed = (bool *)scl_calloc(alloc, cell_count, sizeof(bool), alignof(max_align_t));
+    a_star_node_t *open = (a_star_node_t *)scl_alloc(alloc, (size_t)A_STAR_MAX_OPEN * sizeof(a_star_node_t), alignof(max_align_t));
 
     if (!g_score || !f_score || !came_from_x || !came_from_y || !closed || !open) {
-        free(g_score); free(f_score); free(came_from_x); free(came_from_y);
-        free(closed); free(open);
+        scl_free(alloc, g_score); scl_free(alloc, f_score);
+        scl_free(alloc, came_from_x); scl_free(alloc, came_from_y);
+        scl_free(alloc, closed); scl_free(alloc, open);
         return SCL_ERR_OUT_OF_MEMORY;
     }
 
-    for (int i = 0; i < w * h; i++) {
+    for (size_t i = 0; i < cell_count; i++) {
         g_score[i] = INT_MAX;
         f_score[i] = INT_MAX;
         came_from_x[i] = -1;
@@ -129,8 +127,8 @@ scl_error_t scl_search_a_star(int sx, int sy, int gx, int gy, int **restrict gri
         }
     }
 
-    free(g_score); free(f_score);
-    free(came_from_x); free(came_from_y);
-    free(closed); free(open);
+    scl_free(alloc, g_score); scl_free(alloc, f_score);
+    scl_free(alloc, came_from_x); scl_free(alloc, came_from_y);
+    scl_free(alloc, closed); scl_free(alloc, open);
     return result;
 }

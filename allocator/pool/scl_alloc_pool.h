@@ -7,20 +7,9 @@
 #endif
 
 #include "../../common/scl_common.h"
-#include <stddef.h>
 
-typedef struct {
-    void *chunk;
-    void *free_list;
-    size_t block_size;
-    size_t total_blocks;
-    size_t free_count;
-} scl_alloc_pool_t;
-
-scl_error_t scl_alloc_pool_init(scl_alloc_pool_t *pool, size_t block_size, size_t block_count);
-scl_error_t scl_alloc_pool_alloc(scl_alloc_pool_t *pool, void **out_ptr);
-scl_error_t scl_alloc_pool_free(scl_alloc_pool_t *pool, void *ptr);
-scl_error_t scl_alloc_pool_destroy(scl_alloc_pool_t *pool);
+scl_allocator_t *scl_alloc_pool_create(scl_allocator_t *backing, size_t block_size, size_t block_count, size_t alignment);
+void scl_alloc_pool_destroy(scl_allocator_t *alloc);
 
 #ifdef __GNUC__
 #pragma GCC diagnostic pop

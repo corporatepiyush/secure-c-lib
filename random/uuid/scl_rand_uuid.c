@@ -3,6 +3,7 @@
 #endif
 
 #include "scl_rand_uuid.h"
+#include "../../stdlib/scl_stdlib.h"
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -12,8 +13,6 @@
 #else
 #include <sys/random.h>
 #endif
-
-#include <stdio.h>
 
 static void get_random_bytes(void *buf, size_t len) {
 #if defined(_WIN32)
@@ -73,7 +72,7 @@ int scl_rand_uuid_compare(const scl_rand_uuid_t *a, const scl_rand_uuid_t *b) {
     if (!a && !b) return 0;
     if (!a) return -1;
     if (!b) return 1;
-    return memcmp(a->bytes, b->bytes, 16);
+    return scl_memcmp(a->bytes, b->bytes, 16);
 }
 
 bool scl_rand_uuid_is_nil(const scl_rand_uuid_t *uuid) {

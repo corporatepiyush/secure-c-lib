@@ -1,11 +1,7 @@
-#if defined(__GNUC__) && !defined(__clang__)
-#pragma GCC optimize ("O3", "unroll-loops", "tree-vectorize", "inline")
-#endif
-
 #include "scl_search_breadth_first_search.h"
 #include <stdlib.h>
 
-scl_error_t scl_search_breadth_first_search(const scl_graph_t *graph, int start, bool *visited)
+scl_error_t scl_search_breadth_first_search(scl_allocator_t *alloc, const scl_graph_t *graph, int start, bool *visited)
 {
     if (__builtin_expect(graph == NULL, 0)) return SCL_ERR_NULL_PTR;
     if (__builtin_expect(visited == NULL, 0)) return SCL_ERR_NULL_PTR;
@@ -13,8 +9,8 @@ scl_error_t scl_search_breadth_first_search(const scl_graph_t *graph, int start,
     if (__builtin_expect(start < 0 || (size_t)start >= graph->vertex_count, 0)) return SCL_ERR_INVALID_INDEX;
     if (__builtin_expect(graph->vertex_count == 0, 0)) return SCL_ERR_EMPTY;
 
-    int n = (int)graph->vertex_count;
-    int *queue = (int *)malloc((size_t)n * sizeof(int));
+    size_t n = graph->vertex_count;
+    int *queue = (int *)scl_alloc(alloc, n * sizeof(int), alignof(max_align_t));
     if (__builtin_expect(queue == NULL, 0)) return SCL_ERR_OUT_OF_MEMORY;
 
     int front = 0, back = 0;
@@ -32,6 +28,6 @@ scl_error_t scl_search_breadth_first_search(const scl_graph_t *graph, int start,
             node = node->next;
         }
     }
-    free(queue);
+    scl_free(alloc, queue);
     return SCL_OK;
 }

@@ -1,16 +1,15 @@
 #include "scl_trie.h"
-#include <stdlib.h>
 #include <string.h>
 
 #if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC optimize ("O3", "unroll-loops", "tree-vectorize", "inline")
 #endif
 
-scl_error_t scl_trie_init(scl_trie_t *trie, size_t value_size)
+scl_error_t scl_trie_init(scl_allocator_t *alloc, scl_trie_t *trie, size_t value_size)
 {
     if (!trie) return SCL_ERR_NULL_PTR;
 
-    trie->root = calloc(1, sizeof(scl_trie_node_t));
+    trie->root = scl_calloc(alloc, 1, sizeof(scl_trie_node_t), alignof(max_align_t));
     if (!trie->root) return SCL_ERR_OUT_OF_MEMORY;
 
     trie->value_size = value_size;
@@ -18,25 +17,37 @@ scl_error_t scl_trie_init(scl_trie_t *trie, size_t value_size)
     return SCL_OK;
 }
 
-static void scl_trie_destroy_node(scl_trie_node_t *node)
+void scl_trie_destroy(scl_allocator_t *alloc, scl_trie_t *trie)
 {
-    if (!node) return;
-    for (int i = 0; i < SCL_TRIE_ALPHABET; i++)
-        scl_trie_destroy_node(node->children[i]);
-    free(node->value);
-    free(node);
-}
+    if (!trie || !trie->root) return;
 
-void scl_trie_destroy(scl_trie_t *trie)
-{
-    if (trie) {
-        scl_trie_destroy_node(trie->root);
-        trie->root = NULL;
-        trie->count = 0;
+    scl_trie_node_t *stack1[4096];
+    int sp1 = 0;
+    stack1[sp1++] = trie->root;
+
+    scl_trie_node_t *stack2[4096];
+    int sp2 = 0;
+
+    while (sp1 > 0) {
+        scl_trie_node_t *node = stack1[--sp1];
+        stack2[sp2++] = node;
+        for (int i = 0; i < SCL_TRIE_ALPHABET; i++) {
+            if (node->children[i])
+                stack1[sp1++] = node->children[i];
+        }
     }
+
+    while (sp2 > 0) {
+        scl_trie_node_t *node = stack2[--sp2];
+        scl_free(alloc, node->value);
+        scl_free(alloc, node);
+    }
+
+    trie->root = NULL;
+    trie->count = 0;
 }
 
-scl_error_t scl_trie_insert(scl_trie_t *trie, const unsigned char *key, size_t key_len,
+scl_error_t scl_trie_insert(scl_allocator_t *alloc, scl_trie_t *trie, const unsigned char *key, size_t key_len,
                             const void *value)
 {
     if (!trie || !key || !value) return SCL_ERR_NULL_PTR;
@@ -45,7 +56,7 @@ scl_error_t scl_trie_insert(scl_trie_t *trie, const unsigned char *key, size_t k
     for (size_t i = 0; i < key_len; i++) {
         unsigned char c = key[i];
         if (!node->children[c]) {
-            node->children[c] = calloc(1, sizeof(scl_trie_node_t));
+            node->children[c] = scl_calloc(alloc, 1, sizeof(scl_trie_node_t), alignof(max_align_t));
             if (!node->children[c]) return SCL_ERR_OUT_OF_MEMORY;
         }
         node = node->children[c];
@@ -57,7 +68,7 @@ scl_error_t scl_trie_insert(scl_trie_t *trie, const unsigned char *key, size_t k
     }
 
     if (!node->value) {
-        node->value = malloc(trie->value_size);
+        node->value = scl_alloc(alloc, trie->value_size, alignof(max_align_t));
         if (!node->value) return SCL_ERR_OUT_OF_MEMORY;
     }
     memcpy(node->value, value, trie->value_size);
@@ -100,36 +111,36 @@ static bool scl_trie_has_children(const scl_trie_node_t *node)
     return false;
 }
 
-static bool scl_trie_remove_node(scl_trie_node_t *node, const unsigned char *key,
-                                  size_t key_len, size_t depth)
-{
-    if (!node) return false;
-    if (depth == key_len) {
-        if (!node->terminal) return false;
-        node->terminal = false;
-        free(node->value);
-        node->value = NULL;
-        return !scl_trie_has_children(node);
-    }
-
-    unsigned char c = key[depth];
-    if (!node->children[c]) return false;
-
-    bool should_delete = scl_trie_remove_node(node->children[c], key, key_len, depth + 1);
-    if (should_delete) {
-        free(node->children[c]);
-        node->children[c] = NULL;
-        return !node->terminal && !scl_trie_has_children(node);
-    }
-    return false;
-}
-
-scl_error_t scl_trie_remove(scl_trie_t *trie, const unsigned char *key, size_t key_len)
+scl_error_t scl_trie_remove(scl_allocator_t *alloc, scl_trie_t *trie, const unsigned char *key, size_t key_len)
 {
     if (!trie || !key) return SCL_ERR_NULL_PTR;
     if (!scl_trie_contains(trie, key, key_len)) return SCL_ERR_NOT_FOUND;
 
-    scl_trie_remove_node(trie->root, key, key_len, 0);
+    scl_trie_node_t *path[1024];
+    int path_len = 0;
+    scl_trie_node_t *node = trie->root;
+    path[path_len++] = node;
+
+    for (size_t i = 0; i < key_len; i++) {
+        unsigned char c = key[i];
+        node = node->children[c];
+        path[path_len++] = node;
+    }
+
+    node->terminal = false;
+    scl_free(alloc, node->value);
+    node->value = NULL;
+
+    for (int i = path_len - 1; i > 0; i--) {
+        scl_trie_node_t *n = path[i];
+        if (n->terminal || scl_trie_has_children(n)) break;
+
+        unsigned char c = key[i - 1];
+        scl_trie_node_t *parent = path[i - 1];
+        parent->children[c] = NULL;
+        scl_free(alloc, n);
+    }
+
     trie->count--;
     return SCL_OK;
 }

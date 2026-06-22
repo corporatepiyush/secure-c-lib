@@ -1,5 +1,4 @@
 #include "scl_bloom.h"
-#include <stdlib.h>
 #include <string.h>
 #include <math.h>
 
@@ -29,7 +28,7 @@ static inline bool scl_bloom_test_bit(const unsigned char *bits, size_t idx)
     return (bits[idx / 8] >> (idx % 8)) & 1;
 }
 
-scl_error_t scl_bloom_init(scl_bloom_t *bf, size_t expected_items, double false_positive_rate,
+scl_error_t scl_bloom_init(scl_allocator_t *alloc, scl_bloom_t *bf, size_t expected_items, double false_positive_rate,
                            scl_bloom_hash_t hash_func)
 {
     if (!bf) return SCL_ERR_NULL_PTR;
@@ -46,7 +45,7 @@ scl_error_t scl_bloom_init(scl_bloom_t *bf, size_t expected_items, double false_
     if (num_hashes > 64) num_hashes = 64;
 
     size_t bytes = (bits + 7) / 8;
-    bf->bits = calloc(bytes, 1);
+    bf->bits = scl_calloc(alloc, bytes, 1, alignof(max_align_t));
     if (!bf->bits) return SCL_ERR_OUT_OF_MEMORY;
 
     bf->bit_count = bits;
@@ -57,10 +56,10 @@ scl_error_t scl_bloom_init(scl_bloom_t *bf, size_t expected_items, double false_
     return SCL_OK;
 }
 
-void scl_bloom_destroy(scl_bloom_t *bf)
+void scl_bloom_destroy(scl_allocator_t *alloc, scl_bloom_t *bf)
 {
     if (bf) {
-        free(bf->bits);
+        scl_free(alloc, bf->bits);
         bf->bits = NULL;
         bf->bit_count = 0;
         bf->byte_count = 0;

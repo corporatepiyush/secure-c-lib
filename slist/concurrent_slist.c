@@ -1,13 +1,13 @@
 #include "concurrent_slist.h"
-#include <stdlib.h>
 #include <string.h>
 
 #if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC optimize ("O3", "unroll-loops", "tree-vectorize", "inline")
 #endif
 
-scl_error_t scl_concurrent_slist_init(scl_concurrent_slist_t *list, size_t element_size)
+scl_error_t scl_atomic_slist_init(scl_allocator_t *alloc, scl_atomic_slist_t *list, size_t element_size)
 {
+    (void)alloc;
     if (!list) return SCL_ERR_NULL_PTR;
     if (element_size == 0) return SCL_ERR_INVALID_ARG;
     atomic_init(&list->head, (uintptr_t)NULL);
@@ -16,33 +16,33 @@ scl_error_t scl_concurrent_slist_init(scl_concurrent_slist_t *list, size_t eleme
     return SCL_OK;
 }
 
-void scl_concurrent_slist_destroy(scl_concurrent_slist_t *list)
+void scl_atomic_slist_destroy(scl_allocator_t *alloc, scl_atomic_slist_t *list)
 {
     if (!list) return;
-    scl_concurrent_slist_node_t *cur = (scl_concurrent_slist_node_t *)atomic_load_explicit(&list->head, memory_order_acquire);
+    scl_atomic_slist_node_t *cur = (scl_atomic_slist_node_t *)atomic_load_explicit(&list->head, memory_order_acquire);
     while (cur) {
-        scl_concurrent_slist_node_t *next = cur->next;
-        free(cur->data);
-        free(cur);
+        scl_atomic_slist_node_t *next = cur->next;
+        scl_free(alloc, cur->data);
+        scl_free(alloc, cur);
         cur = next;
     }
     atomic_store_explicit(&list->head, (uintptr_t)NULL, memory_order_relaxed);
     atomic_store_explicit(&list->count, 0, memory_order_relaxed);
 }
 
-scl_error_t scl_concurrent_slist_push_front(scl_concurrent_slist_t *list, const void *element)
+scl_error_t scl_atomic_slist_push_front(scl_allocator_t *alloc, scl_atomic_slist_t *list, const void *element)
 {
     if (!list || !element) return SCL_ERR_NULL_PTR;
-    scl_concurrent_slist_node_t *node = malloc(sizeof(scl_concurrent_slist_node_t));
+    scl_atomic_slist_node_t *node = scl_alloc(alloc, sizeof(scl_atomic_slist_node_t), alignof(max_align_t));
     if (!node) return SCL_ERR_OUT_OF_MEMORY;
-    node->data = malloc(list->element_size);
+    node->data = scl_alloc(alloc, list->element_size, alignof(max_align_t));
     if (!node->data) {
-        free(node);
+        scl_free(alloc, node);
         return SCL_ERR_OUT_OF_MEMORY;
     }
     memcpy(node->data, element, list->element_size);
 
-    scl_concurrent_slist_node_t *old_head = (scl_concurrent_slist_node_t *)atomic_load_explicit(&list->head, memory_order_relaxed);
+    scl_atomic_slist_node_t *old_head = (scl_atomic_slist_node_t *)atomic_load_explicit(&list->head, memory_order_relaxed);
     do {
         node->next = old_head;
     } while (!atomic_compare_exchange_weak_explicit(&list->head,
@@ -53,10 +53,10 @@ scl_error_t scl_concurrent_slist_push_front(scl_concurrent_slist_t *list, const 
     return SCL_OK;
 }
 
-scl_error_t scl_concurrent_slist_pop_front(scl_concurrent_slist_t *list, void *out)
+scl_error_t scl_atomic_slist_pop_front(scl_allocator_t *alloc, scl_atomic_slist_t *list, void *out)
 {
     if (!list || !out) return SCL_ERR_NULL_PTR;
-    scl_concurrent_slist_node_t *old_head = (scl_concurrent_slist_node_t *)atomic_load_explicit(&list->head, memory_order_relaxed);
+    scl_atomic_slist_node_t *old_head = (scl_atomic_slist_node_t *)atomic_load_explicit(&list->head, memory_order_relaxed);
     while (1) {
         if (!old_head) return SCL_ERR_EMPTY;
         if (atomic_compare_exchange_weak_explicit(&list->head,
@@ -65,18 +65,18 @@ scl_error_t scl_concurrent_slist_pop_front(scl_concurrent_slist_t *list, void *o
             break;
     }
     memcpy(out, old_head->data, list->element_size);
-    free(old_head->data);
-    free(old_head);
+    scl_free(alloc, old_head->data);
+    scl_free(alloc, old_head);
     atomic_fetch_sub_explicit(&list->count, 1, memory_order_relaxed);
     return SCL_OK;
 }
 
-size_t scl_concurrent_slist_count(const scl_concurrent_slist_t *list)
+size_t scl_atomic_slist_count(const scl_atomic_slist_t *list)
 {
     return list ? atomic_load_explicit(&list->count, memory_order_relaxed) : 0;
 }
 
-bool scl_concurrent_slist_empty(const scl_concurrent_slist_t *list)
+bool scl_atomic_slist_empty(const scl_atomic_slist_t *list)
 {
     return list ? atomic_load_explicit(&list->count, memory_order_relaxed) == 0 : true;
 }

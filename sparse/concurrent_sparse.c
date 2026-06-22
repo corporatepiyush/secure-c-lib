@@ -1,85 +1,86 @@
 #include "concurrent_sparse.h"
-#include <stdlib.h>
 #include <string.h>
 
-#if defined(__GNUC__) && !defined(__clang__)
-#pragma GCC optimize ("O3", "unroll-loops", "tree-vectorize", "inline")
-#endif
-
-static inline void spin_lock(atomic_flag *lock)
+scl_error_t scl_atomic_sparse_init(scl_allocator_t *alloc, scl_atomic_sparse_t *st,
+                             size_t n, size_t element_size, const void *data,
+                             void (*combine)(void *out, const void *a, const void *b))
 {
-    while (atomic_flag_test_and_set_explicit(lock, memory_order_acquire)) {
-        __asm__ volatile("yield");
+    if (!st || !combine || !data) return SCL_ERR_NULL_PTR;
+    if (n == 0 || element_size == 0) return SCL_ERR_INVALID_ARG;
+
+    size_t levels_count = 0;
+    while ((1UL << levels_count) <= n) levels_count++;
+
+    st->levels = scl_calloc(alloc, levels_count, sizeof(unsigned char *), alignof(max_align_t));
+    st->scratch = scl_alloc(alloc, element_size, alignof(max_align_t));
+    if (!st->levels || !st->scratch) {
+        scl_free(alloc, st->levels);
+        scl_free(alloc, st->scratch);
+        return SCL_ERR_OUT_OF_MEMORY;
     }
-}
 
-static inline void spin_unlock(atomic_flag *lock)
-{
-    atomic_flag_clear_explicit(lock, memory_order_release);
-}
+    size_t ok = 1;
+    for (size_t k = 0; k < levels_count; k++) {
+        st->levels[k] = scl_alloc(alloc, n * element_size, alignof(max_align_t));
+        if (!st->levels[k]) { ok = 0; break; }
+    }
 
-scl_error_t scl_concurrent_sparse_init(scl_concurrent_sparse_t *st, const int64_t *data, size_t n,
-                                       scl_concurrent_sparse_op_t op)
-{
-    if (!st) return SCL_ERR_NULL_PTR;
-    if (n == 0 || !op || !data) return SCL_ERR_INVALID_ARG;
+    if (!ok) {
+        for (size_t k = 0; k < levels_count; k++)
+            scl_free(alloc, st->levels[k]);
+        scl_free(alloc, st->levels);
+        scl_free(alloc, st->scratch);
+        return SCL_ERR_OUT_OF_MEMORY;
+    }
+
     st->n = n;
-    st->op = op;
-    size_t k = 1;
-    while ((1ULL << k) <= n) k++;
-    st->k = k;
-    st->table = malloc(k * sizeof(int64_t *));
-    if (!st->table) return SCL_ERR_OUT_OF_MEMORY;
-    st->table[0] = malloc(n * sizeof(int64_t));
-    if (!st->table[0]) { free(st->table); return SCL_ERR_OUT_OF_MEMORY; }
-    memcpy(st->table[0], data, n * sizeof(int64_t));
-    for (size_t j = 1; j < k; j++) {
-        st->table[j] = malloc(n * sizeof(int64_t));
-        if (!st->table[j]) {
-            for (size_t i = 0; i < j; i++) free(st->table[i]);
-            free(st->table);
-            return SCL_ERR_OUT_OF_MEMORY;
+    st->levels_count = levels_count;
+    st->element_size = element_size;
+    st->combine = combine;
+
+    const unsigned char *src = data;
+    memcpy(st->levels[0], src, n * element_size);
+
+    for (size_t k = 1; k < levels_count; k++) {
+        size_t len = 1UL << k;
+        size_t prev_len = 1UL << (k - 1);
+        for (size_t i = 0; i + len <= n; i++) {
+            combine(st->levels[k] + i * element_size,
+                    st->levels[k - 1] + i * element_size,
+                    st->levels[k - 1] + (i + prev_len) * element_size);
         }
-        size_t step = 1ULL << (j - 1);
-        for (size_t i = 0; i + (1ULL << j) <= n; i++)
-            st->table[j][i] = op(st->table[j - 1][i], st->table[j - 1][i + step]);
     }
-    atomic_flag_clear(&st->lock);
+
     return SCL_OK;
 }
 
-void scl_concurrent_sparse_destroy(scl_concurrent_sparse_t *st)
+void scl_atomic_sparse_destroy(scl_allocator_t *alloc, scl_atomic_sparse_t *st)
 {
     if (!st) return;
-    for (size_t j = 0; j < st->k; j++)
-        free(st->table[j]);
-    free(st->table);
-    st->table = NULL;
+    for (size_t k = 0; k < st->levels_count; k++)
+        scl_free(alloc, st->levels[k]);
+    scl_free(alloc, st->levels);
+    scl_free(alloc, st->scratch);
+    st->levels = NULL;
+    st->scratch = NULL;
     st->n = 0;
-    st->k = 0;
+    st->levels_count = 0;
 }
 
-scl_error_t scl_concurrent_sparse_query(const scl_concurrent_sparse_t *st, size_t l, size_t r,
-                                        int64_t *out)
+scl_error_t scl_atomic_sparse_query(const scl_atomic_sparse_t *st, size_t l, size_t r, void *out)
 {
     if (!st || !out) return SCL_ERR_NULL_PTR;
-    if (l >= st->n || r >= st->n || l > r) return SCL_ERR_INVALID_INDEX;
-    spin_lock((atomic_flag *)&st->lock);
+    if (l > r || r >= st->n) return SCL_ERR_INVALID_ARG;
+
     size_t len = r - l + 1;
-    int64_t res;
-    bool first = true;
-    for (size_t bit = 0; (1ULL << bit) <= len; bit++) {
-        if (len & (1ULL << bit)) {
-            if (first) {
-                res = st->table[bit][l];
-                first = false;
-            } else {
-                res = st->op(res, st->table[bit][l]);
-            }
-            l += (1ULL << bit);
-        }
-    }
-    *out = res;
-    spin_unlock((atomic_flag *)&st->lock);
+    size_t k = 0;
+    while ((1UL << (k + 1)) <= len) k++;
+
+    size_t esize = st->element_size;
+    st->combine(st->scratch,
+                st->levels[k] + l * esize,
+                st->levels[k] + (r - (1UL << k) + 1) * esize);
+    memcpy(out, st->scratch, esize);
+
     return SCL_OK;
 }

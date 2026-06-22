@@ -14,52 +14,46 @@ static int tests_failed = 0;
 int main(void) {
     printf("=== scl_alloc_tlsf tests ===\n");
 
-    TEST("init and destroy");
+    TEST("create and destroy");
     {
-        scl_alloc_tlsf_t tlsf;
-        scl_error_t e = scl_alloc_tlsf_init(&tlsf, 65536);
-        if (e == SCL_OK) { PASS(); } else { FAIL("init failed"); }
-        scl_alloc_tlsf_destroy(&tlsf);
+        scl_allocator_t *tlsf = scl_alloc_tlsf_create(scl_allocator_default(), 65536);
+        if (tlsf) { PASS(); } else { FAIL("create failed"); }
+        scl_alloc_tlsf_destroy(tlsf);
     }
 
     TEST("alloc and free");
     {
-        scl_alloc_tlsf_t tlsf;
-        scl_alloc_tlsf_init(&tlsf, 65536);
-        void *p = NULL;
-        scl_error_t e = scl_alloc_tlsf_alloc(&tlsf, 128, &p);
-        if (e == SCL_OK && p) {
+        scl_allocator_t *tlsf = scl_alloc_tlsf_create(scl_allocator_default(), 65536);
+        void *p = scl_alloc(tlsf, 128, 16);
+        if (p) {
             memset(p, 0xBB, 128);
-            e = scl_alloc_tlsf_free(&tlsf, p);
-            if (e == SCL_OK) { PASS(); } else { FAIL("free failed"); }
+            scl_free(tlsf, p);
+            PASS();
         } else { FAIL("alloc failed"); }
-        scl_alloc_tlsf_destroy(&tlsf);
+        scl_alloc_tlsf_destroy(tlsf);
     }
 
     TEST("multiple sizes");
     {
-        scl_alloc_tlsf_t tlsf;
-        scl_alloc_tlsf_init(&tlsf, 65536);
+        scl_allocator_t *tlsf = scl_alloc_tlsf_create(scl_allocator_default(), 65536);
         void *ptrs[10];
         int ok = 1;
         size_t sizes[] = {8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096};
         for (int i = 0; i < 10; i++) {
-            if (scl_alloc_tlsf_alloc(&tlsf, sizes[i], &ptrs[i]) != SCL_OK) {
-                ok = 0; break;
-            }
+            ptrs[i] = scl_alloc(tlsf, sizes[i], 16);
+            if (!ptrs[i]) { ok = 0; break; }
             memset(ptrs[i], (unsigned char)i, sizes[i]);
         }
         for (int i = 0; i < 10; i++)
-            scl_alloc_tlsf_free(&tlsf, ptrs[i]);
+            scl_free(tlsf, ptrs[i]);
         if (ok) { PASS(); } else { FAIL("multi size failed"); }
-        scl_alloc_tlsf_destroy(&tlsf);
+        scl_alloc_tlsf_destroy(tlsf);
     }
 
-    TEST("NULL checks");
+    TEST("NULL backing returns NULL");
     {
-        void *p;
-        if (scl_alloc_tlsf_alloc(NULL, 64, &p) == SCL_ERR_NULL_PTR) { PASS(); }
-        else { FAIL("expected NULL_PTR"); }
+        scl_allocator_t *tlsf = scl_alloc_tlsf_create(NULL, 65536);
+        if (!tlsf) { PASS(); } else { FAIL("expected NULL"); }
     }
 
     printf("Results: %d passed, %d failed\n", tests_passed, tests_failed);

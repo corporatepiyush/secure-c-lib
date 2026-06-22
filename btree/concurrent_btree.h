@@ -1,44 +1,41 @@
 #ifndef SCL_CONCURRENT_BTREE_H
 #define SCL_CONCURRENT_BTREE_H
 
-#include "../common/scl_common.h"
-#include <stdatomic.h>
+#include "../common/scl_concurrent_common.h"
 
 #ifdef __GNUC__
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wpedantic"
 #endif
 
-#define SCL_CONCURRENT_BTREE_DEGREE 4
+#define SCL_BTREE_DEGREE 4
 
-typedef int (*scl_concurrent_cmp_func_t)(const void *a, const void *b);
-
-typedef struct scl_concurrent_btree_node {
+typedef struct scl_atomic_btree_node {
     void **keys;
     void **values;
-    struct scl_concurrent_btree_node **children;
+    struct scl_atomic_btree_node **children;
     size_t count;
     bool leaf;
-} scl_concurrent_btree_node_t;
+} scl_atomic_btree_node_t;
 
 typedef struct {
-    scl_concurrent_btree_node_t *root;
+    scl_atomic_btree_node_t *root;
     size_t key_size;
     size_t value_size;
     atomic_size_t count;
-    scl_concurrent_cmp_func_t cmp;
+    scl_cmp_func_t cmp;
     int t;
     atomic_flag lock;
-} scl_concurrent_btree_t;
+} scl_atomic_btree_t;
 
-scl_error_t scl_concurrent_btree_init(scl_concurrent_btree_t *tree, size_t key_size, size_t value_size,
-                                      int degree, scl_concurrent_cmp_func_t cmp) SCL_WARN_UNUSED;
-void        scl_concurrent_btree_destroy(scl_concurrent_btree_t *tree);
-scl_error_t scl_concurrent_btree_insert(scl_concurrent_btree_t *tree, const void *key, const void *value) SCL_WARN_UNUSED;
-scl_error_t scl_concurrent_btree_get(const scl_concurrent_btree_t *tree, const void *key, void *out_value) SCL_WARN_UNUSED;
-scl_error_t scl_concurrent_btree_remove(scl_concurrent_btree_t *tree, const void *key) SCL_WARN_UNUSED;
-bool        scl_concurrent_btree_contains(const scl_concurrent_btree_t *tree, const void *key);
-size_t      scl_concurrent_btree_count(const scl_concurrent_btree_t *tree);
+scl_error_t scl_atomic_btree_init(scl_allocator_t *alloc, scl_atomic_btree_t *tree, size_t key_size, size_t value_size,
+                           int degree, scl_cmp_func_t cmp) SCL_WARN_UNUSED;
+void        scl_atomic_btree_destroy(scl_allocator_t *alloc, scl_atomic_btree_t *tree);
+scl_error_t scl_atomic_btree_insert(scl_allocator_t *alloc, scl_atomic_btree_t *tree, const void *key, const void *value) SCL_WARN_UNUSED;
+scl_error_t scl_atomic_btree_get(const scl_atomic_btree_t *tree, const void *key, void *out_value) SCL_WARN_UNUSED;
+scl_error_t scl_atomic_btree_remove(scl_allocator_t *alloc, scl_atomic_btree_t *tree, const void *key) SCL_WARN_UNUSED;
+bool        scl_atomic_btree_contains(const scl_atomic_btree_t *tree, const void *key);
+size_t      scl_atomic_btree_count(const scl_atomic_btree_t *tree);
 
 #ifdef __GNUC__
 #pragma GCC diagnostic pop

@@ -7,9 +7,8 @@
 #endif
 
 #include "../../common/scl_common.h"
-#include <stddef.h>
 
-scl_error_t scl_search_a_star(int sx, int sy, int gx, int gy, int **restrict grid, int w, int h, int *restrict px, int *restrict py, size_t *restrict plen, size_t maxplen) SCL_WARN_UNUSED;
+scl_error_t scl_search_a_star(scl_allocator_t *alloc, int sx, int sy, int gx, int gy, int **restrict grid, int w, int h, int *restrict px, int *restrict py, size_t *restrict plen, size_t maxplen) SCL_WARN_UNUSED;
 
 #ifdef __GNUC__
 #pragma GCC diagnostic pop

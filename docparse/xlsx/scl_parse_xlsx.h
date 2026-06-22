@@ -7,10 +7,9 @@
 #endif
 
 #include "../../common/scl_common.h"
-#include <stddef.h>
-#include <stdio.h>
 
 typedef struct {
+    scl_allocator_t *alloc;
     char *filename;
     FILE *fp;
     unsigned char *zip_buf;
@@ -22,7 +21,7 @@ typedef struct {
     char **sheet_data;
 } scl_parse_xlsx_t;
 
-scl_error_t scl_parse_xlsx_open(scl_parse_xlsx_t *parser, const char *filename);
+scl_error_t scl_parse_xlsx_open(scl_allocator_t *alloc, scl_parse_xlsx_t *parser, const char *filename);
 scl_error_t scl_parse_xlsx_get_sheets_count(scl_parse_xlsx_t *parser, int *out);
 scl_error_t scl_parse_xlsx_get_sheet_name(scl_parse_xlsx_t *parser, int index, const char **out, size_t *out_len);
 scl_error_t scl_parse_xlsx_get_cell(scl_parse_xlsx_t *parser, int sheet_idx, const char *cell_ref, const char **out, size_t *out_len);

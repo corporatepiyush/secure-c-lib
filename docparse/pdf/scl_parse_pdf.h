@@ -7,8 +7,6 @@
 #endif
 
 #include "../../common/scl_common.h"
-#include <stddef.h>
-#include <stdio.h>
 
 #define SCL_PDF_MAX_OBJECTS 4096
 
@@ -20,6 +18,7 @@ typedef struct {
 } scl_parse_pdf_xref_entry_t;
 
 typedef struct {
+    scl_allocator_t *alloc;
     char *filename;
     FILE *fp;
     unsigned char *buf;
@@ -40,7 +39,7 @@ typedef struct {
     size_t metadata_len;
 } scl_parse_pdf_t;
 
-scl_error_t scl_parse_pdf_open(scl_parse_pdf_t *parser, const char *filename);
+scl_error_t scl_parse_pdf_open(scl_allocator_t *alloc, scl_parse_pdf_t *parser, const char *filename);
 scl_error_t scl_parse_pdf_get_page_count(scl_parse_pdf_t *parser, int *out);
 scl_error_t scl_parse_pdf_get_info(scl_parse_pdf_t *parser, const char *key, char *out, size_t *out_len);
 scl_error_t scl_parse_pdf_close(scl_parse_pdf_t *parser);

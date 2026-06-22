@@ -1,5 +1,4 @@
 #include "scl_avl.h"
-#include <stdlib.h>
 #include <string.h>
 
 #if defined(__GNUC__) && !defined(__clang__)
@@ -48,8 +47,9 @@ static scl_avl_node_t *scl_avl_rotate_left(scl_avl_node_t *x)
     return y;
 }
 
-scl_error_t scl_avl_init(scl_avl_t *tree, size_t element_size, scl_cmp_func_t cmp)
+scl_error_t scl_avl_init(scl_allocator_t *alloc, scl_avl_t *tree, size_t element_size, scl_cmp_func_t cmp)
 {
+    (void)alloc;
     if (!tree || !cmp) return SCL_ERR_NULL_PTR;
     if (element_size == 0) return SCL_ERR_INVALID_ARG;
     tree->root = NULL;
@@ -59,30 +59,38 @@ scl_error_t scl_avl_init(scl_avl_t *tree, size_t element_size, scl_cmp_func_t cm
     return SCL_OK;
 }
 
-static void scl_avl_destroy_node(scl_avl_node_t *n)
+void scl_avl_destroy(scl_allocator_t *alloc, scl_avl_t *tree)
 {
-    if (!n) return;
-    scl_avl_destroy_node(n->left);
-    scl_avl_destroy_node(n->right);
-    free(n->data);
-    free(n);
-}
-
-void scl_avl_destroy(scl_avl_t *tree)
-{
-    if (tree) {
-        scl_avl_destroy_node(tree->root);
-        tree->root = NULL;
-        tree->count = 0;
+    if (!tree || !tree->root) return;
+    scl_avl_node_t *stack[256];
+    int sp = -1;
+    scl_avl_node_t *cur = tree->root;
+    scl_avl_node_t *last = NULL;
+    while (cur || sp >= 0) {
+        while (cur) {
+            stack[++sp] = cur;
+            cur = cur->left;
+        }
+        scl_avl_node_t *peek = stack[sp];
+        if (peek->right && last != peek->right) {
+            cur = peek->right;
+        } else {
+            sp--;
+            scl_free(alloc, peek->data);
+            scl_free(alloc, peek);
+            last = peek;
+        }
     }
+    tree->root = NULL;
+    tree->count = 0;
 }
 
-static scl_avl_node_t *scl_avl_create_node(const void *data, size_t element_size)
+static scl_avl_node_t *scl_avl_create_node(scl_allocator_t *alloc, const void *data, size_t element_size)
 {
-    scl_avl_node_t *n = malloc(sizeof(scl_avl_node_t));
+    scl_avl_node_t *n = scl_alloc(alloc, sizeof(scl_avl_node_t), alignof(max_align_t));
     if (!n) return NULL;
-    n->data = malloc(element_size);
-    if (!n->data) { free(n); return NULL; }
+    n->data = scl_alloc(alloc, element_size, alignof(max_align_t));
+    if (!n->data) { scl_free(alloc, n); return NULL; }
     memcpy(n->data, data, element_size);
     n->left = NULL;
     n->right = NULL;
@@ -90,110 +98,207 @@ static scl_avl_node_t *scl_avl_create_node(const void *data, size_t element_size
     return n;
 }
 
-static scl_avl_node_t *scl_avl_insert_node(scl_avl_t *tree, scl_avl_node_t *node,
-                                            const void *data, bool *created)
+static __attribute__((unused)) scl_avl_node_t *scl_avl_balance_node(scl_avl_node_t *n, const void *data, scl_cmp_func_t cmp)
 {
-    if (!node) {
-        *created = true;
-        return scl_avl_create_node(data, tree->element_size);
-    }
+    (void)data;
+    (void)cmp;
+    scl_avl_update_height(n);
+    int bal = scl_avl_balance(n);
 
-    int c = tree->cmp(data, node->data);
-    if (c < 0)
-        node->left = scl_avl_insert_node(tree, node->left, data, created);
-    else if (c > 0)
-        node->right = scl_avl_insert_node(tree, node->right, data, created);
-    else {
-        memcpy(node->data, data, tree->element_size);
-        *created = false;
-        return node;
+    if (bal > 1) {
+        if (scl_avl_balance(n->left) >= 0)
+            return scl_avl_rotate_right(n);
+        n->left = scl_avl_rotate_left(n->left);
+        return scl_avl_rotate_right(n);
     }
-
-    scl_avl_update_height(node);
-    int bal = scl_avl_balance(node);
-
-    if (bal > 1 && tree->cmp(data, node->left->data) < 0)
-        return scl_avl_rotate_right(node);
-    if (bal < -1 && tree->cmp(data, node->right->data) > 0)
-        return scl_avl_rotate_left(node);
-    if (bal > 1 && tree->cmp(data, node->left->data) > 0) {
-        node->left = scl_avl_rotate_left(node->left);
-        return scl_avl_rotate_right(node);
+    if (bal < -1) {
+        if (scl_avl_balance(n->right) <= 0)
+            return scl_avl_rotate_left(n);
+        n->right = scl_avl_rotate_right(n->right);
+        return scl_avl_rotate_left(n);
     }
-    if (bal < -1 && tree->cmp(data, node->right->data) < 0) {
-        node->right = scl_avl_rotate_right(node->right);
-        return scl_avl_rotate_left(node);
-    }
-
-    return node;
+    return n;
 }
 
-scl_error_t scl_avl_insert(scl_avl_t *tree, const void *element)
+scl_error_t scl_avl_insert(scl_allocator_t *alloc, scl_avl_t *tree, const void *element)
 {
     if (!tree || !element) return SCL_ERR_NULL_PTR;
-    bool created = false;
-    tree->root = scl_avl_insert_node(tree, tree->root, element, &created);
-    if (!tree->root) return SCL_ERR_OUT_OF_MEMORY;
-    if (created) tree->count++;
+
+    scl_avl_node_t *node = scl_avl_create_node(alloc, element, tree->element_size);
+    if (!node) return SCL_ERR_OUT_OF_MEMORY;
+
+    if (!tree->root) {
+        tree->root = node;
+        tree->count = 1;
+        return SCL_OK;
+    }
+
+    scl_avl_node_t *path[256];
+    int path_len = 0;
+    scl_avl_node_t *cur = tree->root;
+
+    while (1) {
+        path[path_len++] = cur;
+        int c = tree->cmp(element, cur->data);
+        if (c < 0) {
+            if (!cur->left) {
+                cur->left = node;
+                break;
+            }
+            cur = cur->left;
+        } else if (c > 0) {
+            if (!cur->right) {
+                cur->right = node;
+                break;
+            }
+            cur = cur->right;
+        } else {
+            memcpy(cur->data, element, tree->element_size);
+            scl_free(alloc, node->data);
+            scl_free(alloc, node);
+            return SCL_OK;
+        }
+    }
+
+    for (int i = path_len - 1; i >= 0; i--) {
+        scl_avl_node_t *n = path[i];
+        int bal = scl_avl_balance(n);
+        scl_avl_node_t *new_sub;
+
+        if (bal > 1) {
+            if (scl_avl_balance(n->left) >= 0) {
+                new_sub = scl_avl_rotate_right(n);
+            } else {
+                n->left = scl_avl_rotate_left(n->left);
+                new_sub = scl_avl_rotate_right(n);
+            }
+        } else if (bal < -1) {
+            if (scl_avl_balance(n->right) <= 0) {
+                new_sub = scl_avl_rotate_left(n);
+            } else {
+                n->right = scl_avl_rotate_right(n->right);
+                new_sub = scl_avl_rotate_left(n);
+            }
+        } else {
+            scl_avl_update_height(n);
+            continue;
+        }
+
+        if (i == 0) {
+            tree->root = new_sub;
+        } else {
+            scl_avl_node_t *p = path[i - 1];
+            if (p->left == n) p->left = new_sub;
+            else p->right = new_sub;
+        }
+    }
+
+    tree->count++;
     return SCL_OK;
 }
 
-static scl_avl_node_t *scl_avl_min_node(scl_avl_node_t *n)
+static __attribute__((unused)) scl_avl_node_t *scl_avl_min_node(scl_avl_node_t *n)
 {
     while (n && n->left) n = n->left;
     return n;
 }
 
-static scl_avl_node_t *scl_avl_remove_node(scl_avl_t *tree, scl_avl_node_t *node,
-                                            const void *key, bool *removed)
+scl_error_t scl_avl_remove(scl_allocator_t *alloc, scl_avl_t *tree, const void *key)
 {
-    if (!node) return NULL;
+    if (!tree || !key) return SCL_ERR_NULL_PTR;
+    if (!tree->root) return SCL_ERR_NOT_FOUND;
 
-    int c = tree->cmp(key, node->data);
-    if (c < 0)
-        node->left = scl_avl_remove_node(tree, node->left, key, removed);
-    else if (c > 0)
-        node->right = scl_avl_remove_node(tree, node->right, key, removed);
-    else {
-        *removed = true;
-        if (!node->left || !node->right) {
-            scl_avl_node_t *child = node->left ? node->left : node->right;
-            free(node->data);
-            free(node);
-            return child;
+    scl_avl_node_t *path[256];
+    int path_len = 0;
+    scl_avl_node_t *cur = tree->root;
+    bool found = false;
+
+    while (cur) {
+        path[path_len++] = cur;
+        int c = tree->cmp(key, cur->data);
+        if (c < 0) {
+            cur = cur->left;
+        } else if (c > 0) {
+            cur = cur->right;
         } else {
-            scl_avl_node_t *succ = scl_avl_min_node(node->right);
-            memcpy(node->data, succ->data, tree->element_size);
-            node->right = scl_avl_remove_node(tree, node->right, succ->data, &(bool){false});
+            found = true;
+            break;
+        }
+    }
+    if (!found) return SCL_ERR_NOT_FOUND;
+
+    scl_avl_node_t *node = path[--path_len];
+
+    if (!node->left || !node->right) {
+        scl_avl_node_t *child = node->left ? node->left : node->right;
+        if (path_len == 0) {
+            tree->root = child;
+        } else {
+            scl_avl_node_t *p = path[path_len - 1];
+            if (p->left == node) p->left = child;
+            else p->right = child;
+        }
+        scl_free(alloc, node->data);
+        scl_free(alloc, node);
+    } else {
+        scl_avl_node_t *succ = node->right;
+        int succ_idx = path_len;
+        while (succ->left) {
+            if (succ_idx >= 255) return SCL_ERR_INVALID_STATE;
+            if (succ_idx == path_len) path[succ_idx] = node;
+            path[succ_idx++] = succ;
+            succ = succ->left;
+        }
+        if (succ_idx == path_len) path[succ_idx] = node;
+        path[succ_idx++] = succ;
+
+        memcpy(node->data, succ->data, tree->element_size);
+
+        scl_avl_node_t *succ_parent = path[succ_idx - 1];
+        scl_avl_node_t *succ_child = succ->right;
+        if (succ_parent->left == succ)
+            succ_parent->left = succ_child;
+        else
+            succ_parent->right = succ_child;
+        scl_free(alloc, succ->data);
+        scl_free(alloc, succ);
+
+        path_len = succ_idx - 1;
+    }
+
+    for (int i = path_len - 1; i >= 0; i--) {
+        scl_avl_node_t *n = path[i];
+        scl_avl_update_height(n);
+        int bal = scl_avl_balance(n);
+        scl_avl_node_t *new_sub;
+
+        if (bal > 1) {
+            if (scl_avl_balance(n->left) >= 0)
+                new_sub = scl_avl_rotate_right(n);
+            else {
+                n->left = scl_avl_rotate_left(n->left);
+                new_sub = scl_avl_rotate_right(n);
+            }
+        } else if (bal < -1) {
+            if (scl_avl_balance(n->right) <= 0)
+                new_sub = scl_avl_rotate_left(n);
+            else {
+                n->right = scl_avl_rotate_right(n->right);
+                new_sub = scl_avl_rotate_left(n);
+            }
+        } else {
+            continue;
+        }
+
+        if (i == 0)
+            tree->root = new_sub;
+        else {
+            scl_avl_node_t *p = path[i - 1];
+            if (p->left == n) p->left = new_sub;
+            else p->right = new_sub;
         }
     }
 
-    if (!node) return NULL;
-    scl_avl_update_height(node);
-    int bal = scl_avl_balance(node);
-
-    if (bal > 1 && scl_avl_balance(node->left) >= 0)
-        return scl_avl_rotate_right(node);
-    if (bal > 1 && scl_avl_balance(node->left) < 0) {
-        node->left = scl_avl_rotate_left(node->left);
-        return scl_avl_rotate_right(node);
-    }
-    if (bal < -1 && scl_avl_balance(node->right) <= 0)
-        return scl_avl_rotate_left(node);
-    if (bal < -1 && scl_avl_balance(node->right) > 0) {
-        node->right = scl_avl_rotate_right(node->right);
-        return scl_avl_rotate_left(node);
-    }
-
-    return node;
-}
-
-scl_error_t scl_avl_remove(scl_avl_t *tree, const void *key)
-{
-    if (!tree || !key) return SCL_ERR_NULL_PTR;
-    bool removed = false;
-    tree->root = scl_avl_remove_node(tree, tree->root, key, &removed);
-    if (!removed) return SCL_ERR_NOT_FOUND;
     tree->count--;
     return SCL_OK;
 }

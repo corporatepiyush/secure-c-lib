@@ -1,15 +1,5 @@
 #include "scl_avl.h"
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <assert.h>
-
-static int tests_passed = 0;
-static int tests_failed = 0;
-
-#define TEST(name) do { printf("  TEST: %s ... ", name); } while(0)
-#define PASS() do { printf("PASSED\n"); tests_passed++; } while(0)
-#define FAIL(msg) do { printf("FAILED: %s\n", msg); tests_failed++; } while(0)
+#include "../../testlib/scl_test.h"
 
 static int cmp_int(const void *a, const void *b)
 {
@@ -20,35 +10,39 @@ static int cmp_int(const void *a, const void *b)
     return 0;
 }
 
-static void test_insert_balance(void)
+static void test_insert_balance(scl_test_runner_t *tr)
 {
-    TEST("insert maintains balance");
+    scl_allocator_t *alloc = scl_allocator_default();
     scl_avl_t t;
-    scl_avl_init(&t, sizeof(int), cmp_int);
-    for (int i = 0; i < 100; i++) scl_avl_insert(&t, &i);
-    assert(scl_avl_count(&t) == 100);
-    for (int i = 0; i < 100; i++) assert(scl_avl_contains(&t, &i));
-    scl_avl_destroy(&t);
-    PASS();
+    SCL_EXPECT_OK(tr, scl_avl_init(alloc, &t, sizeof(int), cmp_int));
+    for (int i = 0; i < 100; i++)
+        SCL_EXPECT_OK(tr, scl_avl_insert(alloc, &t, &i));
+    SCL_EXPECT_EQ_SZ(tr, scl_avl_count(&t), 100);
+    for (int i = 0; i < 100; i++)
+        SCL_EXPECT_TRUE(tr, scl_avl_contains(&t, &i));
+    scl_avl_destroy(alloc, &t);
 }
 
-static void test_remove(void)
+static void test_remove(scl_test_runner_t *tr)
 {
-    TEST("remove");
+    scl_allocator_t *alloc = scl_allocator_default();
     scl_avl_t t;
-    scl_avl_init(&t, sizeof(int), cmp_int);
-    for (int i = 0; i < 50; i++) scl_avl_insert(&t, &i);
-    for (int i = 0; i < 50; i += 2) scl_avl_remove(&t, &i);
-    assert(scl_avl_count(&t) == 25);
-    scl_avl_destroy(&t);
-    PASS();
+    SCL_EXPECT_OK(tr, scl_avl_init(alloc, &t, sizeof(int), cmp_int));
+    for (int i = 0; i < 50; i++)
+        SCL_EXPECT_OK(tr, scl_avl_insert(alloc, &t, &i));
+    for (int i = 0; i < 50; i += 2)
+        SCL_EXPECT_OK(tr, scl_avl_remove(alloc, &t, &i));
+    SCL_EXPECT_EQ_SZ(tr, scl_avl_count(&t), 25);
+    scl_avl_destroy(alloc, &t);
 }
 
 int main(void)
 {
-    printf("=== scl_avl tests ===\n");
-    test_insert_balance();
-    test_remove();
-    printf("Results: %d passed, %d failed\n", tests_passed, tests_failed);
-    return tests_failed > 0 ? 1 : 0;
+    scl_test_runner_t tr;
+    scl_test_init(&tr);
+    scl_test_group("scl_avl tests");
+    test_insert_balance(&tr);
+    test_remove(&tr);
+    scl_test_summary(&tr);
+    return tr.failed > 0 ? 1 : 0;
 }

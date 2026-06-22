@@ -1,5 +1,4 @@
 #include "scl_slist.h"
-#include <stdlib.h>
 #include <string.h>
 
 #if defined(__GNUC__) && !defined(__clang__)
@@ -18,14 +17,14 @@ scl_error_t scl_slist_init(scl_slist_t *list, size_t element_size)
     return SCL_OK;
 }
 
-void scl_slist_destroy(scl_slist_t *list)
+void scl_slist_destroy(scl_allocator_t *alloc, scl_slist_t *list)
 {
     if (!list) return;
     scl_slist_node_t *cur = list->head;
     while (cur) {
         scl_slist_node_t *next = cur->next;
-        free(cur->data);
-        free(cur);
+        scl_free(alloc, cur->data);
+        scl_free(alloc, cur);
         cur = next;
     }
     list->head = NULL;
@@ -33,14 +32,14 @@ void scl_slist_destroy(scl_slist_t *list)
     list->count = 0;
 }
 
-static scl_error_t scl_slist_create_node(scl_slist_node_t **out, const void *data, size_t element_size)
+static scl_error_t scl_slist_create_node(scl_allocator_t *alloc, scl_slist_node_t **out, const void *data, size_t element_size)
 {
-    scl_slist_node_t *node = malloc(sizeof(scl_slist_node_t));
+    scl_slist_node_t *node = scl_alloc(alloc, sizeof(scl_slist_node_t), alignof(max_align_t));
     if (!node) return SCL_ERR_OUT_OF_MEMORY;
 
-    node->data = malloc(element_size);
+    node->data = scl_alloc(alloc, element_size, alignof(max_align_t));
     if (!node->data) {
-        free(node);
+        scl_free(alloc, node);
         return SCL_ERR_OUT_OF_MEMORY;
     }
     memcpy(node->data, data, element_size);
@@ -49,12 +48,12 @@ static scl_error_t scl_slist_create_node(scl_slist_node_t **out, const void *dat
     return SCL_OK;
 }
 
-scl_error_t scl_slist_push_front(scl_slist_t *list, const void *element)
+scl_error_t scl_slist_push_front(scl_allocator_t *alloc, scl_slist_t *list, const void *element)
 {
     if (!list || !element) return SCL_ERR_NULL_PTR;
 
     scl_slist_node_t *node;
-    scl_error_t err = scl_slist_create_node(&node, element, list->element_size);
+    scl_error_t err = scl_slist_create_node(alloc, &node, element, list->element_size);
     if (err != SCL_OK) return err;
 
     node->next = list->head;
@@ -64,12 +63,12 @@ scl_error_t scl_slist_push_front(scl_slist_t *list, const void *element)
     return SCL_OK;
 }
 
-scl_error_t scl_slist_push_back(scl_slist_t *list, const void *element)
+scl_error_t scl_slist_push_back(scl_allocator_t *alloc, scl_slist_t *list, const void *element)
 {
     if (!list || !element) return SCL_ERR_NULL_PTR;
 
     scl_slist_node_t *node;
-    scl_error_t err = scl_slist_create_node(&node, element, list->element_size);
+    scl_error_t err = scl_slist_create_node(alloc, &node, element, list->element_size);
     if (err != SCL_OK) return err;
 
     if (list->tail) {
@@ -82,7 +81,7 @@ scl_error_t scl_slist_push_back(scl_slist_t *list, const void *element)
     return SCL_OK;
 }
 
-scl_error_t scl_slist_pop_front(scl_slist_t *list, void *out)
+scl_error_t scl_slist_pop_front(scl_allocator_t *alloc, scl_slist_t *list, void *out)
 {
     if (!list || !out) return SCL_ERR_NULL_PTR;
     if (!list->head) return SCL_ERR_EMPTY;
@@ -93,8 +92,8 @@ scl_error_t scl_slist_pop_front(scl_slist_t *list, void *out)
     list->head = node->next;
     if (!list->head) list->tail = NULL;
 
-    free(node->data);
-    free(node);
+    scl_free(alloc, node->data);
+    scl_free(alloc, node);
     list->count--;
     return SCL_OK;
 }
@@ -125,7 +124,7 @@ bool scl_slist_empty(const scl_slist_t *list)
     return list ? list->count == 0 : true;
 }
 
-scl_error_t scl_slist_remove(scl_slist_t *list, const void *element,
+scl_error_t scl_slist_remove(scl_allocator_t *alloc, scl_slist_t *list, const void *element,
                              int (*cmp)(const void *, const void *))
 {
     if (!list || !element || !cmp) return SCL_ERR_NULL_PTR;
@@ -143,8 +142,8 @@ scl_error_t scl_slist_remove(scl_slist_t *list, const void *element,
             if (cur == list->tail)
                 list->tail = prev;
 
-            free(cur->data);
-            free(cur);
+            scl_free(alloc, cur->data);
+            scl_free(alloc, cur);
             list->count--;
             return SCL_OK;
         }

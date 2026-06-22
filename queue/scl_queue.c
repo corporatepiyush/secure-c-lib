@@ -1,12 +1,11 @@
 #include "scl_queue.h"
-#include <stdlib.h>
 #include <string.h>
 
 #if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC optimize ("O3", "unroll-loops", "tree-vectorize", "inline")
 #endif
 
-scl_error_t scl_queue_init(scl_queue_t *queue, size_t element_size, size_t initial_capacity)
+scl_error_t scl_queue_init(scl_allocator_t *alloc, scl_queue_t *queue, size_t element_size, size_t initial_capacity)
 {
     if (!queue) return SCL_ERR_NULL_PTR;
     if (element_size == 0) return SCL_ERR_INVALID_ARG;
@@ -22,17 +21,17 @@ scl_error_t scl_queue_init(scl_queue_t *queue, size_t element_size, size_t initi
         size_t bytes;
         if (scl_mul_overflow(initial_capacity, element_size, &bytes))
             return SCL_ERR_SIZE_OVERFLOW;
-        queue->data = malloc(bytes);
+        queue->data = scl_alloc(alloc, bytes, alignof(max_align_t));
         if (!queue->data) return SCL_ERR_OUT_OF_MEMORY;
         queue->capacity = initial_capacity;
     }
     return SCL_OK;
 }
 
-void scl_queue_destroy(scl_queue_t *queue)
+void scl_queue_destroy(scl_allocator_t *alloc, scl_queue_t *queue)
 {
     if (queue) {
-        free(queue->data);
+        scl_free(alloc, queue->data);
         queue->data = NULL;
         queue->capacity = 0;
         queue->head = 0;
@@ -41,17 +40,17 @@ void scl_queue_destroy(scl_queue_t *queue)
     }
 }
 
-scl_error_t scl_queue_enqueue(scl_queue_t *queue, const void *element)
+scl_error_t scl_queue_enqueue(scl_allocator_t *alloc, scl_queue_t *queue, const void *element)
 {
     if (!queue || !element) return SCL_ERR_NULL_PTR;
 
     if (queue->count == queue->capacity) {
         size_t new_cap = queue->capacity == 0 ? 4 : queue->capacity * 2;
-        size_t bytes;
-        if (scl_mul_overflow(new_cap, queue->element_size, &bytes))
+        size_t new_bytes;
+        if (scl_mul_overflow(new_cap, queue->element_size, &new_bytes))
             return SCL_ERR_SIZE_OVERFLOW;
 
-        unsigned char *tmp = malloc(bytes);
+        unsigned char *tmp = scl_alloc(alloc, new_bytes, alignof(max_align_t));
         if (!tmp) return SCL_ERR_OUT_OF_MEMORY;
 
         for (size_t i = 0; i < queue->count; i++) {
@@ -61,7 +60,7 @@ scl_error_t scl_queue_enqueue(scl_queue_t *queue, const void *element)
                    queue->element_size);
         }
 
-        free(queue->data);
+        scl_free(alloc, queue->data);
         queue->data = tmp;
         queue->head = 0;
         queue->tail = queue->count;

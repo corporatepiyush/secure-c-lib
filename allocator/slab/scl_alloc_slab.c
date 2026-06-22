@@ -1,51 +1,60 @@
-#if defined(__GNUC__) && !defined(__clang__)
-#pragma GCC optimize ("O3", "unroll-loops", "tree-vectorize", "inline")
-#endif
-
 #include "scl_alloc_slab.h"
-#include <stdlib.h>
 #include <string.h>
 #include <stdalign.h>
 
-const size_t scl_alloc_slab_sizes[SCL_ALLOC_SLAB_CLASSES] = {
-    8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096
+#define SCL_SLAB_DEFAULT_NUM 10
+
+static const size_t scl_slab_default_sizes[SCL_SLAB_DEFAULT_NUM] = {
+    16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192
 };
 
-static inline size_t scl_align_up(size_t size, size_t align) {
-    size_t mod = size % align;
-    return mod ? size + (align - mod) : size;
+typedef struct {
+    void *chunk;
+    void *free_list;
+    size_t block_size;
+    size_t total_blocks;
+    size_t free_count;
+} slab_pool_t;
+
+typedef struct {
+    scl_allocator_t *backing;
+    size_t num_buckets;
+    size_t *bucket_sizes;
+    slab_pool_t *pools;
+} slab_state_t;
+
+static size_t slab_block_count(size_t block_size) {
+    if (block_size <= 32) return 1024;
+    if (block_size <= 128) return 512;
+    if (block_size <= 512) return 256;
+    if (block_size <= 2048) return 128;
+    return 64;
 }
 
-static size_t slab_class_for_size(size_t size) {
-    if (size <= 8) return 0;
-    if (size <= 16) return 1;
-    if (size <= 32) return 2;
-    if (size <= 64) return 3;
-    if (size <= 128) return 4;
-    if (size <= 256) return 5;
-    if (size <= 512) return 6;
-    if (size <= 1024) return 7;
-    if (size <= 2048) return 8;
-    if (size <= 4096) return 9;
-    return SCL_ALLOC_SLAB_CLASSES;
+static size_t slab_pool_index(const slab_state_t *s, size_t size) {
+    for (size_t i = 0; i < s->num_buckets; i++) {
+        if (size <= s->bucket_sizes[i])
+            return i;
+    }
+    return s->num_buckets;
 }
 
-static scl_error_t slab_pool_init(scl_alloc_slab_pool_t *p, size_t block_size) {
-    size_t blocks = block_size <= 32 ? 1024 :
-                    block_size <= 128 ? 512 :
-                    block_size <= 512 ? 256 : 128;
+static void slab_free_fn(void *state, void *ptr);
 
-    size_t aligned = scl_align_up(block_size, alignof(max_align_t));
-    if (aligned < sizeof(void *)) aligned = sizeof(void *);
+static int slab_pool_init(slab_state_t *s, slab_pool_t *p, size_t block_size) {
+    size_t blocks = slab_block_count(block_size);
+    size_t aligned = block_size;
+    if (aligned < sizeof(void *))
+        aligned = sizeof(void *);
 
     size_t total;
     if (scl_mul_overflow(aligned, blocks, &total))
-        return SCL_ERR_SIZE_OVERFLOW;
+        return 0;
 
-    void *chunk = malloc(total);
-    if (!chunk) return SCL_ERR_OUT_OF_MEMORY;
+    p->chunk = s->backing->malloc_fn(s->backing->state, total, alignof(max_align_t));
+    if (!p->chunk) return 0;
 
-    unsigned char *ptr = (unsigned char *)chunk;
+    unsigned char *ptr = (unsigned char *)p->chunk;
     void *prev = NULL;
     for (size_t i = 0; i < blocks; i++) {
         void *block = ptr + i * aligned;
@@ -53,78 +62,138 @@ static scl_error_t slab_pool_init(scl_alloc_slab_pool_t *p, size_t block_size) {
         prev = block;
     }
 
-    p->chunk = chunk;
     p->free_list = prev;
     p->block_size = aligned;
     p->total_blocks = blocks;
     p->free_count = blocks;
-    return SCL_OK;
+    return 1;
 }
 
-scl_error_t scl_alloc_slab_init(scl_alloc_slab_t *slab) {
-    if (__builtin_expect(!slab, 0)) return SCL_ERR_NULL_PTR;
-    for (int i = 0; i < SCL_ALLOC_SLAB_CLASSES; i++) {
-        scl_error_t err = slab_pool_init(&slab->pools[i], scl_alloc_slab_sizes[i]);
-        if (__builtin_expect(err != SCL_OK, 0)) {
-            for (int j = 0; j < i; j++) {
-                free(slab->pools[j].chunk);
-                slab->pools[j].chunk = NULL;
-            }
-            return err;
-        }
-    }
-    return SCL_OK;
-}
+static void *slab_malloc_fn(void *state, size_t size, size_t alignment) {
+    (void)alignment;
+    slab_state_t *s = (slab_state_t *)state;
+    if (!s || size == 0) return NULL;
 
-scl_error_t scl_alloc_slab_alloc(scl_alloc_slab_t *slab, size_t size, void **out_ptr) {
-    if (__builtin_expect(!slab, 0)) return SCL_ERR_NULL_PTR;
-    if (__builtin_expect(!out_ptr, 0)) return SCL_ERR_NULL_PTR;
-    if (__builtin_expect(size == 0, 0)) return SCL_ERR_INVALID_ARG;
+    size_t idx = slab_pool_index(s, size);
+    if (idx >= s->num_buckets) return NULL;
 
-    size_t idx = slab_class_for_size(size);
-    if (__builtin_expect(idx >= SCL_ALLOC_SLAB_CLASSES, 0))
-        return SCL_ERR_INVALID_ARG;
-
-    scl_alloc_slab_pool_t *p = &slab->pools[idx];
-    if (__builtin_expect(!p->free_list, 0))
-        return SCL_ERR_OUT_OF_MEMORY;
+    slab_pool_t *p = &s->pools[idx];
+    if (!p->free_list) return NULL;
 
     void *block = p->free_list;
     p->free_list = *(void **)block;
     p->free_count--;
-    *out_ptr = block;
-    return SCL_OK;
+    return block;
 }
 
-scl_error_t scl_alloc_slab_free(scl_alloc_slab_t *slab, void *ptr) {
-    if (__builtin_expect(!slab, 0)) return SCL_ERR_NULL_PTR;
-    if (__builtin_expect(!ptr, 0)) return SCL_ERR_NULL_PTR;
+static void *slab_calloc_fn(void *state, size_t count, size_t size, size_t alignment) {
+    size_t total;
+    if (scl_mul_overflow(count, size, &total)) return NULL;
+    void *ptr = slab_malloc_fn(state, total, alignment);
+    if (ptr) memset(ptr, 0, total);
+    return ptr;
+}
 
-    for (int i = 0; i < SCL_ALLOC_SLAB_CLASSES; i++) {
-        scl_alloc_slab_pool_t *p = &slab->pools[i];
+static void *slab_realloc_fn(void *state, void *ptr, size_t old_size, size_t new_size, size_t alignment) {
+    if (!ptr) return slab_malloc_fn(state, new_size, alignment);
+    if (new_size == 0) { slab_free_fn(state, ptr); return NULL; }
+    void *new_ptr = slab_malloc_fn(state, new_size, alignment);
+    if (new_ptr) {
+        size_t copy = old_size < new_size ? old_size : new_size;
+        memcpy(new_ptr, ptr, copy);
+        slab_free_fn(state, ptr);
+    }
+    return new_ptr;
+}
+
+static void slab_free_fn(void *state, void *ptr) {
+    slab_state_t *s = (slab_state_t *)state;
+    if (!s || !ptr) return;
+
+    for (size_t i = 0; i < s->num_buckets; i++) {
+        slab_pool_t *p = &s->pools[i];
         unsigned char *start = (unsigned char *)p->chunk;
         unsigned char *end = start + p->block_size * p->total_blocks;
         if ((unsigned char *)ptr >= start && (unsigned char *)ptr < end) {
-            size_t offset = (unsigned char *)ptr - start;
-            if (offset % p->block_size != 0)
-                return SCL_ERR_INVALID_ARG;
-            if (p->free_count >= p->total_blocks)
-                return SCL_ERR_INVALID_STATE;
+            if (p->free_count >= p->total_blocks) return;
             *(void **)ptr = p->free_list;
             p->free_list = ptr;
             p->free_count++;
-            return SCL_OK;
+            return;
         }
     }
-    return SCL_ERR_INVALID_ARG;
 }
 
-scl_error_t scl_alloc_slab_destroy(scl_alloc_slab_t *slab) {
-    if (__builtin_expect(!slab, 0)) return SCL_ERR_NULL_PTR;
-    for (int i = 0; i < SCL_ALLOC_SLAB_CLASSES; i++) {
-        free(slab->pools[i].chunk);
-        slab->pools[i].chunk = NULL;
-        slab->pools[i].free_list = NULL;
+scl_allocator_t *scl_alloc_slab_create(scl_allocator_t *backing, const size_t *bucket_sizes, size_t num_buckets) {
+    if (!backing) return NULL;
+
+    if (!bucket_sizes || num_buckets == 0) {
+        bucket_sizes = scl_slab_default_sizes;
+        num_buckets = SCL_SLAB_DEFAULT_NUM;
     }
-    return SCL_OK;
+
+    slab_state_t *state = (slab_state_t *)backing->malloc_fn(backing->state, sizeof(slab_state_t), alignof(max_align_t));
+    if (!state) return NULL;
+
+    state->backing = backing;
+    state->num_buckets = num_buckets;
+
+    state->bucket_sizes = (size_t *)backing->malloc_fn(backing->state, num_buckets * sizeof(size_t), alignof(max_align_t));
+    if (!state->bucket_sizes) {
+        backing->free_fn(backing->state, state);
+        return NULL;
+    }
+    for (size_t i = 0; i < num_buckets; i++)
+        state->bucket_sizes[i] = bucket_sizes[i];
+
+    state->pools = (slab_pool_t *)backing->malloc_fn(backing->state, num_buckets * sizeof(slab_pool_t), alignof(max_align_t));
+    if (!state->pools) {
+        backing->free_fn(backing->state, state->bucket_sizes);
+        backing->free_fn(backing->state, state);
+        return NULL;
+    }
+    for (size_t i = 0; i < num_buckets; i++)
+        memset(&state->pools[i], 0, sizeof(slab_pool_t));
+
+    for (size_t i = 0; i < num_buckets; i++) {
+        if (!slab_pool_init(state, &state->pools[i], state->bucket_sizes[i])) {
+            for (size_t j = 0; j < i; j++)
+                backing->free_fn(backing->state, state->pools[j].chunk);
+            backing->free_fn(backing->state, state->pools);
+            backing->free_fn(backing->state, state->bucket_sizes);
+            backing->free_fn(backing->state, state);
+            return NULL;
+        }
+    }
+
+    scl_allocator_t *alloc = (scl_allocator_t *)backing->malloc_fn(backing->state, sizeof(scl_allocator_t), alignof(max_align_t));
+    if (!alloc) {
+        for (size_t i = 0; i < num_buckets; i++)
+            backing->free_fn(backing->state, state->pools[i].chunk);
+        backing->free_fn(backing->state, state->pools);
+        backing->free_fn(backing->state, state->bucket_sizes);
+        backing->free_fn(backing->state, state);
+        return NULL;
+    }
+
+    alloc->malloc_fn = slab_malloc_fn;
+    alloc->calloc_fn = slab_calloc_fn;
+    alloc->realloc_fn = slab_realloc_fn;
+    alloc->free_fn = slab_free_fn;
+    alloc->state = state;
+    return alloc;
+}
+
+void scl_alloc_slab_destroy(scl_allocator_t *alloc) {
+    if (!alloc) return;
+    slab_state_t *s = (slab_state_t *)alloc->state;
+    scl_allocator_t *backing = s->backing;
+    for (size_t i = 0; i < s->num_buckets; i++) {
+        if (s->pools[i].chunk)
+            backing->free_fn(backing->state, s->pools[i].chunk);
+    }
+    backing->free_fn(backing->state, s->pools);
+    backing->free_fn(backing->state, s->bucket_sizes);
+    backing->free_fn(backing->state, s);
+    backing->free_fn(backing->state, alloc);
 }

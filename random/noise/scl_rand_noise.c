@@ -3,6 +3,8 @@
 #endif
 
 #include "scl_rand_noise.h"
+#include <math.h>
+#include "../../stdlib/scl_stdlib.h"
 
 static inline double fade(double t) {
     return t * t * t * (t * (t * 6.0 - 15.0) + 10.0);
@@ -135,7 +137,7 @@ double scl_rand_noise_perlin3d(scl_rand_noise_t *noise, double x, double y, doub
     double v = fade(fracy);
     double w = fade(fracz);
     int p[512];
-    memcpy(p, noise->perm, sizeof(p));
+    scl_memcpy(p, noise->perm, sizeof(p));
     int aaa = p[p[p[ix & 255] + (iy & 255)] + (iz & 255)];
     int aba = p[p[p[ix & 255] + ((iy + 1) & 255)] + (iz & 255)];
     int aab = p[p[p[ix & 255] + (iy & 255)] + ((iz + 1) & 255)];

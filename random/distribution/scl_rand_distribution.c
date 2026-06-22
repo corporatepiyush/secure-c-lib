@@ -2,8 +2,9 @@
 #pragma GCC optimize ("O3", "unroll-loops", "tree-vectorize", "inline")
 #endif
 
-#include <stdlib.h>
 #include "scl_rand_distribution.h"
+#include <math.h>
+#include "../../stdlib/scl_stdlib.h"
 
 scl_error_t scl_rand_dist_init(scl_rand_dist_t *dist, uint64_t seed) {
     if (!dist) return SCL_ERR_NULL_PTR;
@@ -57,9 +58,9 @@ static void swap_elements(void *a, void *b, size_t elem_size) {
     size_t offset = 0;
     while (offset < elem_size) {
         size_t chunk = (elem_size - offset < sizeof(tmp)) ? (elem_size - offset) : sizeof(tmp);
-        memcpy(tmp, (unsigned char *)a + offset, chunk);
-        memcpy((unsigned char *)a + offset, (unsigned char *)b + offset, chunk);
-        memcpy((unsigned char *)b + offset, tmp, chunk);
+        scl_memcpy(tmp, (unsigned char *)a + offset, chunk);
+        scl_memcpy((unsigned char *)a + offset, (unsigned char *)b + offset, chunk);
+        scl_memcpy((unsigned char *)b + offset, tmp, chunk);
         offset += chunk;
     }
 }
@@ -76,11 +77,11 @@ scl_error_t scl_rand_dist_shuffle(scl_rand_dist_t *dist, void *base, size_t coun
     return SCL_OK;
 }
 
-scl_error_t scl_rand_dist_sample(scl_rand_dist_t *dist, size_t n, size_t k, size_t *out_indices) {
+scl_error_t scl_rand_dist_sample(scl_allocator_t *alloc, scl_rand_dist_t *dist, size_t n, size_t k, size_t *out_indices) {
     if (!dist || !out_indices) return SCL_ERR_NULL_PTR;
     if (k > n) return SCL_ERR_INVALID_ARG;
     if (k == 0) return SCL_OK;
-    size_t *selected = (size_t *)calloc(n, sizeof(size_t));
+    size_t *selected = (size_t *)scl_calloc(alloc, n, sizeof(size_t), _Alignof(max_align_t));
     if (!selected) return SCL_ERR_OUT_OF_MEMORY;
     size_t filled = 0;
     for (size_t i = 0; i < n && filled < k; i++) {
@@ -89,6 +90,6 @@ scl_error_t scl_rand_dist_sample(scl_rand_dist_t *dist, size_t n, size_t k, size
         if (scl_rand_prng_next_double(&dist->rng) < p)
             out_indices[filled++] = i;
     }
-    free(selected);
+    scl_free(alloc, selected);
     return SCL_OK;
 }

@@ -1,21 +1,20 @@
 #include "scl_unionfind.h"
-#include <stdlib.h>
 #include <string.h>
 
 #if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC optimize ("O3", "unroll-loops", "tree-vectorize", "inline")
 #endif
 
-scl_error_t scl_unionfind_init(scl_unionfind_t *uf, size_t count)
+scl_error_t scl_unionfind_init(scl_allocator_t *alloc, scl_unionfind_t *uf, size_t count)
 {
     if (!uf) return SCL_ERR_NULL_PTR;
     if (count == 0) return SCL_ERR_INVALID_ARG;
 
-    uf->parent = malloc(count * sizeof(size_t));
-    uf->rank = calloc(count, sizeof(size_t));
+    uf->parent = scl_alloc(alloc, count * sizeof(size_t), alignof(max_align_t));
+    uf->rank = scl_calloc(alloc, count, sizeof(size_t), alignof(max_align_t));
     if (!uf->parent || !uf->rank) {
-        free(uf->parent);
-        free(uf->rank);
+        scl_free(alloc, uf->parent);
+        scl_free(alloc, uf->rank);
         return SCL_ERR_OUT_OF_MEMORY;
     }
 
@@ -27,11 +26,11 @@ scl_error_t scl_unionfind_init(scl_unionfind_t *uf, size_t count)
     return SCL_OK;
 }
 
-void scl_unionfind_destroy(scl_unionfind_t *uf)
+void scl_unionfind_destroy(scl_allocator_t *alloc, scl_unionfind_t *uf)
 {
     if (uf) {
-        free(uf->parent);
-        free(uf->rank);
+        scl_free(alloc, uf->parent);
+        scl_free(alloc, uf->rank);
         uf->parent = NULL;
         uf->rank = NULL;
         uf->count = 0;

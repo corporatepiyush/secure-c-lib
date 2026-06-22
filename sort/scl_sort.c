@@ -1,5 +1,4 @@
 #include "scl_sort.h"
-#include <stdlib.h>
 #include <string.h>
 
 #if defined(__GNUC__) && !defined(__clang__)
@@ -65,7 +64,7 @@ scl_error_t scl_sort_quick(void *base, size_t count, size_t element_size, scl_cm
     return SCL_OK;
 }
 
-scl_error_t scl_sort_merge(void *base, size_t count, size_t element_size, scl_cmp_func_t cmp)
+scl_error_t scl_sort_merge(scl_allocator_t *alloc, void *base, size_t count, size_t element_size, scl_cmp_func_t cmp)
 {
     if (!base || !cmp) return SCL_ERR_NULL_PTR;
     if (count < 2) return SCL_OK;
@@ -74,7 +73,7 @@ scl_error_t scl_sort_merge(void *base, size_t count, size_t element_size, scl_cm
     if (scl_mul_overflow(count, element_size, &bytes))
         return SCL_ERR_SIZE_OVERFLOW;
 
-    unsigned char *tmp = malloc(bytes);
+    unsigned char *tmp = (unsigned char *)scl_alloc(alloc, bytes, alignof(max_align_t));
     if (!tmp) return SCL_ERR_OUT_OF_MEMORY;
 
     for (size_t width = 1; width < count; width *= 2) {
@@ -110,7 +109,7 @@ scl_error_t scl_sort_merge(void *base, size_t count, size_t element_size, scl_cm
         }
     }
 
-    free(tmp);
+    scl_free(alloc, tmp);
     return SCL_OK;
 }
 
@@ -230,7 +229,7 @@ scl_error_t scl_sort_shell(void *base, size_t count, size_t element_size, scl_cm
     return SCL_OK;
 }
 
-scl_error_t scl_sort_counting(int32_t *base, size_t count)
+scl_error_t scl_sort_counting(scl_allocator_t *alloc, int32_t *base, size_t count)
 {
     if (!base) return SCL_ERR_NULL_PTR;
     if (count < 2) return SCL_OK;
@@ -245,7 +244,7 @@ scl_error_t scl_sort_counting(int32_t *base, size_t count)
     if (scl_add_overflow((size_t)(max_val - min_val), 1, &range))
         return SCL_ERR_SIZE_OVERFLOW;
 
-    size_t *counts = calloc(range, sizeof(size_t));
+    size_t *counts = (size_t *)scl_calloc(alloc, range, sizeof(size_t), alignof(max_align_t));
     if (!counts) return SCL_ERR_OUT_OF_MEMORY;
 
     for (size_t i = 0; i < count; i++)
@@ -257,16 +256,19 @@ scl_error_t scl_sort_counting(int32_t *base, size_t count)
             base[idx++] = (int32_t)((size_t)min_val + i);
     }
 
-    free(counts);
+    scl_free(alloc, counts);
     return SCL_OK;
 }
 
-scl_error_t scl_sort_radix(int32_t *base, size_t count)
+scl_error_t scl_sort_radix(scl_allocator_t *alloc, int32_t *base, size_t count)
 {
     if (!base) return SCL_ERR_NULL_PTR;
     if (count < 2) return SCL_OK;
 
-    int32_t *output = malloc(count * sizeof(int32_t));
+    size_t bytes;
+    if (scl_mul_overflow(count, sizeof(int32_t), &bytes))
+        return SCL_ERR_SIZE_OVERFLOW;
+    int32_t *output = (int32_t *)scl_alloc(alloc, bytes, alignof(max_align_t));
     if (!output) return SCL_ERR_OUT_OF_MEMORY;
 
     for (int shift = 0; shift < 32; shift += 8) {
@@ -289,32 +291,32 @@ scl_error_t scl_sort_radix(int32_t *base, size_t count)
             output[bucket[(unsigned char)val]++] = base[i];
         }
 
-        memcpy(base, output, count * sizeof(int32_t));
+        memcpy(base, output, bytes);
     }
 
-    free(output);
+    scl_free(alloc, output);
     return SCL_OK;
 }
 
-scl_error_t scl_sort_bucket(void *base, size_t count, size_t element_size, scl_cmp_func_t cmp)
+scl_error_t scl_sort_bucket(scl_allocator_t *alloc, void *base, size_t count, size_t element_size, scl_cmp_func_t cmp)
 {
     unsigned char *ptr = (unsigned char *)base;
     if (!base || !cmp) return SCL_ERR_NULL_PTR;
     if (count < 2) return SCL_OK;
 
     size_t bucket_count = count < 10 ? count : 10;
-    unsigned char **buckets = calloc(bucket_count, sizeof(unsigned char *));
-    size_t *bucket_sizes = calloc(bucket_count, sizeof(size_t));
-    size_t *bucket_caps = calloc(bucket_count, sizeof(size_t));
+    unsigned char **buckets = (unsigned char **)scl_calloc(alloc, bucket_count, sizeof(unsigned char *), alignof(max_align_t));
+    size_t *bucket_sizes = (size_t *)scl_calloc(alloc, bucket_count, sizeof(size_t), alignof(max_align_t));
+    size_t *bucket_caps = (size_t *)scl_calloc(alloc, bucket_count, sizeof(size_t), alignof(max_align_t));
 
     if (!buckets || !bucket_sizes || !bucket_caps) {
-        free(buckets); free(bucket_sizes); free(bucket_caps);
+        scl_free(alloc, buckets); scl_free(alloc, bucket_sizes); scl_free(alloc, bucket_caps);
         return SCL_ERR_OUT_OF_MEMORY;
     }
 
-    size_t *less_count = calloc(count, sizeof(size_t));
+    size_t *less_count = (size_t *)scl_calloc(alloc, count, sizeof(size_t), alignof(max_align_t));
     if (!less_count) {
-        free(buckets); free(bucket_sizes); free(bucket_caps);
+        scl_free(alloc, buckets); scl_free(alloc, bucket_sizes); scl_free(alloc, bucket_caps);
         return SCL_ERR_OUT_OF_MEMORY;
     }
 
@@ -331,18 +333,21 @@ scl_error_t scl_sort_bucket(void *base, size_t count, size_t element_size, scl_c
 
         if (bucket_sizes[bucket_idx] == bucket_caps[bucket_idx]) {
             size_t new_cap = bucket_caps[bucket_idx] == 0 ? 4 : bucket_caps[bucket_idx] * 2;
-            size_t bytes;
-            if (scl_mul_overflow(new_cap, element_size, &bytes)) {
-                for (size_t j = 0; j < bucket_count; j++) free(buckets[j]);
-                free(buckets); free(bucket_sizes); free(bucket_caps); free(less_count);
+            size_t new_bytes;
+            if (scl_mul_overflow(new_cap, element_size, &new_bytes)) {
+                for (size_t j = 0; j < bucket_count; j++) scl_free(alloc, buckets[j]);
+                scl_free(alloc, buckets); scl_free(alloc, bucket_sizes); scl_free(alloc, bucket_caps); scl_free(alloc, less_count);
                 return SCL_ERR_SIZE_OVERFLOW;
             }
-            unsigned char *tmp = realloc(buckets[bucket_idx], bytes);
+            unsigned char *tmp = (unsigned char *)scl_alloc(alloc, new_bytes, alignof(max_align_t));
             if (!tmp) {
-                for (size_t j = 0; j < bucket_count; j++) free(buckets[j]);
-                free(buckets); free(bucket_sizes); free(bucket_caps); free(less_count);
+                for (size_t j = 0; j < bucket_count; j++) scl_free(alloc, buckets[j]);
+                scl_free(alloc, buckets); scl_free(alloc, bucket_sizes); scl_free(alloc, bucket_caps); scl_free(alloc, less_count);
                 return SCL_ERR_OUT_OF_MEMORY;
             }
+            if (buckets[bucket_idx] && bucket_sizes[bucket_idx] > 0)
+                memcpy(tmp, buckets[bucket_idx], bucket_sizes[bucket_idx] * element_size);
+            scl_free(alloc, buckets[bucket_idx]);
             buckets[bucket_idx] = tmp;
             bucket_caps[bucket_idx] = new_cap;
         }
@@ -352,7 +357,7 @@ scl_error_t scl_sort_bucket(void *base, size_t count, size_t element_size, scl_c
         bucket_sizes[bucket_idx]++;
     }
 
-    free(less_count);
+    scl_free(alloc, less_count);
 
     size_t pos = 0;
     for (size_t i = 0; i < bucket_count; i++) {
@@ -362,11 +367,11 @@ scl_error_t scl_sort_bucket(void *base, size_t count, size_t element_size, scl_c
                    bucket_sizes[i] * element_size);
             pos += bucket_sizes[i];
         }
-        free(buckets[i]);
+        scl_free(alloc, buckets[i]);
     }
 
-    free(buckets);
-    free(bucket_sizes);
-    free(bucket_caps);
+    scl_free(alloc, buckets);
+    scl_free(alloc, bucket_sizes);
+    scl_free(alloc, bucket_caps);
     return SCL_OK;
 }

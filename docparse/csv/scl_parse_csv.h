@@ -7,8 +7,6 @@
 #endif
 
 #include "../../common/scl_common.h"
-#include <stddef.h>
-#include <stdio.h>
 
 typedef enum {
     SCL_CSV_STATE_FIELD_START,
@@ -19,6 +17,7 @@ typedef enum {
 } scl_parse_csv_state_t;
 
 typedef struct {
+    scl_allocator_t *alloc;
     scl_parse_csv_state_t state;
     char *buffer;
     size_t buffer_cap;
@@ -28,7 +27,7 @@ typedef struct {
     int eof;
 } scl_parse_csv_t;
 
-scl_error_t scl_parse_csv_init(scl_parse_csv_t *parser);
+scl_error_t scl_parse_csv_init(scl_allocator_t *alloc, scl_parse_csv_t *parser);
 scl_error_t scl_parse_csv_feed(scl_parse_csv_t *parser, const char *data, size_t len);
 scl_error_t scl_parse_csv_next_field(scl_parse_csv_t *parser, const char **out, size_t *out_len);
 scl_error_t scl_parse_csv_next_row(scl_parse_csv_t *parser);

@@ -8,11 +8,9 @@
 #pragma GCC diagnostic ignored "-Wpedantic"
 #endif
 
-typedef int (*scl_cmp_func_t)(const void *a, const void *b);
-
 scl_error_t scl_sort_quick(void *base, size_t count, size_t element_size,
                            scl_cmp_func_t cmp) SCL_WARN_UNUSED;
-scl_error_t scl_sort_merge(void *base, size_t count, size_t element_size,
+scl_error_t scl_sort_merge(scl_allocator_t *alloc, void *base, size_t count, size_t element_size,
                            scl_cmp_func_t cmp) SCL_WARN_UNUSED;
 scl_error_t scl_sort_heap(void *base, size_t count, size_t element_size,
                           scl_cmp_func_t cmp) SCL_WARN_UNUSED;
@@ -24,9 +22,9 @@ scl_error_t scl_sort_bubble(void *base, size_t count, size_t element_size,
                             scl_cmp_func_t cmp) SCL_WARN_UNUSED;
 scl_error_t scl_sort_shell(void *base, size_t count, size_t element_size,
                            scl_cmp_func_t cmp) SCL_WARN_UNUSED;
-scl_error_t scl_sort_counting(int32_t *base, size_t count) SCL_WARN_UNUSED;
-scl_error_t scl_sort_radix(int32_t *base, size_t count) SCL_WARN_UNUSED;
-scl_error_t scl_sort_bucket(void *base, size_t count, size_t element_size,
+scl_error_t scl_sort_counting(scl_allocator_t *alloc, int32_t *base, size_t count) SCL_WARN_UNUSED;
+scl_error_t scl_sort_radix(scl_allocator_t *alloc, int32_t *base, size_t count) SCL_WARN_UNUSED;
+scl_error_t scl_sort_bucket(scl_allocator_t *alloc, void *base, size_t count, size_t element_size,
                             scl_cmp_func_t cmp) SCL_WARN_UNUSED;
 
 #ifdef __GNUC__

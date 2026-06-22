@@ -1,123 +1,146 @@
-#if defined(__GNUC__) && !defined(__clang__)
-#pragma GCC optimize ("O3", "unroll-loops", "tree-vectorize", "inline")
-#endif
-
 #include "scl_alloc_arena.h"
-#include <stdlib.h>
 #include <string.h>
 #include <stdalign.h>
 
-#ifdef _WIN32
-#include <windows.h>
-#else
-#include <sys/mman.h>
-#include <unistd.h>
-#endif
+typedef struct scl_arena_node {
+    char *buffer;
+    size_t offset;
+    size_t capacity;
+    struct scl_arena_node *next;
+} arena_node_t;
 
-static size_t scl_page_size(void) {
-#ifdef _WIN32
-    SYSTEM_INFO si;
-    GetSystemInfo(&si);
-    return si.dwPageSize;
-#else
-    return (size_t)sysconf(_SC_PAGESIZE);
-#endif
+typedef struct {
+    scl_allocator_t *backing;
+    arena_node_t *head;
+    arena_node_t *current;
+} arena_state_t;
+
+static size_t arena_align_up(size_t offset, size_t align) {
+    size_t mask = align - 1;
+    return (offset + mask) & ~mask;
 }
 
-static void *scl_mmap_alloc(size_t size) {
-#ifdef _WIN32
-    return VirtualAlloc(NULL, size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-#else
-    void *p = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
-    if (p == MAP_FAILED) return NULL;
-    return p;
-#endif
-}
+static arena_node_t *arena_node_create(arena_state_t *s, size_t capacity) {
+    scl_allocator_t *b = s->backing;
+    arena_node_t *node = (arena_node_t *)b->malloc_fn(b->state, sizeof(arena_node_t), alignof(max_align_t));
+    if (!node) return NULL;
 
-static void scl_mmap_free(void *ptr, size_t size) {
-#ifdef _WIN32
-    VirtualFree(ptr, 0, MEM_RELEASE);
-#else
-    munmap(ptr, size);
-#endif
-}
-
-static inline size_t scl_align_up_pow2(size_t size, size_t align) {
-    return (size + align - 1) & ~(align - 1);
-}
-
-scl_error_t scl_alloc_arena_init(scl_alloc_arena_t *arena, size_t capacity) {
-    if (__builtin_expect(!arena, 0)) return SCL_ERR_NULL_PTR;
-    if (__builtin_expect(capacity == 0, 0)) return SCL_ERR_INVALID_ARG;
-
-    size_t page_sz = scl_page_size();
-    size_t alloc_size = scl_align_up_pow2(capacity, page_sz);
-    if (alloc_size < capacity) return SCL_ERR_SIZE_OVERFLOW;
-
-    void *buf = scl_mmap_alloc(alloc_size);
-    if (__builtin_expect(!buf, 0)) return SCL_ERR_OUT_OF_MEMORY;
-
-    arena->buffer = (char *)buf;
-    arena->offset = 0;
-    arena->capacity = alloc_size;
-    arena->next = NULL;
-    return SCL_OK;
-}
-
-scl_error_t scl_alloc_arena_alloc(scl_alloc_arena_t *arena, size_t size, size_t alignment, void **out_ptr) {
-    if (__builtin_expect(!arena, 0)) return SCL_ERR_NULL_PTR;
-    if (__builtin_expect(!out_ptr, 0)) return SCL_ERR_NULL_PTR;
-    if (__builtin_expect(size == 0, 0)) return SCL_ERR_INVALID_ARG;
-    if (__builtin_expect(alignment == 0, 0)) alignment = alignof(max_align_t);
-
-    size_t align_mask = alignment - 1;
-    size_t aligned_offset = (arena->offset + align_mask) & ~align_mask;
-
-    if (__builtin_expect(aligned_offset > arena->capacity || size > arena->capacity - aligned_offset, 0)) {
-        size_t new_cap = arena->capacity * 2;
-        while (new_cap < size + alignment) new_cap *= 2;
-        scl_alloc_arena_t *new_arena;
-        new_arena = (scl_alloc_arena_t *)malloc(sizeof(scl_alloc_arena_t));
-        if (__builtin_expect(!new_arena, 0)) return SCL_ERR_OUT_OF_MEMORY;
-        scl_error_t err = scl_alloc_arena_init(new_arena, new_cap);
-        if (__builtin_expect(err != SCL_OK, 0)) {
-            free(new_arena);
-            return err;
-        }
-        new_arena->next = arena->next;
-        arena->next = new_arena;
-        arena = new_arena;
-        aligned_offset = 0;
+    node->buffer = (char *)b->malloc_fn(b->state, capacity, alignof(max_align_t));
+    if (!node->buffer) {
+        b->free_fn(b->state, node);
+        return NULL;
     }
 
-    *out_ptr = arena->buffer + aligned_offset;
-    arena->offset = aligned_offset + size;
-    return SCL_OK;
+    node->offset = 0;
+    node->capacity = capacity;
+    node->next = NULL;
+    return node;
 }
 
-scl_error_t scl_alloc_arena_reset(scl_alloc_arena_t *arena) {
-    if (__builtin_expect(!arena, 0)) return SCL_ERR_NULL_PTR;
-    arena->offset = 0;
-    scl_alloc_arena_t *cur = arena->next;
+static void *arena_malloc_fn(void *state, size_t size, size_t alignment) {
+    arena_state_t *s = (arena_state_t *)state;
+    if (!s || size == 0) return NULL;
+    if (alignment == 0) alignment = alignof(max_align_t);
+
+    arena_node_t *cur = s->current;
+    size_t aligned = arena_align_up(cur->offset, alignment);
+    if (aligned > cur->capacity || size > cur->capacity - aligned) {
+        size_t new_cap = cur->capacity * 2;
+        while (new_cap < size + alignment)
+            new_cap *= 2;
+
+        arena_node_t *node = arena_node_create(s, new_cap);
+        if (!node) return NULL;
+
+        node->next = cur->next;
+        cur->next = node;
+        s->current = node;
+        cur = node;
+        aligned = 0;
+    }
+
+    void *ptr = cur->buffer + aligned;
+    cur->offset = aligned + size;
+    return ptr;
+}
+
+static void *arena_calloc_fn(void *state, size_t count, size_t size, size_t alignment) {
+    size_t total;
+    if (scl_mul_overflow(count, size, &total)) return NULL;
+    void *ptr = arena_malloc_fn(state, total, alignment);
+    if (ptr) memset(ptr, 0, total);
+    return ptr;
+}
+
+static void *arena_realloc_fn(void *state, void *ptr, size_t old_size, size_t new_size, size_t alignment) {
+    if (!ptr) return arena_malloc_fn(state, new_size, alignment);
+    if (new_size == 0) return NULL;
+    void *new_ptr = arena_malloc_fn(state, new_size, alignment);
+    if (new_ptr) {
+        size_t copy = old_size < new_size ? old_size : new_size;
+        memcpy(new_ptr, ptr, copy);
+    }
+    return new_ptr;
+}
+
+static void arena_free_fn(void *state, void *ptr) {
+    (void)state;
+    (void)ptr;
+}
+
+scl_allocator_t *scl_alloc_arena_create(scl_allocator_t *backing, size_t capacity) {
+    if (!backing || capacity == 0) return NULL;
+
+    arena_state_t *state = (arena_state_t *)backing->malloc_fn(backing->state, sizeof(arena_state_t), alignof(max_align_t));
+    if (!state) return NULL;
+
+    state->backing = backing;
+
+    state->head = arena_node_create(state, capacity);
+    if (!state->head) {
+        backing->free_fn(backing->state, state);
+        return NULL;
+    }
+    state->current = state->head;
+
+    scl_allocator_t *alloc = (scl_allocator_t *)backing->malloc_fn(backing->state, sizeof(scl_allocator_t), alignof(max_align_t));
+    if (!alloc) {
+        backing->free_fn(backing->state, state->head->buffer);
+        backing->free_fn(backing->state, state->head);
+        backing->free_fn(backing->state, state);
+        return NULL;
+    }
+
+    alloc->malloc_fn = arena_malloc_fn;
+    alloc->calloc_fn = arena_calloc_fn;
+    alloc->realloc_fn = arena_realloc_fn;
+    alloc->free_fn = arena_free_fn;
+    alloc->state = state;
+    return alloc;
+}
+
+void scl_alloc_arena_reset(scl_allocator_t *alloc) {
+    if (!alloc) return;
+    arena_state_t *s = (arena_state_t *)alloc->state;
+    arena_node_t *cur = s->head;
     while (cur) {
         cur->offset = 0;
         cur = cur->next;
     }
-    return SCL_OK;
+    s->current = s->head;
 }
 
-scl_error_t scl_alloc_arena_destroy(scl_alloc_arena_t *arena) {
-    if (__builtin_expect(!arena, 0)) return SCL_ERR_NULL_PTR;
-    scl_alloc_arena_t *cur = arena;
+void scl_alloc_arena_destroy(scl_allocator_t *alloc) {
+    if (!alloc) return;
+    arena_state_t *s = (arena_state_t *)alloc->state;
+    scl_allocator_t *backing = s->backing;
+    arena_node_t *cur = s->head;
     while (cur) {
-        scl_alloc_arena_t *next = cur->next;
-        if (cur->buffer) scl_mmap_free(cur->buffer, cur->capacity);
-        if (cur != arena) free(cur);
+        arena_node_t *next = cur->next;
+        backing->free_fn(backing->state, cur->buffer);
+        backing->free_fn(backing->state, cur);
         cur = next;
     }
-    arena->buffer = NULL;
-    arena->offset = 0;
-    arena->capacity = 0;
-    arena->next = NULL;
-    return SCL_OK;
+    backing->free_fn(backing->state, s);
+    backing->free_fn(backing->state, alloc);
 }

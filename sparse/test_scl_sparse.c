@@ -1,36 +1,42 @@
 #include "scl_sparse.h"
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <assert.h>
+#include "../../testlib/scl_test.h"
 
-static int tests_passed = 0;
-static int tests_failed = 0;
-
-#define TEST(name) do { printf("  TEST: %s ... ", name); } while(0)
-#define PASS() do { printf("PASSED\n"); tests_passed++; } while(0)
-#define FAIL(msg) do { printf("FAILED: %s\n", msg); tests_failed++; } while(0)
-
-static int64_t min_op(int64_t a, int64_t b) { return a < b ? a : b; }
-
-static void test_range_min(void)
+static void combine_min(void *out, const void *a, const void *b)
 {
-    TEST("range min query");
-    int64_t data[] = {5, 2, 8, 1, 9, 3, 7, 4};
+    int x = *(const int *)a;
+    int y = *(const int *)b;
+    *(int *)out = x < y ? x : y;
+}
+
+static void test_basic(scl_test_runner_t *tr)
+{
+    scl_allocator_t *alloc = scl_allocator_default();
+    int data[] = {3, 1, 4, 1, 5, 9, 2, 6};
     scl_sparse_t st;
-    scl_sparse_init(&st, data, 8, min_op);
-    int64_t out;
-    scl_sparse_query(&st, 0, 7, &out); assert(out == 1);
-    scl_sparse_query(&st, 0, 0, &out); assert(out == 5);
-    scl_sparse_query(&st, 4, 6, &out); assert(out == 3);
-    scl_sparse_destroy(&st);
-    PASS();
+    SCL_EXPECT_OK(tr, scl_sparse_init(alloc, &st, 8, sizeof(int), data, combine_min));
+
+    int q;
+    SCL_EXPECT_OK(tr, scl_sparse_query(&st, 0, 3, &q));
+    SCL_EXPECT_EQ_I(tr, q, 1);
+
+    SCL_EXPECT_OK(tr, scl_sparse_query(&st, 2, 5, &q));
+    SCL_EXPECT_EQ_I(tr, q, 1);
+
+    SCL_EXPECT_OK(tr, scl_sparse_query(&st, 4, 7, &q));
+    SCL_EXPECT_EQ_I(tr, q, 2);
+
+    SCL_EXPECT_OK(tr, scl_sparse_query(&st, 0, 0, &q));
+    SCL_EXPECT_EQ_I(tr, q, 3);
+
+    scl_sparse_destroy(alloc, &st);
 }
 
 int main(void)
 {
-    printf("=== scl_sparse tests ===\n");
-    test_range_min();
-    printf("Results: %d passed, %d failed\n", tests_passed, tests_failed);
-    return tests_failed > 0 ? 1 : 0;
+    scl_test_runner_t tr;
+    scl_test_init(&tr);
+    scl_test_group("scl_sparse tests");
+    test_basic(&tr);
+    scl_test_summary(&tr);
+    return tr.failed > 0 ? 1 : 0;
 }

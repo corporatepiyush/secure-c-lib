@@ -1,12 +1,11 @@
 #include "scl_deque.h"
-#include <stdlib.h>
 #include <string.h>
 
 #if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC optimize ("O3", "unroll-loops", "tree-vectorize", "inline")
 #endif
 
-scl_error_t scl_deque_init(scl_deque_t *deque, size_t element_size, size_t initial_capacity)
+scl_error_t scl_deque_init(scl_allocator_t *alloc, scl_deque_t *deque, size_t element_size, size_t initial_capacity)
 {
     if (!deque) return SCL_ERR_NULL_PTR;
     if (element_size == 0) return SCL_ERR_INVALID_ARG;
@@ -21,17 +20,17 @@ scl_error_t scl_deque_init(scl_deque_t *deque, size_t element_size, size_t initi
         size_t bytes;
         if (scl_mul_overflow(initial_capacity, element_size, &bytes))
             return SCL_ERR_SIZE_OVERFLOW;
-        deque->data = malloc(bytes);
+        deque->data = scl_alloc(alloc, bytes, alignof(max_align_t));
         if (!deque->data) return SCL_ERR_OUT_OF_MEMORY;
         deque->capacity = initial_capacity;
     }
     return SCL_OK;
 }
 
-void scl_deque_destroy(scl_deque_t *deque)
+void scl_deque_destroy(scl_allocator_t *alloc, scl_deque_t *deque)
 {
     if (deque) {
-        free(deque->data);
+        scl_free(alloc, deque->data);
         deque->data = NULL;
         deque->capacity = 0;
         deque->head = 0;
@@ -39,14 +38,14 @@ void scl_deque_destroy(scl_deque_t *deque)
     }
 }
 
-static scl_error_t scl_deque_grow(scl_deque_t *deque)
+static scl_error_t scl_deque_grow(scl_allocator_t *alloc, scl_deque_t *deque)
 {
     size_t new_cap = deque->capacity == 0 ? 4 : deque->capacity * 2;
-    size_t bytes;
-    if (scl_mul_overflow(new_cap, deque->element_size, &bytes))
+    size_t new_bytes;
+    if (scl_mul_overflow(new_cap, deque->element_size, &new_bytes))
         return SCL_ERR_SIZE_OVERFLOW;
 
-    unsigned char *tmp = malloc(bytes);
+    unsigned char *tmp = scl_alloc(alloc, new_bytes, alignof(max_align_t));
     if (!tmp) return SCL_ERR_OUT_OF_MEMORY;
 
     for (size_t i = 0; i < deque->count; i++) {
@@ -56,19 +55,19 @@ static scl_error_t scl_deque_grow(scl_deque_t *deque)
                deque->element_size);
     }
 
-    free(deque->data);
+    scl_free(alloc, deque->data);
     deque->data = tmp;
     deque->head = 0;
     deque->capacity = new_cap;
     return SCL_OK;
 }
 
-scl_error_t scl_deque_push_front(scl_deque_t *deque, const void *element)
+scl_error_t scl_deque_push_front(scl_allocator_t *alloc, scl_deque_t *deque, const void *element)
 {
     if (!deque || !element) return SCL_ERR_NULL_PTR;
 
     if (deque->count == deque->capacity) {
-        scl_error_t err = scl_deque_grow(deque);
+        scl_error_t err = scl_deque_grow(alloc, deque);
         if (err != SCL_OK) return err;
     }
 
@@ -82,12 +81,12 @@ scl_error_t scl_deque_push_front(scl_deque_t *deque, const void *element)
     return SCL_OK;
 }
 
-scl_error_t scl_deque_push_back(scl_deque_t *deque, const void *element)
+scl_error_t scl_deque_push_back(scl_allocator_t *alloc, scl_deque_t *deque, const void *element)
 {
     if (!deque || !element) return SCL_ERR_NULL_PTR;
 
     if (deque->count == deque->capacity) {
-        scl_error_t err = scl_deque_grow(deque);
+        scl_error_t err = scl_deque_grow(alloc, deque);
         if (err != SCL_OK) return err;
     }
 

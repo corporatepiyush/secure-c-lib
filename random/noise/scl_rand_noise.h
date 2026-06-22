@@ -7,8 +7,6 @@
 #endif
 
 #include "../../common/scl_common.h"
-#include <string.h>
-#include <math.h>
 
 typedef struct {
     int perm[512];

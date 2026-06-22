@@ -1,15 +1,5 @@
 #include "scl_btree.h"
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <assert.h>
-
-static int tests_passed = 0;
-static int tests_failed = 0;
-
-#define TEST(name) do { printf("  TEST: %s ... ", name); } while(0)
-#define PASS() do { printf("PASSED\n"); tests_passed++; } while(0)
-#define FAIL(msg) do { printf("FAILED: %s\n", msg); tests_failed++; } while(0)
+#include "../../testlib/scl_test.h"
 
 static int cmp_int(const void *a, const void *b)
 {
@@ -20,24 +10,28 @@ static int cmp_int(const void *a, const void *b)
     return 0;
 }
 
-static void test_insert_get(void)
+static void test_insert_get(scl_test_runner_t *tr)
 {
-    TEST("insert and get");
+    scl_allocator_t *alloc = scl_allocator_default();
     scl_btree_t t;
-    scl_btree_init(&t, sizeof(int), sizeof(int), 4, cmp_int);
-    for (int i = 0; i < 50; i++) assert(scl_btree_insert(&t, &i, &i) == SCL_OK);
-    assert(scl_btree_count(&t) == 50);
+    SCL_EXPECT_OK(tr, scl_btree_init(alloc, &t, sizeof(int), sizeof(int), 4, cmp_int));
+    for (int i = 0; i < 50; i++)
+        SCL_EXPECT_OK(tr, scl_btree_insert(alloc, &t, &i, &i));
+    SCL_EXPECT_EQ_SZ(tr, scl_btree_count(&t), 50);
     for (int i = 0; i < 50; i++) {
-        int v; assert(scl_btree_get(&t, &i, &v) == SCL_OK && v == i);
+        int v;
+        SCL_EXPECT_OK(tr, scl_btree_get(&t, &i, &v));
+        SCL_EXPECT_EQ_I(tr, v, i);
     }
-    scl_btree_destroy(&t);
-    PASS();
+    scl_btree_destroy(alloc, &t);
 }
 
 int main(void)
 {
-    printf("=== scl_btree tests ===\n");
-    test_insert_get();
-    printf("Results: %d passed, %d failed\n", tests_passed, tests_failed);
-    return tests_failed > 0 ? 1 : 0;
+    scl_test_runner_t tr;
+    scl_test_init(&tr);
+    scl_test_group("scl_btree tests");
+    test_insert_get(&tr);
+    scl_test_summary(&tr);
+    return tr.failed > 0 ? 1 : 0;
 }

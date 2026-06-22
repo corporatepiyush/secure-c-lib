@@ -1,51 +1,51 @@
 #include "scl_hash.h"
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <assert.h>
+#include "../../testlib/scl_test.h"
 
-static int tests_passed = 0;
-static int tests_failed = 0;
-
-#define TEST(name) do { printf("  TEST: %s ... ", name); } while(0)
-#define PASS() do { printf("PASSED\n"); tests_passed++; } while(0)
-#define FAIL(msg) do { printf("FAILED: %s\n", msg); tests_failed++; } while(0)
-
-static void test_insert_get(void)
+SCL_UNUSED static int cmp_int(const void *a, const void *b)
 {
-    TEST("insert and get");
-    scl_hash_t ht;
-    scl_hash_init(&ht, sizeof(int), sizeof(int), 16, scl_hash_djb2, NULL);
-    for (int i = 0; i < 100; i++)
-        assert(scl_hash_insert(&ht, &i, &i) == SCL_OK);
-    assert(scl_hash_count(&ht) == 100);
-    for (int i = 0; i < 100; i++) {
-        int v; assert(scl_hash_get(&ht, &i, &v) == SCL_OK && v == i);
-    }
-    scl_hash_destroy(&ht);
-    PASS();
+    int x = *(const int *)a;
+    int y = *(const int *)b;
+    if (x < y) return -1;
+    if (x > y) return 1;
+    return 0;
 }
 
-static void test_remove_contains(void)
+static void test_insert_get(scl_test_runner_t *tr)
 {
-    TEST("remove and contains");
+    scl_allocator_t *alloc = scl_allocator_default();
     scl_hash_t ht;
-    scl_hash_init(&ht, sizeof(int), sizeof(int), 16, scl_hash_djb2, NULL);
+    SCL_EXPECT_OK(tr, scl_hash_init(alloc, &ht, sizeof(int), sizeof(int), 16, scl_hash_djb2, NULL));
+    for (int i = 0; i < 100; i++)
+        SCL_EXPECT_OK(tr, scl_hash_insert(alloc, &ht, &i, &i));
+    SCL_EXPECT_EQ_SZ(tr, scl_hash_count(&ht), 100);
+    for (int i = 0; i < 100; i++) {
+        int v;
+        SCL_EXPECT_OK(tr, scl_hash_get(&ht, &i, &v));
+        SCL_EXPECT_EQ_I(tr, v, i);
+    }
+    scl_hash_destroy(alloc, &ht);
+}
+
+static void test_remove_contains(scl_test_runner_t *tr)
+{
+    scl_allocator_t *alloc = scl_allocator_default();
+    scl_hash_t ht;
+    SCL_EXPECT_OK(tr, scl_hash_init(alloc, &ht, sizeof(int), sizeof(int), 16, scl_hash_djb2, NULL));
     int k = 42, v = 99;
-    scl_hash_insert(&ht, &k, &v);
-    assert(scl_hash_contains(&ht, &k));
-    scl_hash_remove(&ht, &k);
-    assert(!scl_hash_contains(&ht, &k));
-    assert(scl_hash_get(&ht, &k, &v) == SCL_ERR_NOT_FOUND);
-    scl_hash_destroy(&ht);
-    PASS();
+    SCL_EXPECT_OK(tr, scl_hash_insert(alloc, &ht, &k, &v));
+    SCL_EXPECT_TRUE(tr, scl_hash_contains(&ht, &k));
+    SCL_EXPECT_OK(tr, scl_hash_remove(alloc, &ht, &k));
+    SCL_EXPECT_FALSE(tr, scl_hash_contains(&ht, &k));
+    scl_hash_destroy(alloc, &ht);
 }
 
 int main(void)
 {
-    printf("=== scl_hash tests ===\n");
-    test_insert_get();
-    test_remove_contains();
-    printf("Results: %d passed, %d failed\n", tests_passed, tests_failed);
-    return tests_failed > 0 ? 1 : 0;
+    scl_test_runner_t tr;
+    scl_test_init(&tr);
+    scl_test_group("scl_hash tests");
+    test_insert_get(&tr);
+    test_remove_contains(&tr);
+    scl_test_summary(&tr);
+    return tr.failed > 0 ? 1 : 0;
 }

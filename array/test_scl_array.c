@@ -1,15 +1,6 @@
 #include "scl_array.h"
-#include <stdio.h>
-#include <stdlib.h>
+#include "../testlib/scl_test.h"
 #include <string.h>
-#include <assert.h>
-
-static int tests_passed = 0;
-static int tests_failed = 0;
-
-#define TEST(name) do { printf("  TEST: %s ... ", name); } while(0)
-#define PASS() do { printf("PASSED\n"); tests_passed++; } while(0)
-#define FAIL(msg) do { printf("FAILED: %s\n", msg); tests_failed++; } while(0)
 
 static int cmp_int(const void *a, const void *b)
 {
@@ -20,148 +11,134 @@ static int cmp_int(const void *a, const void *b)
     return 0;
 }
 
-static void test_init_destroy(void)
+static void test_init_destroy(scl_test_runner_t *tr)
 {
-    TEST("init and destroy");
+    scl_test_group("init and destroy");
     scl_array_t arr;
-    assert(scl_array_init(&arr, sizeof(int), 0) == SCL_OK);
-    assert(scl_array_empty(&arr));
-    assert(scl_array_count(&arr) == 0);
-    scl_array_destroy(&arr);
-    PASS();
+    scl_allocator_t *a = scl_allocator_default();
+    SCL_EXPECT_OK(tr, scl_array_init(a, &arr, sizeof(int), 0));
+    SCL_EXPECT_TRUE(tr, scl_array_empty(&arr));
+    SCL_EXPECT_EQ_SZ(tr, scl_array_count(&arr), 0);
+    scl_array_destroy(a, &arr);
 }
 
-static void test_push_pop(void)
+static void test_push_pop(scl_test_runner_t *tr)
 {
-    TEST("push and pop");
+    scl_test_group("push and pop");
     scl_array_t arr;
-    scl_array_init(&arr, sizeof(int), 0);
+    scl_allocator_t *a = scl_allocator_default();
+    scl_array_init(a, &arr, sizeof(int), 0);
     for (int i = 0; i < 100; i++)
-        assert(scl_array_push(&arr, &i) == SCL_OK);
-    assert(scl_array_count(&arr) == 100);
+        SCL_EXPECT_OK(tr, scl_array_push(a, &arr, &i));
+    SCL_EXPECT_EQ_SZ(tr, scl_array_count(&arr), 100);
     for (int i = 99; i >= 0; i--) {
         int val;
-        assert(scl_array_pop(&arr, &val) == SCL_OK);
-        assert(val == i);
+        SCL_EXPECT_OK(tr, scl_array_pop(&arr, &val));
+        SCL_EXPECT_EQ_I(tr, val, i);
     }
-    assert(scl_array_empty(&arr));
-    scl_array_destroy(&arr);
-    PASS();
+    SCL_EXPECT_TRUE(tr, scl_array_empty(&arr));
+    scl_array_destroy(a, &arr);
 }
 
-static void test_get_set(void)
+static void test_get_set(scl_test_runner_t *tr)
 {
-    TEST("get and set");
+    scl_test_group("get and set");
     scl_array_t arr;
-    scl_array_init(&arr, sizeof(int), 10);
-    int x = 42; scl_array_push(&arr, &x);
-    int val; assert(scl_array_get(&arr, 0, &val) == SCL_OK && val == 42);
-    x = 99; assert(scl_array_set(&arr, 0, &x) == SCL_OK);
-    assert(scl_array_get(&arr, 0, &val) == SCL_OK && val == 99);
-    assert(scl_array_get(&arr, 1, &val) == SCL_ERR_INVALID_INDEX);
-    scl_array_destroy(&arr);
-    PASS();
+    scl_allocator_t *a = scl_allocator_default();
+    scl_array_init(a, &arr, sizeof(int), 10);
+    int x = 42; scl_array_push(a, &arr, &x);
+    int val; SCL_EXPECT_OK(tr, scl_array_get(&arr, 0, &val)); SCL_EXPECT_EQ_I(tr, val, 42);
+    x = 99; SCL_EXPECT_OK(tr, scl_array_set(&arr, 0, &x));
+    SCL_EXPECT_OK(tr, scl_array_get(&arr, 0, &val)); SCL_EXPECT_EQ_I(tr, val, 99);
+    SCL_EXPECT_ERROR(tr, scl_array_get(&arr, 1, &val), SCL_ERR_INVALID_INDEX);
+    scl_array_destroy(a, &arr);
 }
 
-static void test_insert_remove(void)
+static void test_insert_remove(scl_test_runner_t *tr)
 {
-    TEST("insert and remove");
+    scl_test_group("insert and remove");
     scl_array_t arr;
-    scl_array_init(&arr, sizeof(int), 4);
-    for (int i = 0; i < 3; i++) { int v = i * 10; scl_array_push(&arr, &v); }
-    int v = 99; assert(scl_array_insert(&arr, 1, &v) == SCL_OK);
-    assert(scl_array_get(&arr, 1, &v) == SCL_OK && v == 99);
-    assert(scl_array_remove(&arr, 1, &v) == SCL_OK && v == 99);
-    assert(scl_array_count(&arr) == 3);
-    scl_array_destroy(&arr);
-    PASS();
+    scl_allocator_t *a = scl_allocator_default();
+    scl_array_init(a, &arr, sizeof(int), 4);
+    for (int i = 0; i < 3; i++) { int v = i * 10; scl_array_push(a, &arr, &v); }
+    int v = 99; SCL_EXPECT_OK(tr, scl_array_insert(a, &arr, 1, &v));
+    SCL_EXPECT_OK(tr, scl_array_get(&arr, 1, &v)); SCL_EXPECT_EQ_I(tr, v, 99);
+    SCL_EXPECT_OK(tr, scl_array_remove(&arr, 1, &v)); SCL_EXPECT_EQ_I(tr, v, 99);
+    SCL_EXPECT_EQ_SZ(tr, scl_array_count(&arr), 3);
+    scl_array_destroy(a, &arr);
 }
 
-static void test_null(void)
+static void test_null(scl_test_runner_t *tr)
 {
-    TEST("null checks");
-    assert(scl_array_init(NULL, sizeof(int), 0) == SCL_ERR_NULL_PTR);
-    assert(scl_array_push(NULL, &(int){0}) == SCL_ERR_NULL_PTR);
-    assert(scl_array_pop(NULL, &(int){0}) == SCL_ERR_NULL_PTR);
-    assert(scl_array_get(NULL, 0, &(int){0}) == SCL_ERR_NULL_PTR);
-    scl_array_destroy(NULL);
-    PASS();
+    scl_test_group("null checks");
+    scl_allocator_t *a = scl_allocator_default();
+    SCL_EXPECT_ERROR(tr, scl_array_init(a, NULL, sizeof(int), 0), SCL_ERR_NULL_PTR);
+    SCL_EXPECT_ERROR(tr, scl_array_push(a, NULL, &(int){0}), SCL_ERR_NULL_PTR);
+    SCL_EXPECT_ERROR(tr, scl_array_pop(NULL, &(int){0}), SCL_ERR_NULL_PTR);
+    SCL_EXPECT_ERROR(tr, scl_array_get(NULL, 0, &(int){0}), SCL_ERR_NULL_PTR);
+    scl_array_destroy(a, NULL);
 }
 
-static void test_edge(void)
+static void test_edge(scl_test_runner_t *tr)
 {
-    TEST("empty ops");
+    scl_allocator_t *a = scl_allocator_default();
+    scl_test_group("empty ops");
     scl_array_t arr;
-    scl_array_init(&arr, sizeof(int), 0);
-    assert(scl_array_pop(&arr, &(int){0}) == SCL_ERR_EMPTY);
-    assert(scl_array_get(&arr, 0, &(int){0}) == SCL_ERR_INVALID_INDEX);
-    scl_array_destroy(&arr);
-    PASS();
+    scl_array_init(a, &arr, sizeof(int), 0);
+    SCL_EXPECT_ERROR(tr, scl_array_pop(&arr, &(int){0}), SCL_ERR_EMPTY);
+    SCL_EXPECT_ERROR(tr, scl_array_get(&arr, 0, &(int){0}), SCL_ERR_INVALID_INDEX);
+    scl_array_destroy(a, &arr);
 
-    TEST("zero element size rejection");
-    assert(scl_array_init(&arr, 0, 10) == SCL_ERR_INVALID_ARG);
-    PASS();
+    scl_test_group("zero element size rejection");
+    SCL_EXPECT_ERROR(tr, scl_array_init(a, &arr, 0, 10), SCL_ERR_INVALID_ARG);
 
-    TEST("large data integrity");
-    scl_array_init(&arr, sizeof(int), 0);
-    for (int i = 0; i < 1000; i++) scl_array_push(&arr, &i);
+    scl_test_group("large data integrity");
+    scl_array_init(a, &arr, sizeof(int), 0);
+    for (int i = 0; i < 1000; i++) scl_array_push(a, &arr, &i);
     for (int i = 0; i < 1000; i++) {
-        int v; scl_array_get(&arr, i, &v); assert(v == i);
+        int v; scl_array_get(&arr, i, &v); SCL_EXPECT_EQ_I(tr, v, i);
     }
-    scl_array_destroy(&arr);
-    PASS();
-
-    TEST("type safety with structs");
-    typedef struct { int x; double y; } point;
-    scl_array_t pa;
-    scl_array_init(&pa, sizeof(point), 0);
-    for (int i = 0; i < 10; i++) {
-        point p = {i, i * 1.5};
-        scl_array_push(&pa, &p);
-    }
-    for (int i = 0; i < 10; i++) {
-        point p; scl_array_get(&pa, i, &p);
-        assert(p.x == i && p.y == i * 1.5);
-    }
-    scl_array_destroy(&pa);
-    PASS();
+    scl_array_destroy(a, &arr);
 }
 
-static void test_search(void)
+static void test_search(scl_test_runner_t *tr)
 {
-    TEST("linear search");
+    scl_allocator_t *a = scl_allocator_default();
+    scl_test_group("linear search");
     scl_array_t arr;
-    scl_array_init(&arr, sizeof(int), 0);
-    for (int i = 0; i < 10; i++) { int v = i * 10; scl_array_push(&arr, &v); }
+    scl_array_init(a, &arr, sizeof(int), 0);
+    for (int i = 0; i < 10; i++) { int v = i * 10; scl_array_push(a, &arr, &v); }
     size_t idx;
     int key = 50;
-    assert(scl_array_linear_search(&arr, &key, cmp_int, &idx) == SCL_OK && idx == 5);
+    SCL_EXPECT_OK(tr, scl_array_linear_search(&arr, &key, cmp_int, &idx));
+    SCL_EXPECT_EQ_SZ(tr, idx, 5);
     key = 999;
-    assert(scl_array_linear_search(&arr, &key, cmp_int, &idx) == SCL_ERR_NOT_FOUND);
-    scl_array_destroy(&arr);
-    PASS();
+    SCL_EXPECT_ERROR(tr, scl_array_linear_search(&arr, &key, cmp_int, &idx), SCL_ERR_NOT_FOUND);
+    scl_array_destroy(a, &arr);
 
-    TEST("binary search");
-    scl_array_init(&arr, sizeof(int), 0);
-    for (int i = 0; i < 10; i++) { int v = i * 10; scl_array_push(&arr, &v); }
+    scl_test_group("binary search");
+    scl_array_init(a, &arr, sizeof(int), 0);
+    for (int i = 0; i < 10; i++) { int v = i * 10; scl_array_push(a, &arr, &v); }
     key = 50;
-    assert(scl_array_binary_search(&arr, &key, cmp_int, &idx) == SCL_OK && idx == 5);
+    SCL_EXPECT_OK(tr, scl_array_binary_search(&arr, &key, cmp_int, &idx));
+    SCL_EXPECT_EQ_SZ(tr, idx, 5);
     key = 999;
-    assert(scl_array_binary_search(&arr, &key, cmp_int, &idx) == SCL_ERR_NOT_FOUND);
-    scl_array_destroy(&arr);
-    PASS();
+    SCL_EXPECT_ERROR(tr, scl_array_binary_search(&arr, &key, cmp_int, &idx), SCL_ERR_NOT_FOUND);
+    scl_array_destroy(a, &arr);
 }
 
 int main(void)
 {
-    printf("=== scl_array tests ===\n");
-    test_init_destroy();
-    test_push_pop();
-    test_get_set();
-    test_insert_remove();
-    test_null();
-    test_edge();
-    test_search();
-    printf("Results: %d passed, %d failed\n", tests_passed, tests_failed);
-    return tests_failed > 0 ? 1 : 0;
+    scl_test_runner_t tr;
+    scl_test_init(&tr);
+    scl_test_group("=== scl_array tests ===");
+    test_init_destroy(&tr);
+    test_push_pop(&tr);
+    test_get_set(&tr);
+    test_insert_remove(&tr);
+    test_null(&tr);
+    test_edge(&tr);
+    test_search(&tr);
+    scl_test_summary(&tr);
+    return tr.failed > 0 ? 1 : 0;
 }

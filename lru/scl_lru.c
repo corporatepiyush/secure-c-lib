@@ -1,15 +1,9 @@
 #include "scl_lru.h"
-#include <stdlib.h>
 #include <string.h>
 
 #if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC optimize ("O3", "unroll-loops", "tree-vectorize", "inline")
 #endif
-
-static int scl_lru_default_cmp(const void *a, const void *b)
-{
-    return memcmp(a, b, 0);
-}
 
 static size_t scl_lru_default_hash(const void *key, size_t key_size)
 {
@@ -20,7 +14,7 @@ static size_t scl_lru_default_hash(const void *key, size_t key_size)
     return h;
 }
 
-scl_error_t scl_lru_init(scl_lru_t *cache, size_t key_size, size_t value_size, size_t capacity)
+scl_error_t scl_lru_init(scl_allocator_t *alloc, scl_lru_t *cache, size_t key_size, size_t value_size, size_t capacity)
 {
     if (!cache) return SCL_ERR_NULL_PTR;
     if (key_size == 0 || value_size == 0 || capacity == 0)
@@ -32,28 +26,28 @@ scl_error_t scl_lru_init(scl_lru_t *cache, size_t key_size, size_t value_size, s
     cache->count = 0;
     cache->key_size = key_size;
     cache->value_size = value_size;
-    cache->key_cmp = scl_lru_default_cmp;
+    cache->key_cmp = NULL;
     cache->key_hash = scl_lru_default_hash;
 
     cache->index_capacity = capacity * 2;
-    cache->index = calloc(cache->index_capacity, sizeof(scl_lru_node_t *));
+    cache->index = scl_calloc(alloc, cache->index_capacity, sizeof(scl_lru_node_t *), alignof(max_align_t));
     if (!cache->index) return SCL_ERR_OUT_OF_MEMORY;
 
     return SCL_OK;
 }
 
-void scl_lru_destroy(scl_lru_t *cache)
+void scl_lru_destroy(scl_allocator_t *alloc, scl_lru_t *cache)
 {
     if (!cache) return;
     scl_lru_node_t *cur = cache->head;
     while (cur) {
         scl_lru_node_t *next = cur->next;
-        free(cur->key);
-        free(cur->value);
-        free(cur);
+        scl_free(alloc, cur->key);
+        scl_free(alloc, cur->value);
+        scl_free(alloc, cur);
         cur = next;
     }
-    free(cache->index);
+    scl_free(alloc, cache->index);
     cache->head = cache->tail = NULL;
     cache->index = NULL;
     cache->count = 0;
@@ -91,18 +85,18 @@ static scl_lru_node_t *scl_lru_find_node(scl_lru_t *cache, const void *key)
     return NULL;
 }
 
-static void scl_lru_evict(scl_lru_t *cache)
+static void scl_lru_evict(scl_allocator_t *alloc, scl_lru_t *cache)
 {
     if (!cache->tail) return;
     scl_lru_node_t *old = cache->tail;
     scl_lru_detach(cache, old);
-    free(old->key);
-    free(old->value);
-    free(old);
+    scl_free(alloc, old->key);
+    scl_free(alloc, old->value);
+    scl_free(alloc, old);
     cache->count--;
 }
 
-scl_error_t scl_lru_put(scl_lru_t *cache, const void *key, const void *value)
+scl_error_t scl_lru_put(scl_allocator_t *alloc, scl_lru_t *cache, const void *key, const void *value)
 {
     if (!cache || !key || !value) return SCL_ERR_NULL_PTR;
 
@@ -114,17 +108,17 @@ scl_error_t scl_lru_put(scl_lru_t *cache, const void *key, const void *value)
     }
 
     if (cache->count == cache->capacity)
-        scl_lru_evict(cache);
+        scl_lru_evict(alloc, cache);
 
-    node = malloc(sizeof(scl_lru_node_t));
+    node = scl_alloc(alloc, sizeof(scl_lru_node_t), alignof(max_align_t));
     if (!node) return SCL_ERR_OUT_OF_MEMORY;
 
-    node->key = malloc(cache->key_size);
-    node->value = malloc(cache->value_size);
+    node->key = scl_alloc(alloc, cache->key_size, alignof(max_align_t));
+    node->value = scl_alloc(alloc, cache->value_size, alignof(max_align_t));
     if (!node->key || !node->value) {
-        free(node->key);
-        free(node->value);
-        free(node);
+        scl_free(alloc, node->key);
+        scl_free(alloc, node->value);
+        scl_free(alloc, node);
         return SCL_ERR_OUT_OF_MEMORY;
     }
 
@@ -158,7 +152,7 @@ bool scl_lru_contains(const scl_lru_t *cache, const void *key)
     return scl_lru_find_node((scl_lru_t *)cache, key) != NULL;
 }
 
-scl_error_t scl_lru_remove(scl_lru_t *cache, const void *key)
+scl_error_t scl_lru_remove(scl_allocator_t *alloc, scl_lru_t *cache, const void *key)
 {
     if (!cache || !key) return SCL_ERR_NULL_PTR;
 
@@ -166,22 +160,22 @@ scl_error_t scl_lru_remove(scl_lru_t *cache, const void *key)
     if (!node) return SCL_ERR_NOT_FOUND;
 
     scl_lru_detach(cache, node);
-    free(node->key);
-    free(node->value);
-    free(node);
+    scl_free(alloc, node->key);
+    scl_free(alloc, node->value);
+    scl_free(alloc, node);
     cache->count--;
     return SCL_OK;
 }
 
-void scl_lru_clear(scl_lru_t *cache)
+void scl_lru_clear(scl_allocator_t *alloc, scl_lru_t *cache)
 {
     if (!cache) return;
     scl_lru_node_t *cur = cache->head;
     while (cur) {
         scl_lru_node_t *next = cur->next;
-        free(cur->key);
-        free(cur->value);
-        free(cur);
+        scl_free(alloc, cur->key);
+        scl_free(alloc, cur->value);
+        scl_free(alloc, cur);
         cur = next;
     }
     cache->head = cache->tail = NULL;

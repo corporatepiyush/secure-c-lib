@@ -17,9 +17,9 @@ typedef struct {
     bool overwrite;
 } scl_ringbuf_t;
 
-scl_error_t scl_ringbuf_init(scl_ringbuf_t *rb, size_t element_size, size_t capacity,
+scl_error_t scl_ringbuf_init(scl_allocator_t *alloc, scl_ringbuf_t *rb, size_t element_size, size_t capacity,
                              bool overwrite) SCL_WARN_UNUSED;
-void        scl_ringbuf_destroy(scl_ringbuf_t *rb);
+void        scl_ringbuf_destroy(scl_allocator_t *alloc, scl_ringbuf_t *rb);
 scl_error_t scl_ringbuf_push(scl_ringbuf_t *rb, const void *element) SCL_WARN_UNUSED;
 scl_error_t scl_ringbuf_pop(scl_ringbuf_t *rb, void *out) SCL_WARN_UNUSED;
 scl_error_t scl_ringbuf_peek(const scl_ringbuf_t *rb, size_t index, void *out) SCL_WARN_UNUSED;

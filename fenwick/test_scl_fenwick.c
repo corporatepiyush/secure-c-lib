@@ -1,35 +1,48 @@
 #include "scl_fenwick.h"
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <assert.h>
+#include "../../testlib/scl_test.h"
 
-static int tests_passed = 0;
-static int tests_failed = 0;
-
-#define TEST(name) do { printf("  TEST: %s ... ", name); } while(0)
-#define PASS() do { printf("PASSED\n"); tests_passed++; } while(0)
-#define FAIL(msg) do { printf("FAILED: %s\n", msg); tests_failed++; } while(0)
-
-static void test_prefix_range(void)
+static void add_int(void *out, const void *a, const void *b)
 {
-    TEST("prefix and range sum");
-    int64_t data[] = {1, 2, 3, 4, 5};
-    scl_fenwick_t ft;
-    scl_fenwick_init(&ft, data, 5);
-    int64_t out;
-    scl_fenwick_prefix(&ft, 2, &out); assert(out == 6);
-    scl_fenwick_range(&ft, 1, 3, &out); assert(out == 9);
-    scl_fenwick_update(&ft, 2, 10);
-    scl_fenwick_prefix(&ft, 4, &out); assert(out == 25);
-    scl_fenwick_destroy(&ft);
-    PASS();
+    *(int *)out = *(const int *)a + *(const int *)b;
+}
+
+static void sub_int(void *out, const void *a, const void *b)
+{
+    *(int *)out = *(const int *)a - *(const int *)b;
+}
+
+static void test_basic(scl_test_runner_t *tr)
+{
+    scl_allocator_t *alloc = scl_allocator_default();
+    int data[] = {1, 2, 3, 4, 5};
+    scl_fenwick_t fw;
+    SCL_EXPECT_OK(tr, scl_fenwick_init(alloc, &fw, 5, sizeof(int), data, add_int, sub_int));
+
+    int p;
+    SCL_EXPECT_OK(tr, scl_fenwick_prefix(&fw, 2, &p));
+    SCL_EXPECT_EQ_I(tr, p, 1 + 2 + 3);
+
+    SCL_EXPECT_OK(tr, scl_fenwick_prefix(&fw, 4, &p));
+    SCL_EXPECT_EQ_I(tr, p, 1 + 2 + 3 + 4 + 5);
+
+    int q;
+    SCL_EXPECT_OK(tr, scl_fenwick_range_query(&fw, 1, 3, &q));
+    SCL_EXPECT_EQ_I(tr, q, 2 + 3 + 4);
+
+    int d = 10;
+    SCL_EXPECT_OK(tr, scl_fenwick_update(&fw, 2, &d));
+    SCL_EXPECT_OK(tr, scl_fenwick_prefix(&fw, 4, &p));
+    SCL_EXPECT_EQ_I(tr, p, 1 + 2 + 13 + 4 + 5);
+
+    scl_fenwick_destroy(alloc, &fw);
 }
 
 int main(void)
 {
-    printf("=== scl_fenwick tests ===\n");
-    test_prefix_range();
-    printf("Results: %d passed, %d failed\n", tests_passed, tests_failed);
-    return tests_failed > 0 ? 1 : 0;
+    scl_test_runner_t tr;
+    scl_test_init(&tr);
+    scl_test_group("scl_fenwick tests");
+    test_basic(&tr);
+    scl_test_summary(&tr);
+    return tr.failed > 0 ? 1 : 0;
 }

@@ -3,6 +3,7 @@
 #endif
 
 #include "scl_rand_prng.h"
+#include "../../stdlib/scl_stdlib.h"
 
 static inline uint64_t rotl(const uint64_t x, int k) {
     return (x << k) | (x >> (64 - k));
@@ -25,7 +26,7 @@ scl_error_t scl_rand_prng_init(scl_rand_prng_t *rng, uint64_t seed) {
 
 scl_error_t scl_rand_prng_init_array(scl_rand_prng_t *rng, const uint64_t state[4]) {
     if (!rng || !state) return SCL_ERR_NULL_PTR;
-    memcpy(rng->state, state, sizeof(rng->state));
+    scl_memcpy(rng->state, state, sizeof(rng->state));
     return SCL_OK;
 }
 
@@ -84,7 +85,7 @@ void scl_rand_prng_jump(scl_rand_prng_t *rng) {
 
 void scl_rand_prng_get_state(const scl_rand_prng_t *rng, uint64_t out_state[4]) {
     if (!rng || !out_state) return;
-    memcpy(out_state, rng->state, sizeof(rng->state));
+    scl_memcpy(out_state, rng->state, sizeof(rng->state));
 }
 
 void scl_rand_prng_fill(scl_rand_prng_t *rng, void *buf, size_t len) {
@@ -93,11 +94,11 @@ void scl_rand_prng_fill(scl_rand_prng_t *rng, void *buf, size_t len) {
     size_t i = 0;
     while (i + 8 <= len) {
         uint64_t val = scl_rand_prng_next(rng);
-        memcpy(p + i, &val, 8);
+        scl_memcpy(p + i, &val, 8);
         i += 8;
     }
     if (i < len) {
         uint64_t val = scl_rand_prng_next(rng);
-        memcpy(p + i, &val, len - i);
+        scl_memcpy(p + i, &val, len - i);
     }
 }

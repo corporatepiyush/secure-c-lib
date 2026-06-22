@@ -16,10 +16,10 @@ typedef struct {
     size_t count;
 } scl_deque_t;
 
-scl_error_t scl_deque_init(scl_deque_t *deque, size_t element_size, size_t initial_capacity) SCL_WARN_UNUSED;
-void        scl_deque_destroy(scl_deque_t *deque);
-scl_error_t scl_deque_push_front(scl_deque_t *deque, const void *element) SCL_WARN_UNUSED;
-scl_error_t scl_deque_push_back(scl_deque_t *deque, const void *element) SCL_WARN_UNUSED;
+scl_error_t scl_deque_init(scl_allocator_t *alloc, scl_deque_t *deque, size_t element_size, size_t initial_capacity) SCL_WARN_UNUSED;
+void        scl_deque_destroy(scl_allocator_t *alloc, scl_deque_t *deque);
+scl_error_t scl_deque_push_front(scl_allocator_t *alloc, scl_deque_t *deque, const void *element) SCL_WARN_UNUSED;
+scl_error_t scl_deque_push_back(scl_allocator_t *alloc, scl_deque_t *deque, const void *element) SCL_WARN_UNUSED;
 scl_error_t scl_deque_pop_front(scl_deque_t *deque, void *out) SCL_WARN_UNUSED;
 scl_error_t scl_deque_pop_back(scl_deque_t *deque, void *out) SCL_WARN_UNUSED;
 scl_error_t scl_deque_peek_front(const scl_deque_t *deque, void *out) SCL_WARN_UNUSED;

@@ -1,12 +1,11 @@
 #include "scl_ringbuf.h"
-#include <stdlib.h>
 #include <string.h>
 
 #if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC optimize ("O3", "unroll-loops", "tree-vectorize", "inline")
 #endif
 
-scl_error_t scl_ringbuf_init(scl_ringbuf_t *rb, size_t element_size, size_t capacity,
+scl_error_t scl_ringbuf_init(scl_allocator_t *alloc, scl_ringbuf_t *rb, size_t element_size, size_t capacity,
                              bool overwrite)
 {
     if (!rb) return SCL_ERR_NULL_PTR;
@@ -16,7 +15,7 @@ scl_error_t scl_ringbuf_init(scl_ringbuf_t *rb, size_t element_size, size_t capa
     if (scl_mul_overflow(capacity, element_size, &bytes))
         return SCL_ERR_SIZE_OVERFLOW;
 
-    rb->data = malloc(bytes);
+    rb->data = scl_alloc(alloc, bytes, alignof(max_align_t));
     if (!rb->data) return SCL_ERR_OUT_OF_MEMORY;
 
     rb->element_size = element_size;
@@ -27,10 +26,10 @@ scl_error_t scl_ringbuf_init(scl_ringbuf_t *rb, size_t element_size, size_t capa
     return SCL_OK;
 }
 
-void scl_ringbuf_destroy(scl_ringbuf_t *rb)
+void scl_ringbuf_destroy(scl_allocator_t *alloc, scl_ringbuf_t *rb)
 {
     if (rb) {
-        free(rb->data);
+        scl_free(alloc, rb->data);
         rb->data = NULL;
         rb->capacity = 0;
         rb->count = 0;

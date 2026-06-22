@@ -1,23 +1,11 @@
+#include "../testlib/scl_test.h"
 #include "scl_sort.h"
-#include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
-#include <assert.h>
-
-static int tests_passed = 0;
-static int tests_failed = 0;
-
-#define TEST(name) do { printf("  TEST: %s ... ", name); } while(0)
-#define PASS() do { printf("PASSED\n"); tests_passed++; } while(0)
-#define FAIL(msg) do { printf("FAILED: %s\n", msg); tests_failed++; } while(0)
 
 static int cmp_int(const void *a, const void *b)
 {
-    int x = *(const int *)a;
-    int y = *(const int *)b;
-    if (x < y) return -1;
-    if (x > y) return 1;
-    return 0;
+    int x = *(const int *)a, y = *(const int *)b;
+    return (x > y) - (x < y);
 }
 
 static int sort_check(const int *arr, size_t n)
@@ -27,82 +15,72 @@ static int sort_check(const int *arr, size_t n)
     return 1;
 }
 
-static void test_sorts(void)
+int main(void)
 {
+    scl_test_runner_t tr;
+    scl_test_init(&tr);
+    scl_allocator_t *a = scl_allocator_default();
+
     size_t n = 100;
     int orig[100], arr[100];
     for (size_t i = 0; i < n; i++) orig[i] = (int)(n - 1 - i);
 
-    TEST("quick sort");
+    scl_test_group("quick_sort");
     memcpy(arr, orig, n * sizeof(int));
-    assert(scl_sort_quick(arr, n, sizeof(int), cmp_int) == SCL_OK);
-    assert(sort_check(arr, n));
-    PASS();
+    SCL_EXPECT_OK(&tr, scl_sort_quick(arr, n, sizeof(int), cmp_int));
+    SCL_EXPECT_TRUE(&tr, sort_check(arr, n));
 
-    TEST("merge sort");
+    scl_test_group("merge_sort");
     memcpy(arr, orig, n * sizeof(int));
-    assert(scl_sort_merge(arr, n, sizeof(int), cmp_int) == SCL_OK);
-    assert(sort_check(arr, n));
-    PASS();
+    SCL_EXPECT_OK(&tr, scl_sort_merge(a, arr, n, sizeof(int), cmp_int));
+    SCL_EXPECT_TRUE(&tr, sort_check(arr, n));
 
-    TEST("heap sort");
+    scl_test_group("heap_sort");
     memcpy(arr, orig, n * sizeof(int));
-    assert(scl_sort_heap(arr, n, sizeof(int), cmp_int) == SCL_OK);
-    assert(sort_check(arr, n));
-    PASS();
+    SCL_EXPECT_OK(&tr, scl_sort_heap(arr, n, sizeof(int), cmp_int));
+    SCL_EXPECT_TRUE(&tr, sort_check(arr, n));
 
-    TEST("insertion sort");
+    scl_test_group("insertion_sort");
     memcpy(arr, orig, n * sizeof(int));
-    assert(scl_sort_insertion(arr, n, sizeof(int), cmp_int) == SCL_OK);
-    assert(sort_check(arr, n));
-    PASS();
+    SCL_EXPECT_OK(&tr, scl_sort_insertion(arr, n, sizeof(int), cmp_int));
+    SCL_EXPECT_TRUE(&tr, sort_check(arr, n));
 
-    TEST("selection sort");
+    scl_test_group("selection_sort");
     memcpy(arr, orig, n * sizeof(int));
-    assert(scl_sort_selection(arr, n, sizeof(int), cmp_int) == SCL_OK);
-    assert(sort_check(arr, n));
-    PASS();
+    SCL_EXPECT_OK(&tr, scl_sort_selection(arr, n, sizeof(int), cmp_int));
+    SCL_EXPECT_TRUE(&tr, sort_check(arr, n));
 
-    TEST("bubble sort");
+    scl_test_group("bubble_sort");
     memcpy(arr, orig, n * sizeof(int));
-    assert(scl_sort_bubble(arr, n, sizeof(int), cmp_int) == SCL_OK);
-    assert(sort_check(arr, n));
-    PASS();
+    SCL_EXPECT_OK(&tr, scl_sort_bubble(arr, n, sizeof(int), cmp_int));
+    SCL_EXPECT_TRUE(&tr, sort_check(arr, n));
 
-    TEST("shell sort");
+    scl_test_group("shell_sort");
     memcpy(arr, orig, n * sizeof(int));
-    assert(scl_sort_shell(arr, n, sizeof(int), cmp_int) == SCL_OK);
-    assert(sort_check(arr, n));
-    PASS();
+    SCL_EXPECT_OK(&tr, scl_sort_shell(arr, n, sizeof(int), cmp_int));
+    SCL_EXPECT_TRUE(&tr, sort_check(arr, n));
 
-    TEST("counting sort");
+    scl_test_group("counting_sort");
     int32_t cdata[] = {5, 3, 8, 1, 9, 2, 7, 4, 6, 0};
-    assert(scl_sort_counting(cdata, 10) == SCL_OK);
-    for (int32_t i = 0; i < 10; i++) assert(cdata[i] == i);
-    PASS();
+    SCL_EXPECT_OK(&tr, scl_sort_counting(a, cdata, 10));
+    for (int32_t i = 0; i < 10; i++)
+        SCL_EXPECT_EQ_I(&tr, i, cdata[i]);
 
-    TEST("radix sort");
+    scl_test_group("radix_sort");
     int32_t rdata[] = {170, 45, 75, 90, 2, 24, 802, 66};
-    assert(scl_sort_radix(rdata, 8) == SCL_OK);
-    assert(rdata[0] == 2 && rdata[7] == 802);
-    PASS();
+    SCL_EXPECT_OK(&tr, scl_sort_radix(a, rdata, 8));
+    SCL_EXPECT_EQ_I(&tr, 2, rdata[0]);
+    SCL_EXPECT_EQ_I(&tr, 802, rdata[7]);
 
-    TEST("bucket sort");
+    scl_test_group("bucket_sort");
     memcpy(arr, orig, n * sizeof(int));
-    assert(scl_sort_bucket(arr, n, sizeof(int), cmp_int) == SCL_OK);
-    assert(sort_check(arr, n));
-    PASS();
+    SCL_EXPECT_OK(&tr, scl_sort_bucket(a, arr, n, sizeof(int), cmp_int));
+    SCL_EXPECT_TRUE(&tr, sort_check(arr, n));
 
-    TEST("sort null checks");
-    assert(scl_sort_quick(NULL, 10, sizeof(int), cmp_int) == SCL_ERR_NULL_PTR);
-    assert(scl_sort_quick(arr, 10, sizeof(int), NULL) == SCL_ERR_NULL_PTR);
-    PASS();
-}
+    scl_test_group("null_checks");
+    SCL_EXPECT_EQ_I(&tr, SCL_ERR_NULL_PTR, scl_sort_quick(NULL, 10, sizeof(int), cmp_int));
+    SCL_EXPECT_EQ_I(&tr, SCL_ERR_NULL_PTR, scl_sort_quick(arr, 10, sizeof(int), NULL));
 
-int main(void)
-{
-    printf("=== scl_sort tests ===\n");
-    test_sorts();
-    printf("Results: %d passed, %d failed\n", tests_passed, tests_failed);
-    return tests_failed > 0 ? 1 : 0;
+    scl_test_summary(&tr);
+    return tr.failed > 0 ? 1 : 0;
 }

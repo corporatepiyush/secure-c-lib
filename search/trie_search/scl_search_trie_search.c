@@ -1,25 +1,28 @@
-#if defined(__GNUC__) && !defined(__clang__)
-#pragma GCC optimize ("O3", "unroll-loops", "tree-vectorize", "inline")
-#endif
-
 #include "scl_search_trie_search.h"
-#include <stdlib.h>
 #include <string.h>
 
-static scl_search_trie_node_t *node_create(void)
+static scl_search_trie_node_t *node_create(scl_allocator_t *alloc)
 {
-    scl_search_trie_node_t *n = (scl_search_trie_node_t *)calloc(1, sizeof(scl_search_trie_node_t));
+    scl_search_trie_node_t *n = (scl_search_trie_node_t *)scl_calloc(alloc, 1, sizeof(scl_search_trie_node_t), alignof(max_align_t));
     if (n) n->is_end = false;
     return n;
 }
 
-scl_error_t scl_search_trie_init(scl_search_trie_t **trie)
+static bool node_has_children(const scl_search_trie_node_t *node)
+{
+    for (int i = 0; i < SCL_SEARCH_TRIE_ALPHABET_SIZE; i++)
+        if (node->children[i]) return true;
+    return false;
+}
+
+scl_error_t scl_search_trie_init(scl_allocator_t *alloc, scl_search_trie_t **trie)
 {
     if (__builtin_expect(trie == NULL, 0)) return SCL_ERR_NULL_PTR;
-    scl_search_trie_t *t = (scl_search_trie_t *)malloc(sizeof(scl_search_trie_t));
+    scl_search_trie_t *t = (scl_search_trie_t *)scl_alloc(alloc, sizeof(scl_search_trie_t), alignof(max_align_t));
     if (__builtin_expect(t == NULL, 0)) return SCL_ERR_OUT_OF_MEMORY;
-    t->root = node_create();
-    if (!t->root) { free(t); return SCL_ERR_OUT_OF_MEMORY; }
+    t->root = node_create(alloc);
+    if (!t->root) { scl_free(alloc, t); return SCL_ERR_OUT_OF_MEMORY; }
+    t->alloc = alloc;
     *trie = t;
     return SCL_OK;
 }
@@ -32,7 +35,7 @@ scl_error_t scl_search_trie_insert(scl_search_trie_t *trie, const char *word)
     while (*word) {
         unsigned char c = (unsigned char)*word;
         if (!node->children[c]) {
-            node->children[c] = node_create();
+            node->children[c] = node_create(trie->alloc);
             if (!node->children[c]) return SCL_ERR_OUT_OF_MEMORY;
         }
         node = node->children[c];
@@ -68,30 +71,10 @@ bool scl_search_trie_starts_with(const scl_search_trie_t *trie, const char *pref
     return true;
 }
 
-static bool node_has_children(const scl_search_trie_node_t *node)
-{
-    for (int i = 0; i < SCL_SEARCH_TRIE_ALPHABET_SIZE; i++)
-        if (node->children[i]) return true;
-    return false;
-}
-
-static bool delete_recursive(scl_search_trie_node_t *node, const char *word)
-{
-    if (!*word) {
-        if (!node->is_end) return false;
-        node->is_end = false;
-        return !node_has_children(node);
-    }
-    unsigned char c = (unsigned char)*word;
-    if (!node->children[c]) return false;
-    bool should_delete = delete_recursive(node->children[c], word + 1);
-    if (should_delete) {
-        free(node->children[c]);
-        node->children[c] = NULL;
-        return !node_has_children(node) && !node->is_end;
-    }
-    return false;
-}
+typedef struct {
+    scl_search_trie_node_t *node;
+    const char *word;
+} trie_del_frame_t;
 
 scl_error_t scl_search_trie_delete(scl_search_trie_t *trie, const char *word)
 {
@@ -99,21 +82,59 @@ scl_error_t scl_search_trie_delete(scl_search_trie_t *trie, const char *word)
     if (__builtin_expect(word == NULL, 0)) return SCL_ERR_NULL_PTR;
     if (!trie->root) return SCL_ERR_NOT_FOUND;
     if (!scl_search_trie_search(trie, word)) return SCL_ERR_NOT_FOUND;
-    delete_recursive(trie->root, word);
-    return SCL_OK;
-}
 
-static void destroy_node(scl_search_trie_node_t *node)
-{
-    if (!node) return;
-    for (int i = 0; i < SCL_SEARCH_TRIE_ALPHABET_SIZE; i++)
-        destroy_node(node->children[i]);
-    free(node);
+    trie_del_frame_t stack[1024];
+    int sp = 0;
+    scl_search_trie_node_t *node = trie->root;
+    const char *w = word;
+
+    while (*w) {
+        unsigned char c = (unsigned char)*w;
+        stack[sp].node = node;
+        stack[sp].word = w;
+        sp++;
+        node = node->children[c];
+        w++;
+    }
+    node->is_end = false;
+
+    while (sp > 0) {
+        sp--;
+        scl_search_trie_node_t *parent = stack[sp].node;
+        unsigned char c = (unsigned char)stack[sp].word[0];
+        if (!node_has_children(node) && !node->is_end) {
+            scl_free(trie->alloc, node);
+            parent->children[c] = NULL;
+        }
+        node = parent;
+    }
+
+    return SCL_OK;
 }
 
 void scl_search_trie_destroy(scl_search_trie_t *trie)
 {
     if (!trie) return;
-    destroy_node(trie->root);
-    free(trie);
+    if (!trie->root) { scl_free(trie->alloc, trie); return; }
+
+    scl_search_trie_node_t **stack = (scl_search_trie_node_t **)scl_alloc(trie->alloc, 4096 * sizeof(scl_search_trie_node_t *), alignof(max_align_t));
+    if (!stack) return;
+
+    int sp = 0;
+    stack[sp++] = trie->root;
+
+    while (sp > 0) {
+        scl_search_trie_node_t *node = stack[--sp];
+        if (!node) continue;
+        for (int i = 0; i < SCL_SEARCH_TRIE_ALPHABET_SIZE; i++) {
+            if (node->children[i]) {
+                if (sp >= 4095) break;
+                stack[sp++] = node->children[i];
+            }
+        }
+        scl_free(trie->alloc, node);
+    }
+
+    scl_free(trie->alloc, stack);
+    scl_free(trie->alloc, trie);
 }

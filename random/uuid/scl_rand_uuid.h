@@ -7,7 +7,6 @@
 #endif
 
 #include "../../common/scl_common.h"
-#include <string.h>
 
 typedef struct {
     uint8_t bytes[16];
