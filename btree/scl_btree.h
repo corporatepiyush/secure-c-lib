@@ -9,18 +9,30 @@
 #endif
 
 #define SCL_BTREE_DEGREE 4
+#define SCL_BTREE_MAX_KEYS (2 * SCL_BTREE_DEGREE - 1)
+#define SCL_BTREE_MAX_CHILDREN (2 * SCL_BTREE_DEGREE)
 
+/* B-Tree node with flat arrays backed by a single allocation.
+ * Memory layout (single block):
+ *   [scl_btree_node_t header] [keys: key_size * max_keys] [values: value_size * max_keys] [children: ptr * max_children] */
 typedef struct scl_btree_node {
-    void **keys;
-    void **values;
-    struct scl_btree_node **children;
     size_t count;
     bool leaf;
 } scl_btree_node_t;
 
+static inline unsigned char *scl_btree_node_keys(scl_btree_node_t *n) {
+    return (unsigned char *)(n + 1);
+}
+static inline unsigned char *scl_btree_node_vals(scl_btree_node_t *n, size_t ksz, size_t maxk) {
+    return (unsigned char *)(n + 1) + ksz * maxk;
+}
+static inline scl_btree_node_t **scl_btree_node_children(scl_btree_node_t *n, size_t ksz, size_t vsz, size_t maxk) {
+    return (scl_btree_node_t **)((unsigned char *)(n + 1) + ksz * maxk + vsz * maxk);
+}
+
 typedef struct {
     scl_btree_node_t *root;
-    size_t element_size;
+    size_t key_size;
     size_t value_size;
     size_t count;
     scl_cmp_func_t cmp;

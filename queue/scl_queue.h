@@ -12,6 +12,7 @@ typedef struct {
     unsigned char *data;
     size_t element_size;
     size_t capacity;
+    size_t mask;         /* capacity - 1 (power-of-2) */
     size_t head;
     size_t tail;
     size_t count;

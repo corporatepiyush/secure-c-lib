@@ -118,6 +118,43 @@ static inline bool scl_mul_overflow(size_t a, size_t b, size_t *out) {
     return false;
 }
 
+/* ── Cache-line constants (x86-64 / ARM64) ──────────────────── */
+#if defined(SCL_ARCH_ARM64)
+#define SCL_CACHE_LINE_SIZE 128
+#else
+#define SCL_CACHE_LINE_SIZE 64
+#endif
+
+#define SCL_CACHE_ALIGNED __attribute__((aligned(SCL_CACHE_LINE_SIZE)))
+
+/* ── Memory prefetching ─────────────────────────────────────── */
+static inline void scl_prefetch_r(const void *ptr) {
+#if defined(SCL_ARCH_X86_64)
+    __builtin_prefetch(ptr, 0, 3);
+#elif defined(SCL_ARCH_ARM64)
+    __builtin_prefetch(ptr, 0, 3);
+#else
+    (void)ptr;
+#endif
+}
+
+static inline void scl_prefetch_w(const void *ptr) {
+#if defined(SCL_ARCH_X86_64)
+    __builtin_prefetch(ptr, 1, 3);
+#elif defined(SCL_ARCH_ARM64)
+    __builtin_prefetch(ptr, 1, 3);
+#else
+    (void)ptr;
+#endif
+}
+
+/* ── Cold-path outlining (use for error handlers) ───────────── */
+#ifdef __GNUC__
+#define SCL_COLD_PATH __attribute__((cold, noinline))
+#else
+#define SCL_COLD_PATH
+#endif
+
 /* ── Alignment helpers ──────────────────────────────────────── */
 static inline size_t scl_align_forward(size_t offset, size_t align) {
     size_t mask = align - 1;

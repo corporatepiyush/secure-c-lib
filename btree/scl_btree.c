@@ -5,37 +5,15 @@
 #pragma GCC optimize ("O3", "unroll-loops", "tree-vectorize", "inline")
 #endif
 
-static scl_btree_node_t *scl_btree_create_node(scl_allocator_t *alloc, bool leaf, int t, size_t key_size, size_t value_size)
+static scl_btree_node_t *scl_btree_create_node(scl_allocator_t *alloc, bool leaf, int t,
+                                                size_t ksz, size_t vsz)
 {
-    scl_btree_node_t *node = scl_alloc(alloc, sizeof(scl_btree_node_t), alignof(max_align_t));
+    size_t maxk = (size_t)(2 * t - 1);
+    size_t maxc = (size_t)(2 * t);
+    size_t sz = sizeof(scl_btree_node_t) + ksz * maxk + vsz * maxk + sizeof(scl_btree_node_t *) * maxc;
+    scl_btree_node_t *node = scl_alloc(alloc, sz, alignof(max_align_t));
     if (!node) return NULL;
-
-    size_t max_keys = 2 * t - 1;
-    node->keys = scl_calloc(alloc, max_keys, sizeof(void *), alignof(max_align_t));
-    node->values = scl_calloc(alloc, max_keys, sizeof(void *), alignof(max_align_t));
-    node->children = scl_calloc(alloc, 2 * t, sizeof(scl_btree_node_t *), alignof(max_align_t));
-    if (!node->keys || !node->values || !node->children) {
-        scl_free(alloc, node->keys);
-        scl_free(alloc, node->values);
-        scl_free(alloc, node->children);
-        scl_free(alloc, node);
-        return NULL;
-    }
-    for (size_t i = 0; i < max_keys; i++) {
-        node->keys[i] = scl_alloc(alloc, key_size, alignof(max_align_t));
-        node->values[i] = scl_alloc(alloc, value_size, alignof(max_align_t));
-        if (!node->keys[i] || !node->values[i]) {
-            for (size_t j = 0; j <= i; j++) {
-                scl_free(alloc, node->keys[j]);
-                scl_free(alloc, node->values[j]);
-            }
-            scl_free(alloc, node->keys);
-            scl_free(alloc, node->values);
-            scl_free(alloc, node->children);
-            scl_free(alloc, node);
-            return NULL;
-        }
-    }
+    memset(node, 0, sz);
     node->count = 0;
     node->leaf = leaf;
     return node;
@@ -48,29 +26,16 @@ void scl_btree_destroy(scl_allocator_t *alloc, scl_btree_t *tree)
     scl_btree_node_t *stack[256];
     int sp = 0;
     stack[sp++] = tree->root;
-    scl_btree_node_t *stack2[256];
-    int sp2 = 0;
 
     while (sp > 0) {
         scl_btree_node_t *node = stack[--sp];
-        stack2[sp2++] = node;
         if (!node->leaf) {
+            size_t maxk = (size_t)(2 * tree->t - 1);
+            scl_btree_node_t **ch = scl_btree_node_children(node, tree->key_size, tree->value_size, maxk);
             for (size_t i = 0; i <= node->count; i++)
-                if (node->children[i])
-                    stack[sp++] = node->children[i];
+                if (ch[i])
+                    stack[sp++] = ch[i];
         }
-    }
-
-    while (sp2 > 0) {
-        scl_btree_node_t *node = stack2[--sp2];
-        size_t max_keys = 2 * tree->t - 1;
-        for (size_t i = 0; i < max_keys; i++) {
-            scl_free(alloc, node->keys[i]);
-            scl_free(alloc, node->values[i]);
-        }
-        scl_free(alloc, node->keys);
-        scl_free(alloc, node->values);
-        scl_free(alloc, node->children);
         scl_free(alloc, node);
     }
 
@@ -88,7 +53,7 @@ scl_error_t scl_btree_init(scl_allocator_t *alloc, scl_btree_t *tree, size_t key
     tree->root = scl_btree_create_node(alloc, true, degree, key_size, value_size);
     if (!tree->root) return SCL_ERR_OUT_OF_MEMORY;
 
-    tree->element_size = key_size;
+    tree->key_size = key_size;
     tree->value_size = value_size;
     tree->count = 0;
     tree->cmp = cmp;
@@ -97,34 +62,46 @@ scl_error_t scl_btree_init(scl_allocator_t *alloc, scl_btree_t *tree, size_t key
 }
 
 static void scl_btree_split_child(scl_allocator_t *alloc, scl_btree_node_t *parent, size_t i, int t,
-                                   size_t key_size, size_t value_size)
+                                   size_t ksz, size_t vsz)
 {
-    scl_btree_node_t *child = parent->children[i];
-    scl_btree_node_t *new_child = scl_btree_create_node(alloc, child->leaf, t, key_size, value_size);
+    size_t maxk = (size_t)(2 * t - 1);
+    scl_btree_node_t **pch = scl_btree_node_children(parent, ksz, vsz, maxk);
+    scl_btree_node_t *child = pch[i];
+    scl_btree_node_t *new_child = scl_btree_create_node(alloc, child->leaf, t, ksz, vsz);
+    if (!new_child) return;
 
-    new_child->count = t - 1;
+    unsigned char *ck = scl_btree_node_keys(child);
+    unsigned char *cv = scl_btree_node_vals(child, ksz, maxk);
+    unsigned char *nk = scl_btree_node_keys(new_child);
+    unsigned char *nv = scl_btree_node_vals(new_child, ksz, maxk);
+    scl_btree_node_t **cch = scl_btree_node_children(child, ksz, vsz, maxk);
+    scl_btree_node_t **nch = scl_btree_node_children(new_child, ksz, vsz, maxk);
+
+    new_child->count = (size_t)(t - 1);
     for (int j = 0; j < t - 1; j++) {
-        memcpy(new_child->keys[j], child->keys[j + t], key_size);
-        memcpy(new_child->values[j], child->values[j + t], value_size);
+        memcpy(nk + (size_t)j * ksz, ck + (size_t)(j + t) * ksz, ksz);
+        memcpy(nv + (size_t)j * vsz, cv + (size_t)(j + t) * vsz, vsz);
     }
 
     if (!child->leaf) {
         for (int j = 0; j < t; j++)
-            new_child->children[j] = child->children[j + t];
+            nch[j] = cch[j + t];
     }
 
-    child->count = t - 1;
+    child->count = (size_t)(t - 1);
 
-    for (int j = (int)parent->count; j >= (int)i + 1; j--)
-        parent->children[j + 1] = parent->children[j];
-    parent->children[i + 1] = new_child;
+    for (size_t j = parent->count; j > i; j--)
+        pch[j + 1] = pch[j];
+    pch[i + 1] = new_child;
 
-    for (int j = (int)parent->count - 1; j >= (int)i; j--) {
-        memcpy(parent->keys[j + 1], parent->keys[j], key_size);
-        memcpy(parent->values[j + 1], parent->values[j], value_size);
+    unsigned char *pk = scl_btree_node_keys(parent);
+    unsigned char *pv = scl_btree_node_vals(parent, ksz, maxk);
+    for (size_t j = parent->count; j > i; j--) {
+        memcpy(pk + j * ksz, pk + (j - 1) * ksz, ksz);
+        memcpy(pv + j * vsz, pv + (j - 1) * vsz, vsz);
     }
-    memcpy(parent->keys[i], child->keys[t - 1], key_size);
-    memcpy(parent->values[i], child->values[t - 1], value_size);
+    memcpy(pk + i * ksz, ck + (size_t)(t - 1) * ksz, ksz);
+    memcpy(pv + i * vsz, cv + (size_t)(t - 1) * vsz, vsz);
     parent->count++;
 }
 
@@ -132,48 +109,59 @@ scl_error_t scl_btree_insert(scl_allocator_t *alloc, scl_btree_t *tree, const vo
 {
     if (!tree || !key || !value) return SCL_ERR_NULL_PTR;
 
-    if (tree->root->count == (size_t)(2 * tree->t - 1)) {
-        scl_btree_node_t *new_root = scl_btree_create_node(alloc, false, tree->t,
-                                                           tree->element_size,
-                                                           tree->value_size);
+    int t = tree->t;
+    size_t ksz = tree->key_size;
+    size_t vsz = tree->value_size;
+    size_t maxk = (size_t)(2 * t - 1);
+    scl_cmp_func_t cmp = tree->cmp;
+
+    if (tree->root->count == maxk) {
+        scl_btree_node_t *new_root = scl_btree_create_node(alloc, false, t, ksz, vsz);
         if (!new_root) return SCL_ERR_OUT_OF_MEMORY;
-        new_root->children[0] = tree->root;
+        scl_btree_node_t **nrch = scl_btree_node_children(new_root, ksz, vsz, maxk);
+        nrch[0] = tree->root;
         tree->root = new_root;
-        scl_btree_split_child(alloc, new_root, 0, tree->t, tree->element_size, tree->value_size);
+        scl_btree_split_child(alloc, new_root, 0, t, ksz, vsz);
     }
 
     scl_btree_node_t *node = tree->root;
-    while (1) {
-        int i = (int)node->count - 1;
+
+    for (;;) {
+        unsigned char *nk = scl_btree_node_keys(node);
+        unsigned char *nv = scl_btree_node_vals(node, ksz, maxk);
+
         if (node->leaf) {
-            while (i >= 0 && tree->cmp(key, node->keys[i]) < 0) {
-                memcpy(node->keys[i + 1], node->keys[i], tree->element_size);
-                memcpy(node->values[i + 1], node->values[i], tree->value_size);
+            int i = (int)node->count - 1;
+            while (i >= 0 && cmp(key, nk + (size_t)i * ksz) < 0) {
+                memcpy(nk + (size_t)(i + 1) * ksz, nk + (size_t)i * ksz, ksz);
+                memcpy(nv + (size_t)(i + 1) * vsz, nv + (size_t)i * vsz, vsz);
                 i--;
             }
             i++;
-            if (i < (int)node->count && tree->cmp(key, node->keys[i]) == 0) {
-                memcpy(node->values[i], value, tree->value_size);
+            if ((size_t)i < node->count && cmp(key, nk + (size_t)i * ksz) == 0) {
+                memcpy(nv + (size_t)i * vsz, value, vsz);
                 return SCL_OK;
             }
-            memcpy(node->keys[i], key, tree->element_size);
-            memcpy(node->values[i], value, tree->value_size);
+            memcpy(nk + (size_t)i * ksz, key, ksz);
+            memcpy(nv + (size_t)i * vsz, value, vsz);
             node->count++;
             break;
         } else {
-            while (i >= 0 && tree->cmp(key, node->keys[i]) < 0)
+            int i = (int)node->count - 1;
+            while (i >= 0 && cmp(key, nk + (size_t)i * ksz) < 0)
                 i--;
             i++;
-            if (i < (int)node->count && tree->cmp(key, node->keys[i]) == 0) {
-                memcpy(node->values[i], value, tree->value_size);
+            if ((size_t)i < node->count && cmp(key, nk + (size_t)i * ksz) == 0) {
+                memcpy(nv + (size_t)i * vsz, value, vsz);
                 return SCL_OK;
             }
-            if (node->children[i]->count == (size_t)(2 * tree->t - 1)) {
-                scl_btree_split_child(alloc, node, i, tree->t, tree->element_size, tree->value_size);
-                if (tree->cmp(key, node->keys[i]) > 0)
+            scl_btree_node_t **ch = scl_btree_node_children(node, ksz, vsz, maxk);
+            if (ch[i]->count == maxk) {
+                scl_btree_split_child(alloc, node, (size_t)i, t, ksz, vsz);
+                if (cmp(key, scl_btree_node_keys(node) + (size_t)i * ksz) > 0)
                     i++;
             }
-            node = node->children[i];
+            node = scl_btree_node_children(node, ksz, vsz, maxk)[(size_t)i];
         }
     }
 
@@ -185,17 +173,31 @@ scl_error_t scl_btree_get(const scl_btree_t *tree, const void *key, void *out_va
 {
     if (!tree || !key || !out_value) return SCL_ERR_NULL_PTR;
 
+    int t = tree->t;
+    size_t ksz = tree->key_size;
+    size_t vsz = tree->value_size;
+    size_t maxk = (size_t)(2 * t - 1);
+    scl_cmp_func_t cmp = tree->cmp;
+
     scl_btree_node_t *node = tree->root;
     while (node) {
-        int i = 0;
-        while (i < (int)node->count && tree->cmp(key, node->keys[i]) > 0)
-            i++;
-        if (i < (int)node->count && tree->cmp(key, node->keys[i]) == 0) {
-            memcpy(out_value, node->values[i], tree->value_size);
-            return SCL_OK;
+        unsigned char *nk = scl_btree_node_keys(node);
+        unsigned char *nv = scl_btree_node_vals(node, ksz, maxk);
+
+        size_t lo = 0, hi = node->count;
+        while (lo < hi) {
+            size_t mid = lo + (hi - lo) / 2;
+            int r = cmp(key, nk + mid * ksz);
+            if (r == 0) {
+                memcpy(out_value, nv + mid * vsz, vsz);
+                return SCL_OK;
+            }
+            if (r < 0) hi = mid;
+            else lo = mid + 1;
         }
         if (node->leaf) break;
-        node = node->children[i];
+        scl_btree_node_t **ch = scl_btree_node_children(node, ksz, vsz, maxk);
+        node = ch[lo];
     }
     return SCL_ERR_NOT_FOUND;
 }
@@ -203,15 +205,27 @@ scl_error_t scl_btree_get(const scl_btree_t *tree, const void *key, void *out_va
 bool scl_btree_contains(const scl_btree_t *tree, const void *key)
 {
     if (!tree || !key) return false;
+
+    int t = tree->t;
+    size_t ksz = tree->key_size;
+    size_t maxk = (size_t)(2 * t - 1);
+    scl_cmp_func_t cmp = tree->cmp;
+
     scl_btree_node_t *node = tree->root;
     while (node) {
-        int i = 0;
-        while (i < (int)node->count && tree->cmp(key, node->keys[i]) > 0)
-            i++;
-        if (i < (int)node->count && tree->cmp(key, node->keys[i]) == 0)
-            return true;
+        unsigned char *nk = scl_btree_node_keys(node);
+
+        size_t lo = 0, hi = node->count;
+        while (lo < hi) {
+            size_t mid = lo + (hi - lo) / 2;
+            int r = cmp(key, nk + mid * ksz);
+            if (r == 0) return true;
+            if (r < 0) hi = mid;
+            else lo = mid + 1;
+        }
         if (node->leaf) break;
-        node = node->children[i];
+        scl_btree_node_t **ch = scl_btree_node_children(node, ksz, 0, maxk);
+        node = ch[lo];
     }
     return false;
 }

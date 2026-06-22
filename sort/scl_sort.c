@@ -5,12 +5,27 @@
 #pragma GCC optimize ("O3", "unroll-loops", "tree-vectorize", "inline")
 #endif
 
-static void scl_sort_swap(unsigned char *a, unsigned char *b, size_t element_size)
+static void scl_sort_swap(unsigned char *SCL_RESTRICT a, unsigned char *SCL_RESTRICT b, size_t n)
 {
-    while (element_size--) {
-        unsigned char t = *a;
-        *a++ = *b;
-        *b++ = t;
+    while (n >= sizeof(uint64_t)) {
+        uint64_t t;
+        memcpy(&t, a, sizeof(uint64_t));
+        memcpy(a, b, sizeof(uint64_t));
+        memcpy(b, &t, sizeof(uint64_t));
+        a += sizeof(uint64_t); b += sizeof(uint64_t); n -= sizeof(uint64_t);
+    }
+    if (n & 4) {
+        uint32_t t;
+        memcpy(&t, a, 4); memcpy(a, b, 4); memcpy(b, &t, 4);
+        a += 4; b += 4;
+    }
+    if (n & 2) {
+        uint16_t t;
+        memcpy(&t, a, 2); memcpy(a, b, 2); memcpy(b, &t, 2);
+        a += 2; b += 2;
+    }
+    if (n & 1) {
+        unsigned char t = *a; *a = *b; *b = t;
     }
 }
 

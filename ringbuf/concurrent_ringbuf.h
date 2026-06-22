@@ -9,11 +9,14 @@
 #endif
 
 typedef struct {
+    /* Producer writes count, consumer reads head — separate cache lines */
     unsigned char *data;
     size_t element_size;
     size_t capacity;
-    atomic_size_t head;
-    atomic_size_t count;
+    size_t mask;
+    char _pad0[SCL_CACHE_LINE_SIZE - 4 * sizeof(size_t)];
+    atomic_size_t head SCL_CACHE_ALIGNED;
+    atomic_size_t count SCL_CACHE_ALIGNED;
 } scl_atomic_ringbuf_t;
 
 scl_error_t scl_atomic_ringbuf_init(scl_allocator_t *alloc, scl_atomic_ringbuf_t *rb, size_t element_size,

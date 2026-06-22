@@ -11,23 +11,27 @@
 typedef size_t (*scl_hash_func_t)(const void *key, size_t len);
 typedef bool   (*scl_hash_eq_func_t)(const void *a, const void *b, size_t key_size);
 
-typedef struct scl_hash_entry {
-    void *key;
-    size_t key_len;
-    void *value;
-    size_t value_size;
-    struct scl_hash_entry *next;
-} scl_hash_entry_t;
+/* Open-addressing hash table with inline key/value storage.
+ * No per-entry allocations — flat arrays, cache-friendly.
+ * Uses tombstone markers for deletion.
+ */
+typedef enum {
+    SCL_HASH_EMPTY    = 0,
+    SCL_HASH_OCCUPIED = 1,
+    SCL_HASH_TOMBSTONE = 2
+} scl_hash_slot_state_t;
 
 typedef struct {
-    scl_hash_entry_t **buckets;
-    size_t bucket_count;
+    unsigned char *keys;        /* key_size * capacity flat array */
+    unsigned char *values;      /* value_size * capacity flat array */
+    scl_hash_slot_state_t *states; /* state per slot */
+    size_t capacity;
+    size_t mask;                /* capacity - 1 (power-of-2) */
     size_t count;
     scl_hash_func_t hash_func;
     scl_hash_eq_func_t eq_func;
     size_t key_size;
     size_t value_size;
-    float load_factor;
 } scl_hash_t;
 
 scl_error_t scl_hash_init(scl_allocator_t *alloc, scl_hash_t *ht, size_t key_size, size_t value_size,

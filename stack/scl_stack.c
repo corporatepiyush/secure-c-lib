@@ -40,12 +40,14 @@ scl_error_t scl_stack_push(scl_allocator_t *alloc, scl_stack_t *stack, const voi
 {
     if (!stack || !element) return SCL_ERR_NULL_PTR;
 
-    if (stack->count == stack->capacity) {
+    size_t cnt = stack->count;
+    size_t es = stack->element_size;
+
+    if (scl_unlikely(cnt == stack->capacity)) {
         size_t new_cap = stack->capacity == 0 ? 4 : stack->capacity * 2;
-        size_t old_bytes, new_bytes;
-        if (scl_mul_overflow(stack->capacity, stack->element_size, &old_bytes))
-            old_bytes = 0;
-        if (scl_mul_overflow(new_cap, stack->element_size, &new_bytes))
+        size_t old_bytes = stack->capacity * es;
+        size_t new_bytes;
+        if (scl_mul_overflow(new_cap, es, &new_bytes))
             return SCL_ERR_SIZE_OVERFLOW;
         unsigned char *tmp = scl_realloc(alloc, stack->data, old_bytes, new_bytes, alignof(max_align_t));
         if (!tmp) return SCL_ERR_OUT_OF_MEMORY;
@@ -53,39 +55,28 @@ scl_error_t scl_stack_push(scl_allocator_t *alloc, scl_stack_t *stack, const voi
         stack->capacity = new_cap;
     }
 
-    size_t offset;
-    if (scl_mul_overflow(stack->count, stack->element_size, &offset))
-        return SCL_ERR_SIZE_OVERFLOW;
-
-    memcpy(stack->data + offset, element, stack->element_size);
-    stack->count++;
+    memcpy(stack->data + cnt * es, element, es);
+    stack->count = cnt + 1;
     return SCL_OK;
 }
 
 scl_error_t scl_stack_pop(scl_stack_t *stack, void *out)
 {
     if (!stack || !out) return SCL_ERR_NULL_PTR;
-    if (stack->count == 0) return SCL_ERR_EMPTY;
+    if (scl_unlikely(stack->count == 0)) return SCL_ERR_EMPTY;
 
+    size_t es = stack->element_size;
     stack->count--;
-    size_t offset;
-    if (scl_mul_overflow(stack->count, stack->element_size, &offset))
-        return SCL_ERR_SIZE_OVERFLOW;
-
-    memcpy(out, stack->data + offset, stack->element_size);
+    memcpy(out, stack->data + stack->count * es, es);
     return SCL_OK;
 }
 
 scl_error_t scl_stack_peek(const scl_stack_t *stack, void *out)
 {
     if (!stack || !out) return SCL_ERR_NULL_PTR;
-    if (stack->count == 0) return SCL_ERR_EMPTY;
+    if (scl_unlikely(stack->count == 0)) return SCL_ERR_EMPTY;
 
-    size_t offset;
-    if (scl_mul_overflow(stack->count - 1, stack->element_size, &offset))
-        return SCL_ERR_SIZE_OVERFLOW;
-
-    memcpy(out, stack->data + offset, stack->element_size);
+    memcpy(out, stack->data + (stack->count - 1) * stack->element_size, stack->element_size);
     return SCL_OK;
 }
 
@@ -103,11 +94,15 @@ scl_error_t scl_stack_search(const scl_stack_t *restrict stack, const void *rest
                              int (*cmp)(const void *, const void *),
                              size_t *restrict out_index)
 {
-    if (__builtin_expect(!stack || !key || !cmp || !out_index, 0))
+    if (scl_unlikely(!stack || !key || !cmp || !out_index))
         return SCL_ERR_NULL_PTR;
 
-    for (size_t i = 0; i < stack->count; i++) {
-        if (cmp(stack->data + i * stack->element_size, key) == 0) {
+    size_t cnt = stack->count;
+    size_t es = stack->element_size;
+    unsigned char *data = stack->data;
+
+    for (size_t i = 0; i < cnt; i++) {
+        if (cmp(data + i * es, key) == 0) {
             *out_index = i;
             return SCL_OK;
         }

@@ -59,62 +59,46 @@ scl_error_t scl_array_push(scl_allocator_t *alloc, scl_array_t *arr, const void 
 {
     if (!arr || !element) return SCL_ERR_NULL_PTR;
 
-    if (arr->count == arr->capacity) {
+    size_t cnt = arr->count;
+    size_t es = arr->element_size;
+
+    if (scl_unlikely(cnt == arr->capacity)) {
         size_t new_cap = arr->capacity == 0 ? 4 : arr->capacity * 2;
-        if (new_cap <= arr->capacity) {
-            if (arr->capacity == 0) new_cap = 4;
-            else return SCL_ERR_SIZE_OVERFLOW;
-        }
         scl_error_t err = scl_array_reserve(alloc, arr, new_cap);
         if (err != SCL_OK) return err;
     }
 
-    size_t offset;
-    if (scl_mul_overflow(arr->count, arr->element_size, &offset))
-        return SCL_ERR_SIZE_OVERFLOW;
-
-    memcpy(arr->data + offset, element, arr->element_size);
-    arr->count++;
+    memcpy(arr->data + cnt * es, element, es);
+    arr->count = cnt + 1;
     return SCL_OK;
 }
 
 scl_error_t scl_array_pop(scl_array_t *arr, void *out)
 {
     if (!arr || !out) return SCL_ERR_NULL_PTR;
-    if (arr->count == 0) return SCL_ERR_EMPTY;
+    if (scl_unlikely(arr->count == 0)) return SCL_ERR_EMPTY;
 
+    size_t es = arr->element_size;
     arr->count--;
-    size_t offset;
-    if (scl_mul_overflow(arr->count, arr->element_size, &offset))
-        return SCL_ERR_SIZE_OVERFLOW;
-
-    memcpy(out, arr->data + offset, arr->element_size);
+    memcpy(out, arr->data + arr->count * es, es);
     return SCL_OK;
 }
 
 scl_error_t scl_array_get(const scl_array_t *arr, size_t index, void *out)
 {
     if (!arr || !out) return SCL_ERR_NULL_PTR;
-    if (index >= arr->count) return SCL_ERR_INVALID_INDEX;
+    if (scl_unlikely(index >= arr->count)) return SCL_ERR_INVALID_INDEX;
 
-    size_t offset;
-    if (scl_mul_overflow(index, arr->element_size, &offset))
-        return SCL_ERR_SIZE_OVERFLOW;
-
-    memcpy(out, arr->data + offset, arr->element_size);
+    memcpy(out, arr->data + index * arr->element_size, arr->element_size);
     return SCL_OK;
 }
 
 scl_error_t scl_array_set(scl_array_t *arr, size_t index, const void *element)
 {
     if (!arr || !element) return SCL_ERR_NULL_PTR;
-    if (index >= arr->count) return SCL_ERR_INVALID_INDEX;
+    if (scl_unlikely(index >= arr->count)) return SCL_ERR_INVALID_INDEX;
 
-    size_t offset;
-    if (scl_mul_overflow(index, arr->element_size, &offset))
-        return SCL_ERR_SIZE_OVERFLOW;
-
-    memcpy(arr->data + offset, element, arr->element_size);
+    memcpy(arr->data + index * arr->element_size, element, arr->element_size);
     return SCL_OK;
 }
 
@@ -123,44 +107,40 @@ scl_error_t scl_array_insert(scl_allocator_t *alloc, scl_array_t *arr, size_t in
     if (!arr || !element) return SCL_ERR_NULL_PTR;
     if (index > arr->count) return SCL_ERR_INVALID_INDEX;
 
-    if (arr->count == arr->capacity) {
+    size_t cnt = arr->count;
+    size_t es = arr->element_size;
+
+    if (scl_unlikely(cnt == arr->capacity)) {
         size_t new_cap = arr->capacity == 0 ? 4 : arr->capacity * 2;
         scl_error_t err = scl_array_reserve(alloc, arr, new_cap);
         if (err != SCL_OK) return err;
     }
 
-    size_t offset;
-    if (scl_mul_overflow(index, arr->element_size, &offset))
-        return SCL_ERR_SIZE_OVERFLOW;
-
-    size_t tail_count = arr->count - index;
-    if (tail_count > 0) {
-        memmove(arr->data + offset + arr->element_size,
-                arr->data + offset,
-                tail_count * arr->element_size);
+    size_t tail = cnt - index;
+    if (tail > 0) {
+        memmove(arr->data + (index + 1) * es,
+                arr->data + index * es,
+                tail * es);
     }
 
-    memcpy(arr->data + offset, element, arr->element_size);
-    arr->count++;
+    memcpy(arr->data + index * es, element, es);
+    arr->count = cnt + 1;
     return SCL_OK;
 }
 
 scl_error_t scl_array_remove(scl_array_t *arr, size_t index, void *out)
 {
     if (!arr || !out) return SCL_ERR_NULL_PTR;
-    if (index >= arr->count) return SCL_ERR_INVALID_INDEX;
+    if (scl_unlikely(index >= arr->count)) return SCL_ERR_INVALID_INDEX;
 
-    size_t offset;
-    if (scl_mul_overflow(index, arr->element_size, &offset))
-        return SCL_ERR_SIZE_OVERFLOW;
+    size_t es = arr->element_size;
+    memcpy(out, arr->data + index * es, es);
 
-    memcpy(out, arr->data + offset, arr->element_size);
-
-    size_t tail_count = arr->count - index - 1;
-    if (tail_count > 0) {
-        memmove(arr->data + offset,
-                arr->data + offset + arr->element_size,
-                tail_count * arr->element_size);
+    size_t tail = arr->count - index - 1;
+    if (tail > 0) {
+        memmove(arr->data + index * es,
+                arr->data + (index + 1) * es,
+                tail * es);
     }
     arr->count--;
     return SCL_OK;
@@ -211,11 +191,15 @@ scl_error_t scl_array_linear_search(const scl_array_t *restrict arr, const void 
                                     int (*cmp)(const void *, const void *),
                                     size_t *restrict out_index)
 {
-    if (__builtin_expect(!arr || !key || !cmp || !out_index, 0))
+    if (scl_unlikely(!arr || !key || !cmp || !out_index))
         return SCL_ERR_NULL_PTR;
 
-    for (size_t i = 0; i < arr->count; i++) {
-        if (cmp(arr->data + i * arr->element_size, key) == 0) {
+    size_t cnt = arr->count;
+    size_t es = arr->element_size;
+    unsigned char *data = arr->data;
+
+    for (size_t i = 0; i < cnt; i++) {
+        if (cmp(data + i * es, key) == 0) {
             *out_index = i;
             return SCL_OK;
         }
@@ -227,13 +211,16 @@ scl_error_t scl_array_binary_search(const scl_array_t *restrict arr, const void 
                                     int (*cmp)(const void *, const void *),
                                     size_t *restrict out_index)
 {
-    if (__builtin_expect(!arr || !key || !cmp || !out_index, 0))
+    if (scl_unlikely(!arr || !key || !cmp || !out_index))
         return SCL_ERR_NULL_PTR;
 
     size_t lo = 0, hi = arr->count;
+    size_t es = arr->element_size;
+    unsigned char *data = arr->data;
+
     while (lo < hi) {
         size_t mid = lo + (hi - lo) / 2;
-        int c = cmp(arr->data + mid * arr->element_size, key);
+        int c = cmp(data + mid * es, key);
         if (c < 0)
             lo = mid + 1;
         else if (c > 0)

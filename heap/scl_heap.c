@@ -44,18 +44,39 @@ static inline size_t scl_heap_right(size_t i) { return 2 * i + 2; }
 
 static void scl_heap_swap(scl_heap_t *heap, size_t i, size_t j)
 {
-    unsigned char *a = heap->data + i * heap->element_size;
-    unsigned char *b = heap->data + j * heap->element_size;
-    size_t es = heap->element_size;
-    while (es--) { unsigned char t = *a; *a++ = *b; *b++ = t; }
+    unsigned char *SCL_RESTRICT a = heap->data + i * heap->element_size;
+    unsigned char *SCL_RESTRICT b = heap->data + j * heap->element_size;
+    size_t n = heap->element_size;
+    while (n >= sizeof(uint64_t)) {
+        uint64_t t;
+        memcpy(&t, a, sizeof(uint64_t));
+        memcpy(a, b, sizeof(uint64_t));
+        memcpy(b, &t, sizeof(uint64_t));
+        a += sizeof(uint64_t); b += sizeof(uint64_t); n -= sizeof(uint64_t);
+    }
+    if (n & 4) {
+        uint32_t t;
+        memcpy(&t, a, 4); memcpy(a, b, 4); memcpy(b, &t, 4);
+        a += 4; b += 4;
+    }
+    if (n & 2) {
+        uint16_t t;
+        memcpy(&t, a, 2); memcpy(a, b, 2); memcpy(b, &t, 2);
+        a += 2; b += 2;
+    }
+    if (n & 1) {
+        unsigned char t = *a; *a = *b; *b = t;
+    }
 }
 
 static void scl_heap_sift_up(scl_heap_t *heap, size_t i)
 {
+    unsigned char *data = heap->data;
+    size_t es = heap->element_size;
+    scl_cmp_func_t cmp = heap->cmp;
     while (i > 0) {
         size_t p = scl_heap_parent(i);
-        if (heap->cmp(heap->data + p * heap->element_size,
-                      heap->data + i * heap->element_size) <= 0)
+        if (cmp(data + p * es, data + i * es) <= 0)
             break;
         scl_heap_swap(heap, i, p);
         i = p;
@@ -64,17 +85,18 @@ static void scl_heap_sift_up(scl_heap_t *heap, size_t i)
 
 static void scl_heap_sift_down(scl_heap_t *heap, size_t i)
 {
+    unsigned char *data = heap->data;
+    size_t es = heap->element_size;
+    scl_cmp_func_t cmp = heap->cmp;
     size_t n = heap->count;
     while (1) {
         size_t smallest = i;
         size_t l = scl_heap_left(i);
         size_t r = scl_heap_right(i);
 
-        if (l < n && heap->cmp(heap->data + l * heap->element_size,
-                                heap->data + smallest * heap->element_size) < 0)
+        if (l < n && cmp(data + l * es, data + smallest * es) < 0)
             smallest = l;
-        if (r < n && heap->cmp(heap->data + r * heap->element_size,
-                                heap->data + smallest * heap->element_size) < 0)
+        if (r < n && cmp(data + r * es, data + smallest * es) < 0)
             smallest = r;
 
         if (smallest == i) break;
@@ -87,12 +109,14 @@ scl_error_t scl_heap_push(scl_allocator_t *alloc, scl_heap_t *heap, const void *
 {
     if (!heap || !element) return SCL_ERR_NULL_PTR;
 
-    if (heap->count == heap->capacity) {
+    size_t cnt = heap->count;
+    size_t es = heap->element_size;
+
+    if (scl_unlikely(cnt == heap->capacity)) {
         size_t new_cap = heap->capacity == 0 ? 4 : heap->capacity * 2;
-        size_t old_bytes, new_bytes;
-        if (scl_mul_overflow(heap->capacity, heap->element_size, &old_bytes))
-            old_bytes = 0;
-        if (scl_mul_overflow(new_cap, heap->element_size, &new_bytes))
+        size_t old_bytes = heap->capacity * es;
+        size_t new_bytes;
+        if (scl_mul_overflow(new_cap, es, &new_bytes))
             return SCL_ERR_SIZE_OVERFLOW;
         unsigned char *tmp = scl_realloc(alloc, heap->data, old_bytes, new_bytes, alignof(max_align_t));
         if (!tmp) return SCL_ERR_OUT_OF_MEMORY;
@@ -100,21 +124,22 @@ scl_error_t scl_heap_push(scl_allocator_t *alloc, scl_heap_t *heap, const void *
         heap->capacity = new_cap;
     }
 
-    memcpy(heap->data + heap->count * heap->element_size, element, heap->element_size);
-    scl_heap_sift_up(heap, heap->count);
-    heap->count++;
+    memcpy(heap->data + cnt * es, element, es);
+    scl_heap_sift_up(heap, cnt);
+    heap->count = cnt + 1;
     return SCL_OK;
 }
 
 scl_error_t scl_heap_pop(scl_heap_t *heap, void *out)
 {
     if (!heap || !out) return SCL_ERR_NULL_PTR;
-    if (heap->count == 0) return SCL_ERR_EMPTY;
+    if (scl_unlikely(heap->count == 0)) return SCL_ERR_EMPTY;
 
-    memcpy(out, heap->data, heap->element_size);
+    size_t es = heap->element_size;
+    memcpy(out, heap->data, es);
     heap->count--;
     if (heap->count > 0) {
-        memcpy(heap->data, heap->data + heap->count * heap->element_size, heap->element_size);
+        memcpy(heap->data, heap->data + heap->count * es, es);
         scl_heap_sift_down(heap, 0);
     }
     return SCL_OK;

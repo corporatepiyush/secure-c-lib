@@ -13,17 +13,20 @@ scl_error_t scl_queue_init(scl_allocator_t *alloc, scl_queue_t *queue, size_t el
     queue->data = NULL;
     queue->element_size = element_size;
     queue->capacity = 0;
+    queue->mask = 0;
     queue->head = 0;
     queue->tail = 0;
     queue->count = 0;
 
     if (initial_capacity > 0) {
+        size_t cap = scl_bit_ceil_sz(initial_capacity);
         size_t bytes;
-        if (scl_mul_overflow(initial_capacity, element_size, &bytes))
+        if (scl_mul_overflow(cap, element_size, &bytes))
             return SCL_ERR_SIZE_OVERFLOW;
         queue->data = scl_alloc(alloc, bytes, alignof(max_align_t));
         if (!queue->data) return SCL_ERR_OUT_OF_MEMORY;
-        queue->capacity = initial_capacity;
+        queue->capacity = cap;
+        queue->mask = cap - 1;
     }
     return SCL_OK;
 }
@@ -44,50 +47,50 @@ scl_error_t scl_queue_enqueue(scl_allocator_t *alloc, scl_queue_t *queue, const 
 {
     if (!queue || !element) return SCL_ERR_NULL_PTR;
 
-    if (queue->count == queue->capacity) {
-        size_t new_cap = queue->capacity == 0 ? 4 : queue->capacity * 2;
+    size_t cnt = queue->count;
+    size_t cap = queue->capacity;
+    size_t es = queue->element_size;
+
+    if (scl_unlikely(cnt == cap)) {
+        /* Grow — round to next power of 2 */
+        size_t new_cap = cap == 0 ? 4 : cap * 2;
         size_t new_bytes;
-        if (scl_mul_overflow(new_cap, queue->element_size, &new_bytes))
+        if (scl_mul_overflow(new_cap, es, &new_bytes))
             return SCL_ERR_SIZE_OVERFLOW;
 
         unsigned char *tmp = scl_alloc(alloc, new_bytes, alignof(max_align_t));
         if (!tmp) return SCL_ERR_OUT_OF_MEMORY;
 
-        for (size_t i = 0; i < queue->count; i++) {
-            size_t src_idx = (queue->head + i) % queue->capacity;
-            memcpy(tmp + i * queue->element_size,
-                   queue->data + src_idx * queue->element_size,
-                   queue->element_size);
+        size_t head = queue->head;
+        size_t mask = queue->mask;
+        for (size_t i = 0; i < cnt; i++) {
+            size_t src_idx = (head + i) & mask;
+            memcpy(tmp + i * es, queue->data + src_idx * es, es);
         }
 
         scl_free(alloc, queue->data);
         queue->data = tmp;
         queue->head = 0;
-        queue->tail = queue->count;
+        queue->tail = cnt;
         queue->capacity = new_cap;
+        queue->mask = new_cap - 1;
+        cap = new_cap;
     }
 
-    size_t offset;
-    if (scl_mul_overflow(queue->tail, queue->element_size, &offset))
-        return SCL_ERR_SIZE_OVERFLOW;
-
-    memcpy(queue->data + offset, element, queue->element_size);
-    queue->tail = (queue->tail + 1) % queue->capacity;
-    queue->count++;
+    memcpy(queue->data + queue->tail * es, element, es);
+    queue->tail = (queue->tail + 1) & queue->mask;
+    queue->count = cnt + 1;
     return SCL_OK;
 }
 
 scl_error_t scl_queue_dequeue(scl_queue_t *queue, void *out)
 {
     if (!queue || !out) return SCL_ERR_NULL_PTR;
-    if (queue->count == 0) return SCL_ERR_EMPTY;
+    if (scl_unlikely(queue->count == 0)) return SCL_ERR_EMPTY;
 
-    size_t offset;
-    if (scl_mul_overflow(queue->head, queue->element_size, &offset))
-        return SCL_ERR_SIZE_OVERFLOW;
-
-    memcpy(out, queue->data + offset, queue->element_size);
-    queue->head = (queue->head + 1) % queue->capacity;
+    size_t es = queue->element_size;
+    memcpy(out, queue->data + queue->head * es, es);
+    queue->head = (queue->head + 1) & queue->mask;
     queue->count--;
     return SCL_OK;
 }
@@ -95,13 +98,9 @@ scl_error_t scl_queue_dequeue(scl_queue_t *queue, void *out)
 scl_error_t scl_queue_peek(const scl_queue_t *queue, void *out)
 {
     if (!queue || !out) return SCL_ERR_NULL_PTR;
-    if (queue->count == 0) return SCL_ERR_EMPTY;
+    if (scl_unlikely(queue->count == 0)) return SCL_ERR_EMPTY;
 
-    size_t offset;
-    if (scl_mul_overflow(queue->head, queue->element_size, &offset))
-        return SCL_ERR_SIZE_OVERFLOW;
-
-    memcpy(out, queue->data + offset, queue->element_size);
+    memcpy(out, queue->data + queue->head * queue->element_size, queue->element_size);
     return SCL_OK;
 }
 
@@ -119,12 +118,18 @@ scl_error_t scl_queue_search(const scl_queue_t *restrict queue, const void *rest
                              int (*cmp)(const void *, const void *),
                              size_t *restrict out_index)
 {
-    if (__builtin_expect(!queue || !key || !cmp || !out_index, 0))
+    if (scl_unlikely(!queue || !key || !cmp || !out_index))
         return SCL_ERR_NULL_PTR;
 
-    for (size_t i = 0; i < queue->count; i++) {
-        size_t pos = (queue->head + i) % queue->capacity;
-        if (cmp(queue->data + pos * queue->element_size, key) == 0) {
+    size_t cnt = queue->count;
+    size_t head = queue->head;
+    size_t mask = queue->mask;
+    size_t es = queue->element_size;
+    unsigned char *data = queue->data;
+
+    for (size_t i = 0; i < cnt; i++) {
+        size_t pos = (head + i) & mask;
+        if (cmp(data + pos * es, key) == 0) {
             *out_index = i;
             return SCL_OK;
         }

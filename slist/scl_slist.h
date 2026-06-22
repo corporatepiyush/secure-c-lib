@@ -9,8 +9,8 @@
 #endif
 
 typedef struct scl_slist_node {
-    void *data;
     struct scl_slist_node *next;
+    unsigned char data[];  /* flexible array member: element_size bytes */
 } scl_slist_node_t;
 
 typedef struct {
