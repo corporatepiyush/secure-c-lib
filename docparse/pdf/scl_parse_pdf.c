@@ -101,8 +101,7 @@ static int pdf_parse_xref(scl_parse_pdf_t *parser) {
         if (root_str) {
             char *r = root_str + 5;
             while (*r && (unsigned char)*r <= ' ') r++;
-            if (*r == ' ') r++;
-            parser->root_obj = scl_atoi(r + 1);
+            parser->root_obj = scl_atoi(r);
             char *g = r;
             while (*g && scl_isdigit((unsigned char)*g)) g++;
             while (*g && (unsigned char)*g <= ' ') g++;
@@ -112,8 +111,7 @@ static int pdf_parse_xref(scl_parse_pdf_t *parser) {
         if (info_str) {
             char *r = info_str + 5;
             while (*r && (unsigned char)*r <= ' ') r++;
-            if (*r == ' ') r++;
-            parser->info_obj = scl_atoi(r + 1);
+            parser->info_obj = scl_atoi(r);
             char *g = r;
             while (*g && scl_isdigit((unsigned char)*g)) g++;
             while (*g && (unsigned char)*g <= ' ') g++;

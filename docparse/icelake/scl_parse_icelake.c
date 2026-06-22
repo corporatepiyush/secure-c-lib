@@ -62,9 +62,12 @@ scl_error_t scl_parse_icelake_open(scl_allocator_t *alloc, scl_parse_icelake_t *
     parser->manifest_json = json_buf;
     parser->manifest_len = (size_t)sz;
 
-    if (scl_parse_json_parse(alloc, json_buf, &root) != SCL_OK) {
+    scl_error_t json_err = scl_parse_json_parse(alloc, json_buf, &root);
+    if (json_err != SCL_OK) {
         scl_free(alloc, meta_path);
-        return SCL_OK;
+        scl_free(alloc, json_buf);
+        scl_free(alloc, parser->filename);
+        return json_err;
     }
 
     if (root && root->type == SCL_JSON_OBJECT) {
