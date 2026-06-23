@@ -5,18 +5,6 @@
 #pragma GCC optimize ("O3", "unroll-loops", "tree-vectorize", "inline")
 #endif
 
-static inline void bucket_lock(atomic_flag *lock)
-{
-    while (atomic_flag_test_and_set_explicit(lock, memory_order_acquire)) {
-        scl_cpu_pause();
-    }
-}
-
-static inline void bucket_unlock(atomic_flag *lock)
-{
-    atomic_flag_clear_explicit(lock, memory_order_release);
-}
-
 static size_t default_hash(const void *key, size_t len)
 {
     const unsigned char *p = (const unsigned char *)key;
@@ -39,7 +27,7 @@ scl_error_t scl_chash_init(scl_allocator_t *alloc, scl_concurrent_hash_t *ht, si
         return SCL_ERR_OUT_OF_MEMORY;
     }
     for (size_t i = 0; i < bucket_count; i++)
-        atomic_flag_clear(&ht->buckets[i].lock);
+        scl_spinlock_init(&ht->buckets[i].lock);
     ht->bucket_count = bucket_count;
     atomic_init(&ht->count, 0);
     ht->hash_func = hf ? hf : default_hash;
@@ -77,23 +65,23 @@ scl_error_t scl_chash_insert(scl_allocator_t *alloc, scl_concurrent_hash_t *ht, 
 {
     if (!ht || !key || !value) return SCL_ERR_NULL_PTR;
     size_t idx = ht->hash_func(key, ht->key_size) % ht->bucket_count;
-    bucket_lock(&ht->buckets[idx].lock);
+    scl_spinlock_lock(&ht->buckets[idx].lock);
     scl_concurrent_hash_entry_t *e = ht->entries[idx];
     while (e) {
         if (scl_memcmp(e->key, key, ht->key_size) == 0) {
             scl_memcpy(e->value, value, ht->value_size);
-            bucket_unlock(&ht->buckets[idx].lock);
+            scl_spinlock_unlock(&ht->buckets[idx].lock);
             return SCL_OK;
         }
         e = e->next;
     }
     scl_concurrent_hash_entry_t *n = scl_alloc(alloc, sizeof(scl_concurrent_hash_entry_t), alignof(max_align_t));
-    if (!n) { bucket_unlock(&ht->buckets[idx].lock); return SCL_ERR_OUT_OF_MEMORY; }
+    if (!n) { scl_spinlock_unlock(&ht->buckets[idx].lock); return SCL_ERR_OUT_OF_MEMORY; }
     n->key = scl_alloc(alloc, ht->key_size, alignof(max_align_t));
     n->value = scl_alloc(alloc, ht->value_size, alignof(max_align_t));
     if (!n->key || !n->value) {
         scl_free(alloc, n->key); scl_free(alloc, n->value); scl_free(alloc, n);
-        bucket_unlock(&ht->buckets[idx].lock);
+        scl_spinlock_unlock(&ht->buckets[idx].lock);
         return SCL_ERR_OUT_OF_MEMORY;
     }
     scl_memcpy(n->key, key, ht->key_size);
@@ -101,7 +89,7 @@ scl_error_t scl_chash_insert(scl_allocator_t *alloc, scl_concurrent_hash_t *ht, 
     n->next = ht->entries[idx];
     ht->entries[idx] = n;
     atomic_fetch_add_explicit(&ht->count, 1, memory_order_relaxed);
-    bucket_unlock(&ht->buckets[idx].lock);
+    scl_spinlock_unlock(&ht->buckets[idx].lock);
     return SCL_OK;
 }
 
@@ -109,17 +97,17 @@ scl_error_t scl_chash_get(const scl_concurrent_hash_t *ht, const void *key, void
 {
     if (!ht || !key || !out_value) return SCL_ERR_NULL_PTR;
     size_t idx = ht->hash_func(key, ht->key_size) % ht->bucket_count;
-    bucket_lock(&ht->buckets[idx].lock);
+    scl_spinlock_lock(&ht->buckets[idx].lock);
     scl_concurrent_hash_entry_t *e = ht->entries[idx];
     while (e) {
         if (scl_memcmp(e->key, key, ht->key_size) == 0) {
             scl_memcpy(out_value, e->value, ht->value_size);
-            bucket_unlock(&ht->buckets[idx].lock);
+            scl_spinlock_unlock(&ht->buckets[idx].lock);
             return SCL_OK;
         }
         e = e->next;
     }
-    bucket_unlock(&ht->buckets[idx].lock);
+    scl_spinlock_unlock(&ht->buckets[idx].lock);
     return SCL_ERR_NOT_FOUND;
 }
 
@@ -127,7 +115,7 @@ scl_error_t scl_chash_remove(scl_allocator_t *alloc, scl_concurrent_hash_t *ht, 
 {
     if (!ht || !key) return SCL_ERR_NULL_PTR;
     size_t idx = ht->hash_func(key, ht->key_size) % ht->bucket_count;
-    bucket_lock(&ht->buckets[idx].lock);
+    scl_spinlock_lock(&ht->buckets[idx].lock);
     scl_concurrent_hash_entry_t **prev = &ht->entries[idx];
     scl_concurrent_hash_entry_t *e = ht->entries[idx];
     while (e) {
@@ -139,13 +127,13 @@ scl_error_t scl_chash_remove(scl_allocator_t *alloc, scl_concurrent_hash_t *ht, 
             scl_free(alloc, e->value);
             scl_free(alloc, e);
             atomic_fetch_sub_explicit(&ht->count, 1, memory_order_relaxed);
-            bucket_unlock(&ht->buckets[idx].lock);
+            scl_spinlock_unlock(&ht->buckets[idx].lock);
             return SCL_OK;
         }
         prev = &e->next;
         e = e->next;
     }
-    bucket_unlock(&ht->buckets[idx].lock);
+    scl_spinlock_unlock(&ht->buckets[idx].lock);
     return SCL_ERR_NOT_FOUND;
 }
 
@@ -153,16 +141,16 @@ bool scl_chash_contains(const scl_concurrent_hash_t *ht, const void *key)
 {
     if (!ht || !key) return false;
     size_t idx = ht->hash_func(key, ht->key_size) % ht->bucket_count;
-    bucket_lock(&ht->buckets[idx].lock);
+    scl_spinlock_lock(&ht->buckets[idx].lock);
     scl_concurrent_hash_entry_t *e = ht->entries[idx];
     while (e) {
         if (scl_memcmp(e->key, key, ht->key_size) == 0) {
-            bucket_unlock(&ht->buckets[idx].lock);
+            scl_spinlock_unlock(&ht->buckets[idx].lock);
             return true;
         }
         e = e->next;
     }
-    bucket_unlock(&ht->buckets[idx].lock);
+    scl_spinlock_unlock(&ht->buckets[idx].lock);
     return false;
 }
 

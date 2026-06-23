@@ -9,7 +9,7 @@ typedef struct {
     size_t size;
     size_t element_size;
     void (*combine)(void *out, const void *a, const void *b);
-    atomic_flag lock;
+    scl_spinlock_t lock;
 } scl_concurrent_segtree_t;
 
 scl_error_t scl_csegtree_init(scl_allocator_t *alloc, scl_concurrent_segtree_t *tree,

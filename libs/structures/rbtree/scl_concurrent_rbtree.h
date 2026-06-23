@@ -23,7 +23,7 @@ typedef struct {
     size_t element_size;
     atomic_size_t count;
     scl_cmp_func_t cmp;
-    atomic_flag lock;
+    scl_spinlock_t lock;
 } scl_concurrent_rbtree_t;
 
 scl_error_t scl_crbtree_init(scl_allocator_t *alloc, scl_concurrent_rbtree_t *tree, size_t element_size,

@@ -5,18 +5,6 @@
 #pragma GCC optimize ("O3", "unroll-loops", "tree-vectorize", "inline")
 #endif
 
-static inline void spin_lock(atomic_flag *lock)
-{
-    while (atomic_flag_test_and_set_explicit(lock, memory_order_acquire)) {
-        scl_cpu_pause();
-    }
-}
-
-static inline void spin_unlock(atomic_flag *lock)
-{
-    atomic_flag_clear_explicit(lock, memory_order_release);
-}
-
 static scl_concurrent_bst_node_t *create_node(scl_allocator_t *alloc, const void *data, size_t element_size)
 {
     scl_concurrent_bst_node_t *n = scl_alloc(alloc, sizeof(scl_concurrent_bst_node_t), alignof(max_align_t));
@@ -32,11 +20,11 @@ static scl_concurrent_bst_node_t *create_node(scl_allocator_t *alloc, const void
 void scl_cbst_destroy(scl_allocator_t *alloc, scl_concurrent_bst_t *tree)
 {
     if (!tree) return;
-    spin_lock(&tree->lock);
+    scl_spinlock_lock(&tree->lock);
     if (tree->root) {
         size_t cap = 64;
         scl_concurrent_bst_node_t **stack = scl_alloc(alloc, cap * sizeof(stack[0]), alignof(max_align_t));
-        if (!stack) { spin_unlock(&tree->lock); return; }
+        if (!stack) { scl_spinlock_unlock(&tree->lock); return; }
         int sp = -1;
         scl_concurrent_bst_node_t *cur = tree->root;
         scl_concurrent_bst_node_t *last = NULL;
@@ -45,7 +33,7 @@ void scl_cbst_destroy(scl_allocator_t *alloc, scl_concurrent_bst_t *tree)
                 if ((size_t)(sp + 1) >= cap) {
                     size_t new_cap = cap * 2;
                     scl_concurrent_bst_node_t **ns = scl_realloc(alloc, stack, cap * sizeof(stack[0]), new_cap * sizeof(stack[0]), alignof(max_align_t));
-                    if (!ns) { scl_free(alloc, stack); spin_unlock(&tree->lock); return; }
+                    if (!ns) { scl_free(alloc, stack); scl_spinlock_unlock(&tree->lock); return; }
                     stack = ns;
                     cap = new_cap;
                 }
@@ -66,7 +54,7 @@ void scl_cbst_destroy(scl_allocator_t *alloc, scl_concurrent_bst_t *tree)
     }
     tree->root = NULL;
     atomic_store_explicit(&tree->count, 0, memory_order_relaxed);
-    spin_unlock(&tree->lock);
+    scl_spinlock_unlock(&tree->lock);
 }
 
 scl_error_t scl_cbst_init(scl_allocator_t *alloc, scl_concurrent_bst_t *tree, size_t element_size,
@@ -79,7 +67,7 @@ scl_error_t scl_cbst_init(scl_allocator_t *alloc, scl_concurrent_bst_t *tree, si
     tree->element_size = element_size;
     atomic_init(&tree->count, 0);
     tree->cmp = cmp;
-    atomic_flag_clear(&tree->lock);
+    scl_spinlock_init(&tree->lock);
     return SCL_OK;
 }
 
@@ -88,11 +76,11 @@ scl_error_t scl_cbst_insert(scl_allocator_t *alloc, scl_concurrent_bst_t *tree, 
     if (!tree || !element) return SCL_ERR_NULL_PTR;
     scl_concurrent_bst_node_t *n = create_node(alloc, element, tree->element_size);
     if (!n) return SCL_ERR_OUT_OF_MEMORY;
-    spin_lock(&tree->lock);
+    scl_spinlock_lock(&tree->lock);
     if (!tree->root) {
         tree->root = n;
         atomic_fetch_add_explicit(&tree->count, 1, memory_order_relaxed);
-        spin_unlock(&tree->lock);
+        scl_spinlock_unlock(&tree->lock);
         return SCL_OK;
     }
     scl_concurrent_bst_node_t *cur = tree->root;
@@ -105,7 +93,7 @@ scl_error_t scl_cbst_insert(scl_allocator_t *alloc, scl_concurrent_bst_t *tree, 
         else {
             scl_memcpy(cur->data, element, tree->element_size);
             scl_free(alloc, n->data); scl_free(alloc, n);
-            spin_unlock(&tree->lock);
+            scl_spinlock_unlock(&tree->lock);
             return SCL_OK;
         }
     }
@@ -114,14 +102,14 @@ scl_error_t scl_cbst_insert(scl_allocator_t *alloc, scl_concurrent_bst_t *tree, 
     else
         parent->right = n;
     atomic_fetch_add_explicit(&tree->count, 1, memory_order_relaxed);
-    spin_unlock(&tree->lock);
+    scl_spinlock_unlock(&tree->lock);
     return SCL_OK;
 }
 
 scl_error_t scl_cbst_remove(scl_allocator_t *alloc, scl_concurrent_bst_t *tree, const void *key)
 {
     if (!tree || !key) return SCL_ERR_NULL_PTR;
-    spin_lock(&tree->lock);
+    scl_spinlock_lock(&tree->lock);
 
     scl_concurrent_bst_node_t *parent = NULL;
     scl_concurrent_bst_node_t *cur = tree->root;
@@ -134,7 +122,7 @@ scl_error_t scl_cbst_remove(scl_allocator_t *alloc, scl_concurrent_bst_t *tree, 
         else { found = true; break; }
     }
 
-    if (!found) { spin_unlock(&tree->lock); return SCL_ERR_NOT_FOUND; }
+    if (!found) { scl_spinlock_unlock(&tree->lock); return SCL_ERR_NOT_FOUND; }
 
     if (cur->left && cur->right) {
         scl_concurrent_bst_node_t *succ_parent = cur;
@@ -159,35 +147,35 @@ scl_error_t scl_cbst_remove(scl_allocator_t *alloc, scl_concurrent_bst_t *tree, 
     scl_free(alloc, cur->data);
     scl_free(alloc, cur);
     atomic_fetch_sub_explicit(&tree->count, 1, memory_order_relaxed);
-    spin_unlock(&tree->lock);
+    scl_spinlock_unlock(&tree->lock);
     return SCL_OK;
 }
 
 bool scl_cbst_contains(scl_concurrent_bst_t *tree, const void *key)
 {
     if (!tree || !key) return false;
-    spin_lock(&tree->lock);
+    scl_spinlock_lock(&tree->lock);
     scl_concurrent_bst_node_t *cur = tree->root;
     while (cur) {
         int c = tree->cmp(key, cur->data);
-        if (c == 0) { spin_unlock(&tree->lock); return true; }
+        if (c == 0) { scl_spinlock_unlock(&tree->lock); return true; }
         cur = (c < 0) ? cur->left : cur->right;
     }
-    spin_unlock(&tree->lock);
+    scl_spinlock_unlock(&tree->lock);
     return false;
 }
 
 scl_error_t scl_cbst_find(scl_concurrent_bst_t *tree, const void *key, void *out)
 {
     if (!tree || !key || !out) return SCL_ERR_NULL_PTR;
-    spin_lock(&tree->lock);
+    scl_spinlock_lock(&tree->lock);
     scl_concurrent_bst_node_t *cur = tree->root;
     while (cur) {
         int c = tree->cmp(key, cur->data);
-        if (c == 0) { scl_memcpy(out, cur->data, tree->element_size); spin_unlock(&tree->lock); return SCL_OK; }
+        if (c == 0) { scl_memcpy(out, cur->data, tree->element_size); scl_spinlock_unlock(&tree->lock); return SCL_OK; }
         cur = (c < 0) ? cur->left : cur->right;
     }
-    spin_unlock(&tree->lock);
+    scl_spinlock_unlock(&tree->lock);
     return SCL_ERR_NOT_FOUND;
 }
 

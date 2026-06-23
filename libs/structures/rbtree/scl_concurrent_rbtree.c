@@ -5,18 +5,6 @@
 #pragma GCC optimize ("O3", "unroll-loops", "tree-vectorize", "inline")
 #endif
 
-static inline void spin_lock(atomic_flag *lock)
-{
-    while (atomic_flag_test_and_set_explicit(lock, memory_order_acquire)) {
-        scl_cpu_pause();
-    }
-}
-
-static inline void spin_unlock(atomic_flag *lock)
-{
-    atomic_flag_clear_explicit(lock, memory_order_release);
-}
-
 static scl_concurrent_rbtree_node_t *create_node(scl_allocator_t *alloc, const void *data, size_t element_size)
 {
     scl_concurrent_rbtree_node_t *n = scl_alloc(alloc, sizeof(scl_concurrent_rbtree_node_t), alignof(max_align_t));
@@ -32,11 +20,11 @@ static scl_concurrent_rbtree_node_t *create_node(scl_allocator_t *alloc, const v
 void scl_crbtree_destroy(scl_allocator_t *alloc, scl_concurrent_rbtree_t *tree)
 {
     if (!tree) return;
-    spin_lock(&tree->lock);
+    scl_spinlock_lock(&tree->lock);
     if (tree->root) {
         size_t cap = 64;
         scl_concurrent_rbtree_node_t **stack = scl_alloc(alloc, cap * sizeof(stack[0]), alignof(max_align_t));
-        if (!stack) { spin_unlock(&tree->lock); return; }
+        if (!stack) { scl_spinlock_unlock(&tree->lock); return; }
         int sp = -1;
         scl_concurrent_rbtree_node_t *cur = tree->root;
         scl_concurrent_rbtree_node_t *last = NULL;
@@ -45,7 +33,7 @@ void scl_crbtree_destroy(scl_allocator_t *alloc, scl_concurrent_rbtree_t *tree)
                 if ((size_t)(sp + 1) >= cap) {
                     size_t new_cap = cap * 2;
                     scl_concurrent_rbtree_node_t **ns = scl_realloc(alloc, stack, cap * sizeof(stack[0]), new_cap * sizeof(stack[0]), alignof(max_align_t));
-                    if (!ns) { scl_free(alloc, stack); spin_unlock(&tree->lock); return; }
+                    if (!ns) { scl_free(alloc, stack); scl_spinlock_unlock(&tree->lock); return; }
                     stack = ns;
                     cap = new_cap;
                 }
@@ -66,7 +54,7 @@ void scl_crbtree_destroy(scl_allocator_t *alloc, scl_concurrent_rbtree_t *tree)
     }
     tree->root = NULL;
     atomic_store_explicit(&tree->count, 0, memory_order_relaxed);
-    spin_unlock(&tree->lock);
+    scl_spinlock_unlock(&tree->lock);
 }
 
 static void rotate_left(scl_concurrent_rbtree_node_t **root, scl_concurrent_rbtree_node_t *x)
@@ -218,7 +206,7 @@ scl_error_t scl_crbtree_init(scl_allocator_t *alloc, scl_concurrent_rbtree_t *tr
     tree->element_size = element_size;
     atomic_init(&tree->count, 0);
     tree->cmp = cmp;
-    atomic_flag_clear(&tree->lock);
+    scl_spinlock_init(&tree->lock);
     return SCL_OK;
 }
 
@@ -227,7 +215,7 @@ scl_error_t scl_crbtree_insert(scl_allocator_t *alloc, scl_concurrent_rbtree_t *
     if (!tree || !element) return SCL_ERR_NULL_PTR;
     scl_concurrent_rbtree_node_t *z = create_node(alloc, element, tree->element_size);
     if (!z) return SCL_ERR_OUT_OF_MEMORY;
-    spin_lock(&tree->lock);
+    scl_spinlock_lock(&tree->lock);
     scl_concurrent_rbtree_node_t *y = NULL;
     scl_concurrent_rbtree_node_t *x = tree->root;
     while (x) {
@@ -236,7 +224,7 @@ scl_error_t scl_crbtree_insert(scl_allocator_t *alloc, scl_concurrent_rbtree_t *
         if (c == 0) {
             scl_memcpy(x->data, element, tree->element_size);
             scl_free(alloc, z->data); scl_free(alloc, z);
-            spin_unlock(&tree->lock);
+            scl_spinlock_unlock(&tree->lock);
             return SCL_OK;
         }
         x = (c < 0) ? x->left : x->right;
@@ -247,21 +235,21 @@ scl_error_t scl_crbtree_insert(scl_allocator_t *alloc, scl_concurrent_rbtree_t *
     else y->right = z;
     insert_fixup(&tree->root, z);
     atomic_fetch_add_explicit(&tree->count, 1, memory_order_relaxed);
-    spin_unlock(&tree->lock);
+    scl_spinlock_unlock(&tree->lock);
     return SCL_OK;
 }
 
 scl_error_t scl_crbtree_remove(scl_allocator_t *alloc, scl_concurrent_rbtree_t *tree, const void *key)
 {
     if (!tree || !key) return SCL_ERR_NULL_PTR;
-    spin_lock(&tree->lock);
+    scl_spinlock_lock(&tree->lock);
     scl_concurrent_rbtree_node_t *z = tree->root;
     while (z) {
         int c = tree->cmp(key, z->data);
         if (c == 0) break;
         z = (c < 0) ? z->left : z->right;
     }
-    if (!z) { spin_unlock(&tree->lock); return SCL_ERR_NOT_FOUND; }
+    if (!z) { scl_spinlock_unlock(&tree->lock); return SCL_ERR_NOT_FOUND; }
     scl_concurrent_rbtree_node_t *y = z;
     scl_rb_color_t y_orig = y->color;
     scl_concurrent_rbtree_node_t *x = NULL;
@@ -297,35 +285,35 @@ scl_error_t scl_crbtree_remove(scl_allocator_t *alloc, scl_concurrent_rbtree_t *
     if (y_orig == SCL_RB_BLACK)
         remove_fixup(&tree->root, x, x_parent);
     atomic_fetch_sub_explicit(&tree->count, 1, memory_order_relaxed);
-    spin_unlock(&tree->lock);
+    scl_spinlock_unlock(&tree->lock);
     return SCL_OK;
 }
 
 bool scl_crbtree_contains(scl_concurrent_rbtree_t *tree, const void *key)
 {
     if (!tree || !key) return false;
-    spin_lock(&tree->lock);
+    scl_spinlock_lock(&tree->lock);
     scl_concurrent_rbtree_node_t *cur = tree->root;
     while (cur) {
         int c = tree->cmp(key, cur->data);
-        if (c == 0) { spin_unlock(&tree->lock); return true; }
+        if (c == 0) { scl_spinlock_unlock(&tree->lock); return true; }
         cur = (c < 0) ? cur->left : cur->right;
     }
-    spin_unlock(&tree->lock);
+    scl_spinlock_unlock(&tree->lock);
     return false;
 }
 
 scl_error_t scl_crbtree_find(scl_concurrent_rbtree_t *tree, const void *key, void *out)
 {
     if (!tree || !key || !out) return SCL_ERR_NULL_PTR;
-    spin_lock(&tree->lock);
+    scl_spinlock_lock(&tree->lock);
     scl_concurrent_rbtree_node_t *cur = tree->root;
     while (cur) {
         int c = tree->cmp(key, cur->data);
-        if (c == 0) { scl_memcpy(out, cur->data, tree->element_size); spin_unlock(&tree->lock); return SCL_OK; }
+        if (c == 0) { scl_memcpy(out, cur->data, tree->element_size); scl_spinlock_unlock(&tree->lock); return SCL_OK; }
         cur = (c < 0) ? cur->left : cur->right;
     }
-    spin_unlock(&tree->lock);
+    scl_spinlock_unlock(&tree->lock);
     return SCL_ERR_NOT_FOUND;
 }
 

@@ -119,6 +119,26 @@ static inline void scl_atomic_store_sz_explicit(scl_atomic_size_t *obj, size_t v
 #define scl_atomic_store(obj, val)  atomic_store(obj, val)
 #define scl_atomic_store_explicit(obj, val, mo) atomic_store_explicit(obj, val, mo)
 
+/* ── Pointer load / store / exchange ──────────────────────── */
+static inline void *scl_atomic_load_ptr(const scl_atomic_uintptr_t *obj) {
+    return (void *)atomic_load(obj);
+}
+static inline void *scl_atomic_load_ptr_explicit(const scl_atomic_uintptr_t *obj, scl_memory_order_t mo) {
+    return (void *)atomic_load_explicit(obj, mo);
+}
+static inline void scl_atomic_store_ptr(scl_atomic_uintptr_t *obj, void *val) {
+    atomic_store(obj, (uintptr_t)val);
+}
+static inline void scl_atomic_store_ptr_explicit(scl_atomic_uintptr_t *obj, void *val, scl_memory_order_t mo) {
+    atomic_store_explicit(obj, (uintptr_t)val, mo);
+}
+static inline void *scl_atomic_exchange_ptr(scl_atomic_uintptr_t *obj, void *val) {
+    return (void *)atomic_exchange(obj, (uintptr_t)val);
+}
+static inline void *scl_atomic_exchange_ptr_explicit(scl_atomic_uintptr_t *obj, void *val, scl_memory_order_t mo) {
+    return (void *)atomic_exchange_explicit(obj, (uintptr_t)val, mo);
+}
+
 /* ── Fetch-and-op ───────────────────────────────────────────── */
 static inline int    scl_atomic_fetch_add_int(scl_atomic_int *obj, int val)   { return atomic_fetch_add(obj, val); }
 static inline int    scl_atomic_fetch_add_int_explicit(scl_atomic_int *obj, int val, scl_memory_order_t mo) { return atomic_fetch_add_explicit(obj, val, mo); }
@@ -131,12 +151,22 @@ static inline int    scl_atomic_fetch_sub_int_explicit(scl_atomic_int *obj, int 
 static inline unsigned int scl_atomic_fetch_or_uint(scl_atomic_uint *obj, unsigned int val) { return atomic_fetch_or(obj, val); }
 static inline unsigned int scl_atomic_fetch_or_uint_explicit(scl_atomic_uint *obj, unsigned int val, scl_memory_order_t mo) { return atomic_fetch_or_explicit(obj, val, mo); }
 
+static inline unsigned int scl_atomic_fetch_and_uint(scl_atomic_uint *obj, unsigned int val) { return atomic_fetch_and(obj, val); }
+static inline unsigned int scl_atomic_fetch_and_uint_explicit(scl_atomic_uint *obj, unsigned int val, scl_memory_order_t mo) { return atomic_fetch_and_explicit(obj, val, mo); }
+
+static inline unsigned int scl_atomic_fetch_xor_uint(scl_atomic_uint *obj, unsigned int val) { return atomic_fetch_xor(obj, val); }
+static inline unsigned int scl_atomic_fetch_xor_uint_explicit(scl_atomic_uint *obj, unsigned int val, scl_memory_order_t mo) { return atomic_fetch_xor_explicit(obj, val, mo); }
+
 #define scl_atomic_fetch_add(obj, val)      atomic_fetch_add(obj, val)
 #define scl_atomic_fetch_add_explicit(obj, val, mo) atomic_fetch_add_explicit(obj, val, mo)
 #define scl_atomic_fetch_sub(obj, val)      atomic_fetch_sub(obj, val)
 #define scl_atomic_fetch_sub_explicit(obj, val, mo) atomic_fetch_sub_explicit(obj, val, mo)
 #define scl_atomic_fetch_or(obj, val)       atomic_fetch_or(obj, val)
 #define scl_atomic_fetch_or_explicit(obj, val, mo) atomic_fetch_or_explicit(obj, val, mo)
+#define scl_atomic_fetch_and(obj, val)      atomic_fetch_and(obj, val)
+#define scl_atomic_fetch_and_explicit(obj, val, mo) atomic_fetch_and_explicit(obj, val, mo)
+#define scl_atomic_fetch_xor(obj, val)      atomic_fetch_xor(obj, val)
+#define scl_atomic_fetch_xor_explicit(obj, val, mo) atomic_fetch_xor_explicit(obj, val, mo)
 
 /* ── Compare-and-swap ───────────────────────────────────────── */
 #define SCL_ATOMIC_CAS(ptr, expected, desired) \

@@ -18,7 +18,7 @@ typedef struct {
     scl_concurrent_adj_node_t **adj;
     size_t vertex_count;
     atomic_size_t edge_count;
-    atomic_flag lock;
+    scl_spinlock_t lock;
 } scl_concurrent_graph_t;
 
 scl_error_t scl_cgraph_init(scl_allocator_t *alloc, scl_concurrent_graph_t *g, size_t vertex_count) SCL_WARN_UNUSED;

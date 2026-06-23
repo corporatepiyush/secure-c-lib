@@ -4,6 +4,8 @@
 #include "scl_common.h"
 #include <string.h>
 #include <stdio.h>
+#include <pthread.h>
+#include <stdatomic.h>
 
 /* ── Test state ─────────────────────────────────────────────── */
 typedef struct {
@@ -15,7 +17,7 @@ typedef struct {
 void scl_test_init(scl_test_runner_t *tr);
 
 /* ── Test naming ────────────────────────────────────────────── */
-void scl_test_group(const char *name);  /* prints group header */
+void scl_test_group(const char *name);
 
 /* ── Assertions (return true on success, false on failure) ─── */
 bool scl_expect_true(scl_test_runner_t *tr, bool cond, const char *file, int line, const char *expr);
@@ -46,5 +48,75 @@ void scl_test_summary(scl_test_runner_t *tr);
 #define SCL_EXPECT_NOT_NULL(tr, p)      scl_expect_not_null(tr, (p), __FILE__, __LINE__)
 #define SCL_EXPECT_OK(tr, err)          scl_expect_ok(tr, (err), __FILE__, __LINE__)
 #define SCL_EXPECT_ERROR(tr, err, exp)  scl_expect_error(tr, (err), (exp), __FILE__, __LINE__)
+
+/* ── Concurrent test helpers ───────────────────────────────── */
+
+/* Thread-safe assertion counters (for concurrent tests) */
+typedef struct {
+    atomic_int passed;
+    atomic_int failed;
+    atomic_int asserts;
+} scl_test_concurrent_counters_t;
+
+static inline void scl_test_cc_init(scl_test_concurrent_counters_t *c) {
+    atomic_init(&c->passed, 0);
+    atomic_init(&c->failed, 0);
+    atomic_init(&c->asserts, 0);
+}
+
+/* Atomically record a result; returns true on pass, false on fail */
+static inline bool scl_test_cc_record(scl_test_concurrent_counters_t *c, bool ok,
+                                       const char *file, int line, const char *msg) {
+    atomic_fetch_add_explicit(&c->asserts, 1, memory_order_relaxed);
+    if (ok) {
+        atomic_fetch_add_explicit(&c->passed, 1, memory_order_relaxed);
+    } else {
+        atomic_fetch_add_explicit(&c->failed, 1, memory_order_relaxed);
+        fprintf(stderr, "  FAIL %s:%d: %s\n", file, line, msg);
+    }
+    return ok;
+}
+
+/* Merge concurrent counters into a test runner */
+static inline void scl_test_cc_merge(scl_test_runner_t *tr,
+                                      scl_test_concurrent_counters_t *c) {
+    tr->passed  += atomic_load_explicit(&c->passed,  memory_order_relaxed);
+    tr->failed  += atomic_load_explicit(&c->failed,  memory_order_relaxed);
+    tr->asserts += atomic_load_explicit(&c->asserts, memory_order_relaxed);
+}
+
+/* Spin-based barrier for synchronizing threads in tests */
+typedef struct {
+    atomic_int count;
+    int total;
+    atomic_int phase;
+} scl_test_barrier_t;
+
+static inline void scl_test_barrier_init(scl_test_barrier_t *b, int count) {
+    atomic_init(&b->count, count);
+    b->total = count;
+    atomic_init(&b->phase, 0);
+}
+
+static inline void scl_test_barrier_wait(scl_test_barrier_t *b) {
+    int phase = atomic_load_explicit(&b->phase, memory_order_acquire);
+    int prev = atomic_fetch_sub_explicit(&b->count, 1, memory_order_acq_rel) - 1;
+    if (prev > 0) {
+        while (atomic_load_explicit(&b->phase, memory_order_acquire) == phase)
+            scl_cpu_pause();
+    } else {
+        atomic_store_explicit(&b->count, b->total, memory_order_release);
+        atomic_store_explicit(&b->phase, phase + 1, memory_order_release);
+    }
+}
+
+/* Standard argument struct for thread functions in concurrent tests */
+typedef struct {
+    int thread_id;
+    int nthreads;
+    scl_test_barrier_t *barrier;
+    scl_test_concurrent_counters_t *cc;
+    void *user_data;
+} scl_test_thread_arg_t;
 
 #endif

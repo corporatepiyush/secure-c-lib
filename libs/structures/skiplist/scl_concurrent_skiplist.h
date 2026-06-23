@@ -22,7 +22,7 @@ typedef struct {
     atomic_size_t count;
     scl_cmp_func_t cmp;
     atomic_size_t level;
-    atomic_flag lock;
+    scl_spinlock_t lock;
 } scl_concurrent_skiplist_t;
 
 scl_error_t scl_cskiplist_init(scl_allocator_t *alloc, scl_concurrent_skiplist_t *sl, size_t element_size,

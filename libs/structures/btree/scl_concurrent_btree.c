@@ -5,18 +5,6 @@
 #pragma GCC optimize ("O3", "unroll-loops", "tree-vectorize", "inline")
 #endif
 
-static inline void spin_lock(atomic_flag *lock)
-{
-    while (atomic_flag_test_and_set_explicit(lock, memory_order_acquire)) {
-        scl_cpu_pause();
-    }
-}
-
-static inline void spin_unlock(atomic_flag *lock)
-{
-    atomic_flag_clear_explicit(lock, memory_order_release);
-}
-
 static scl_concurrent_btree_node_t *create_node(scl_allocator_t *alloc, bool leaf, int t,
                                              size_t key_size, size_t value_size)
 {
@@ -114,18 +102,18 @@ scl_error_t scl_cbtree_init(scl_allocator_t *alloc, scl_concurrent_btree_t *tree
     tree->value_size = value_size;
     atomic_init(&tree->count, 0);
     tree->cmp = cmp;
-    atomic_flag_clear(&tree->lock);
+    scl_spinlock_init(&tree->lock);
     return SCL_OK;
 }
 
 scl_error_t scl_cbtree_insert(scl_allocator_t *alloc, scl_concurrent_btree_t *tree, const void *key, const void *value)
 {
     if (!tree || !key || !value) return SCL_ERR_NULL_PTR;
-    spin_lock(&tree->lock);
+    scl_spinlock_lock(&tree->lock);
 
     if (tree->root->count == (size_t)(2 * tree->t - 1)) {
         scl_concurrent_btree_node_t *s = create_node(alloc, false, tree->t, tree->key_size, tree->value_size);
-        if (!s) { spin_unlock(&tree->lock); return SCL_ERR_OUT_OF_MEMORY; }
+        if (!s) { scl_spinlock_unlock(&tree->lock); return SCL_ERR_OUT_OF_MEMORY; }
         s->children[0] = tree->root;
         tree->root = s;
         split_child(alloc, s, 0, tree->t, tree->key_size, tree->value_size);
@@ -145,7 +133,7 @@ scl_error_t scl_cbtree_insert(scl_allocator_t *alloc, scl_concurrent_btree_t *tr
             i++;
             if (i < (int)node->count && tree->cmp(key, node->keys[i]) == 0) {
                 scl_memcpy(node->values[i], value, tree->value_size);
-                spin_unlock(&tree->lock);
+                scl_spinlock_unlock(&tree->lock);
                 return SCL_OK;
             }
             scl_memcpy(node->keys[i], key, tree->key_size);
@@ -159,7 +147,7 @@ scl_error_t scl_cbtree_insert(scl_allocator_t *alloc, scl_concurrent_btree_t *tr
             i++;
             if (i < (int)node->count && tree->cmp(key, node->keys[i]) == 0) {
                 scl_memcpy(node->values[i], value, tree->value_size);
-                spin_unlock(&tree->lock);
+                scl_spinlock_unlock(&tree->lock);
                 return SCL_OK;
             }
             if (node->children[i]->count == (size_t)(2 * tree->t - 1)) {
@@ -173,14 +161,14 @@ scl_error_t scl_cbtree_insert(scl_allocator_t *alloc, scl_concurrent_btree_t *tr
 
     if (inserted)
         atomic_fetch_add_explicit(&tree->count, 1, memory_order_relaxed);
-    spin_unlock(&tree->lock);
+    scl_spinlock_unlock(&tree->lock);
     return SCL_OK;
 }
 
 scl_error_t scl_cbtree_get(scl_concurrent_btree_t *tree, const void *key, void *out_value)
 {
     if (!tree || !key || !out_value) return SCL_ERR_NULL_PTR;
-    spin_lock(&tree->lock);
+    scl_spinlock_lock(&tree->lock);
 
     scl_concurrent_btree_node_t *node = tree->root;
     while (node) {
@@ -189,33 +177,33 @@ scl_error_t scl_cbtree_get(scl_concurrent_btree_t *tree, const void *key, void *
             i++;
         if (i < (int)node->count && tree->cmp(key, node->keys[i]) == 0) {
             scl_memcpy(out_value, node->values[i], tree->value_size);
-            spin_unlock(&tree->lock);
+            scl_spinlock_unlock(&tree->lock);
             return SCL_OK;
         }
         if (node->leaf) break;
         node = node->children[i];
     }
-    spin_unlock(&tree->lock);
+    scl_spinlock_unlock(&tree->lock);
     return SCL_ERR_NOT_FOUND;
 }
 
 bool scl_cbtree_contains(scl_concurrent_btree_t *tree, const void *key)
 {
     if (!tree || !key) return false;
-    spin_lock(&tree->lock);
+    scl_spinlock_lock(&tree->lock);
     scl_concurrent_btree_node_t *node = tree->root;
     while (node) {
         int i = 0;
         while (i < (int)node->count && tree->cmp(key, node->keys[i]) > 0)
             i++;
         if (i < (int)node->count && tree->cmp(key, node->keys[i]) == 0) {
-            spin_unlock(&tree->lock);
+            scl_spinlock_unlock(&tree->lock);
             return true;
         }
         if (node->leaf) break;
         node = node->children[i];
     }
-    spin_unlock(&tree->lock);
+    scl_spinlock_unlock(&tree->lock);
     return false;
 }
 

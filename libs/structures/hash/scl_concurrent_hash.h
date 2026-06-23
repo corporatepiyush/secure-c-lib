@@ -17,7 +17,7 @@ typedef struct scl_concurrent_hash_entry {
 } scl_concurrent_hash_entry_t;
 
 typedef struct {
-    atomic_flag lock;
+    scl_spinlock_t lock;
 } scl_concurrent_hash_bucket_t;
 
 typedef struct {

@@ -1,17 +1,6 @@
 #include "scl_concurrent_fenwick.h"
 #include "scl_string.h"
 
-static inline void spin_lock(atomic_flag *lock)
-{
-    while (atomic_flag_test_and_set_explicit(lock, memory_order_acquire))
-        scl_cpu_pause();
-}
-
-static inline void spin_unlock(atomic_flag *lock)
-{
-    atomic_flag_clear_explicit(lock, memory_order_release);
-}
-
 scl_error_t scl_cfenwick_init(scl_allocator_t *alloc, scl_concurrent_fenwick_t *fw,
                               size_t n, size_t element_size, const void *data,
                               void (*add)(void *out, const void *a, const void *b),
@@ -31,7 +20,7 @@ scl_error_t scl_cfenwick_init(scl_allocator_t *alloc, scl_concurrent_fenwick_t *
     fw->element_size = element_size;
     fw->add = add;
     fw->sub = sub;
-    atomic_flag_clear(&fw->lock);
+    scl_spinlock_init(&fw->lock);
 
     const unsigned char *src = data;
     for (size_t i = 1; i <= n; i++)
@@ -65,7 +54,7 @@ scl_error_t scl_cfenwick_update(scl_allocator_t *alloc, scl_concurrent_fenwick_t
     if (!fw || !delta) return SCL_ERR_NULL_PTR;
     if (idx >= fw->n) return SCL_ERR_INVALID_INDEX;
 
-    spin_lock(&fw->lock);
+    scl_spinlock_lock(&fw->lock);
 
     size_t esize = fw->element_size;
     size_t i = idx + 1;
@@ -75,17 +64,12 @@ scl_error_t scl_cfenwick_update(scl_allocator_t *alloc, scl_concurrent_fenwick_t
         i += i & -i;
     }
 
-    spin_unlock(&fw->lock);
+    scl_spinlock_unlock(&fw->lock);
     return SCL_OK;
 }
 
-scl_error_t scl_cfenwick_prefix(const scl_concurrent_fenwick_t *fw, size_t idx, void *out)
+static scl_error_t prefix_unlocked(const scl_concurrent_fenwick_t *fw, size_t idx, void *out)
 {
-    if (!fw || !out) return SCL_ERR_NULL_PTR;
-    if (idx >= fw->n) return SCL_ERR_INVALID_INDEX;
-
-    spin_lock((atomic_flag *)&fw->lock);
-
     size_t esize = fw->element_size;
     size_t i = idx + 1;
     bool first = true;
@@ -100,9 +84,18 @@ scl_error_t scl_cfenwick_prefix(const scl_concurrent_fenwick_t *fw, size_t idx, 
         }
         i -= i & -i;
     }
-
-    spin_unlock((atomic_flag *)&fw->lock);
     return first ? SCL_ERR_EMPTY : SCL_OK;
+}
+
+scl_error_t scl_cfenwick_prefix(const scl_concurrent_fenwick_t *fw, size_t idx, void *out)
+{
+    if (!fw || !out) return SCL_ERR_NULL_PTR;
+    if (idx >= fw->n) return SCL_ERR_INVALID_INDEX;
+
+    scl_spinlock_lock((scl_spinlock_t *)&fw->lock);
+    scl_error_t err = prefix_unlocked(fw, idx, out);
+    scl_spinlock_unlock((scl_spinlock_t *)&fw->lock);
+    return err;
 }
 
 scl_error_t scl_cfenwick_range_query(const scl_concurrent_fenwick_t *fw, size_t l, size_t r, void *out)
@@ -110,17 +103,17 @@ scl_error_t scl_cfenwick_range_query(const scl_concurrent_fenwick_t *fw, size_t 
     if (!fw || !out) return SCL_ERR_NULL_PTR;
     if (l > r || r >= fw->n) return SCL_ERR_INVALID_ARG;
 
-    spin_lock((atomic_flag *)&fw->lock);
+    scl_spinlock_lock((scl_spinlock_t *)&fw->lock);
 
-    scl_error_t err = scl_cfenwick_prefix(fw, r, out);
-    if (err != SCL_OK) { spin_unlock((atomic_flag *)&fw->lock); return err; }
+    scl_error_t err = prefix_unlocked(fw, r, out);
+    if (err != SCL_OK) { scl_spinlock_unlock((scl_spinlock_t *)&fw->lock); return err; }
 
     if (l > 0) {
-        err = scl_cfenwick_prefix(fw, l - 1, fw->scratch);
-        if (err != SCL_OK) { spin_unlock((atomic_flag *)&fw->lock); return err; }
+        err = prefix_unlocked(fw, l - 1, fw->scratch);
+        if (err != SCL_OK) { scl_spinlock_unlock((scl_spinlock_t *)&fw->lock); return err; }
         fw->sub(out, out, fw->scratch);
     }
 
-    spin_unlock((atomic_flag *)&fw->lock);
+    scl_spinlock_unlock((scl_spinlock_t *)&fw->lock);
     return SCL_OK;
 }

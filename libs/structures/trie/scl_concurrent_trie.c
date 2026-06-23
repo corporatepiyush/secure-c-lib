@@ -5,25 +5,13 @@
 #pragma GCC optimize ("O3", "unroll-loops", "tree-vectorize", "inline")
 #endif
 
-static inline void spin_lock(atomic_flag *lock)
-{
-    while (atomic_flag_test_and_set_explicit(lock, memory_order_acquire)) {
-        scl_cpu_pause();
-    }
-}
-
-static inline void spin_unlock(atomic_flag *lock)
-{
-    atomic_flag_clear_explicit(lock, memory_order_release);
-}
-
 static scl_concurrent_trie_node_t *create_node(scl_allocator_t *alloc)
 {
     scl_concurrent_trie_node_t *n = scl_calloc(alloc, 1, sizeof(scl_concurrent_trie_node_t), alignof(max_align_t));
     if (!n) return NULL;
     n->value = NULL;
     n->terminal = false;
-    atomic_flag_clear(&n->lock);
+    scl_spinlock_init(&n->lock);
     return n;
 }
 
@@ -75,37 +63,37 @@ scl_error_t scl_ctrie_insert(scl_allocator_t *alloc, scl_concurrent_trie_t *trie
     scl_concurrent_trie_node_t *cur = trie->root;
     for (size_t i = 0; i < key_len; i++) {
         unsigned char c = key[i];
-        spin_lock(&cur->lock);
+        scl_spinlock_lock(&cur->lock);
         if (!cur->children[c]) {
             scl_concurrent_trie_node_t *n = create_node(alloc);
-            if (!n) { spin_unlock(&cur->lock); return SCL_ERR_OUT_OF_MEMORY; }
+            if (!n) { scl_spinlock_unlock(&cur->lock); return SCL_ERR_OUT_OF_MEMORY; }
             cur->children[c] = n;
         }
         if (i < key_len - 1) {
             scl_concurrent_trie_node_t *next = cur->children[c];
-            spin_unlock(&cur->lock);
+            scl_spinlock_unlock(&cur->lock);
             cur = next;
         } else {
             scl_concurrent_trie_node_t *next = cur->children[c];
-            spin_lock(&next->lock);
+            scl_spinlock_lock(&next->lock);
             bool was_terminal = next->terminal;
             if (!next->value) {
                 next->value = scl_alloc(alloc, trie->value_size, alignof(max_align_t));
-                if (!next->value) { spin_unlock(&next->lock); spin_unlock(&cur->lock); return SCL_ERR_OUT_OF_MEMORY; }
+                if (!next->value) { scl_spinlock_unlock(&next->lock); scl_spinlock_unlock(&cur->lock); return SCL_ERR_OUT_OF_MEMORY; }
             }
             scl_memcpy(next->value, value, trie->value_size);
             next->terminal = true;
             if (!was_terminal) atomic_fetch_add_explicit(&trie->count, 1, memory_order_relaxed);
-            spin_unlock(&next->lock);
-            spin_unlock(&cur->lock);
+            scl_spinlock_unlock(&next->lock);
+            scl_spinlock_unlock(&cur->lock);
             return SCL_OK;
         }
     }
-    spin_lock(&cur->lock);
+    scl_spinlock_lock(&cur->lock);
     if (!cur->terminal) {
         if (!cur->value) {
             cur->value = scl_alloc(alloc, trie->value_size, alignof(max_align_t));
-            if (!cur->value) { spin_unlock(&cur->lock); return SCL_ERR_OUT_OF_MEMORY; }
+            if (!cur->value) { scl_spinlock_unlock(&cur->lock); return SCL_ERR_OUT_OF_MEMORY; }
         }
         scl_memcpy(cur->value, value, trie->value_size);
         cur->terminal = true;
@@ -113,7 +101,7 @@ scl_error_t scl_ctrie_insert(scl_allocator_t *alloc, scl_concurrent_trie_t *trie
     } else {
         scl_memcpy(cur->value, value, trie->value_size);
     }
-    spin_unlock(&cur->lock);
+    scl_spinlock_unlock(&cur->lock);
     return SCL_OK;
 }
 
@@ -122,24 +110,24 @@ scl_error_t scl_ctrie_get(const scl_concurrent_trie_t *trie, const unsigned char
 {
     if (!trie || !key || !out_value) return SCL_ERR_NULL_PTR;
     scl_concurrent_trie_node_t *cur = trie->root;
-    spin_lock(&cur->lock);
+    scl_spinlock_lock(&cur->lock);
     scl_concurrent_trie_node_t *prev = NULL;
     for (size_t i = 0; i < key_len; i++) {
         unsigned char c = key[i];
         scl_concurrent_trie_node_t *next = cur->children[c];
-        if (!next) { if (prev) spin_unlock(&prev->lock); spin_unlock(&cur->lock); return SCL_ERR_NOT_FOUND; }
-        spin_lock(&next->lock);
-        if (prev) spin_unlock(&prev->lock);
+        if (!next) { if (prev) scl_spinlock_unlock(&prev->lock); scl_spinlock_unlock(&cur->lock); return SCL_ERR_NOT_FOUND; }
+        scl_spinlock_lock(&next->lock);
+        if (prev) scl_spinlock_unlock(&prev->lock);
         prev = cur;
         cur = next;
     }
-    if (prev) spin_unlock(&prev->lock);
+    if (prev) scl_spinlock_unlock(&prev->lock);
     if (cur->terminal) {
         scl_memcpy(out_value, cur->value, trie->value_size);
-        spin_unlock(&cur->lock);
+        scl_spinlock_unlock(&cur->lock);
         return SCL_OK;
     }
-    spin_unlock(&cur->lock);
+    scl_spinlock_unlock(&cur->lock);
     return SCL_ERR_NOT_FOUND;
 }
 
@@ -148,20 +136,20 @@ bool scl_ctrie_contains(const scl_concurrent_trie_t *trie, const unsigned char *
 {
     if (!trie || !key) return false;
     scl_concurrent_trie_node_t *cur = trie->root;
-    spin_lock(&cur->lock);
+    scl_spinlock_lock(&cur->lock);
     scl_concurrent_trie_node_t *prev = NULL;
     for (size_t i = 0; i < key_len; i++) {
         unsigned char c = key[i];
         scl_concurrent_trie_node_t *next = cur->children[c];
-        if (!next) { if (prev) spin_unlock(&prev->lock); spin_unlock(&cur->lock); return false; }
-        spin_lock(&next->lock);
-        if (prev) spin_unlock(&prev->lock);
+        if (!next) { if (prev) scl_spinlock_unlock(&prev->lock); scl_spinlock_unlock(&cur->lock); return false; }
+        scl_spinlock_lock(&next->lock);
+        if (prev) scl_spinlock_unlock(&prev->lock);
         prev = cur;
         cur = next;
     }
-    if (prev) spin_unlock(&prev->lock);
+    if (prev) scl_spinlock_unlock(&prev->lock);
     bool result = cur->terminal;
-    spin_unlock(&cur->lock);
+    scl_spinlock_unlock(&cur->lock);
     return result;
 }
 
@@ -175,22 +163,22 @@ scl_error_t scl_ctrie_remove(scl_allocator_t *alloc, scl_concurrent_trie_t *trie
     int path_len = 0;
     scl_concurrent_trie_node_t *cur = trie->root;
     path[path_len++] = cur;
-    spin_lock(&cur->lock);
+    scl_spinlock_lock(&cur->lock);
     scl_concurrent_trie_node_t *prev = NULL;
 
     for (size_t i = 0; i < key_len; i++) {
         unsigned char c = key[i];
         scl_concurrent_trie_node_t *next = cur->children[c];
-        if (!next) { if (prev) spin_unlock(&prev->lock); spin_unlock(&cur->lock); return SCL_ERR_NOT_FOUND; }
-        spin_lock(&next->lock);
-        if (prev) spin_unlock(&prev->lock);
+        if (!next) { if (prev) scl_spinlock_unlock(&prev->lock); scl_spinlock_unlock(&cur->lock); return SCL_ERR_NOT_FOUND; }
+        scl_spinlock_lock(&next->lock);
+        if (prev) scl_spinlock_unlock(&prev->lock);
         path[path_len++] = next;
         prev = cur;
         cur = next;
     }
 
-    if (prev) spin_unlock(&prev->lock);
-    if (!cur->terminal) { spin_unlock(&cur->lock); return SCL_ERR_NOT_FOUND; }
+    if (prev) scl_spinlock_unlock(&prev->lock);
+    if (!cur->terminal) { scl_spinlock_unlock(&cur->lock); return SCL_ERR_NOT_FOUND; }
     cur->terminal = false;
     scl_free(alloc, cur->value);
     cur->value = NULL;
@@ -203,13 +191,13 @@ scl_error_t scl_ctrie_remove(scl_allocator_t *alloc, scl_concurrent_trie_t *trie
     if (can_free) {
         unsigned char c = key[key_len - 1];
         scl_concurrent_trie_node_t *parent = path[path_len - 2];
-        spin_lock(&parent->lock);
+        scl_spinlock_lock(&parent->lock);
         parent->children[c] = NULL;
-        spin_unlock(&parent->lock);
-        spin_unlock(&cur->lock);
+        scl_spinlock_unlock(&parent->lock);
+        scl_spinlock_unlock(&cur->lock);
         scl_free(alloc, cur);
     } else {
-        spin_unlock(&cur->lock);
+        scl_spinlock_unlock(&cur->lock);
     }
 
     return SCL_OK;

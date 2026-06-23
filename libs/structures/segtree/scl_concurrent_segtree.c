@@ -1,17 +1,6 @@
 #include "scl_concurrent_segtree.h"
 #include "scl_string.h"
 
-static inline void spin_lock(atomic_flag *lock)
-{
-    while (atomic_flag_test_and_set_explicit(lock, memory_order_acquire))
-        scl_cpu_pause();
-}
-
-static inline void spin_unlock(atomic_flag *lock)
-{
-    atomic_flag_clear_explicit(lock, memory_order_release);
-}
-
 scl_error_t scl_csegtree_init(scl_allocator_t *alloc, scl_concurrent_segtree_t *tree,
                               size_t n, size_t element_size, const void *data,
                               void (*combine)(void *out, const void *a, const void *b))
@@ -28,7 +17,7 @@ scl_error_t scl_csegtree_init(scl_allocator_t *alloc, scl_concurrent_segtree_t *
     tree->size = size;
     tree->element_size = element_size;
     tree->combine = combine;
-    atomic_flag_clear(&tree->lock);
+    scl_spinlock_init(&tree->lock);
 
     const unsigned char *src = data;
     for (size_t i = 0; i < n; i++)
@@ -58,7 +47,7 @@ scl_error_t scl_csegtree_update(scl_allocator_t *alloc, scl_concurrent_segtree_t
     if (!tree || !val) return SCL_ERR_NULL_PTR;
     if (idx >= tree->n) return SCL_ERR_INVALID_INDEX;
 
-    spin_lock(&tree->lock);
+    scl_spinlock_lock(&tree->lock);
 
     size_t esize = tree->element_size;
     size_t p = tree->size + idx;
@@ -69,7 +58,7 @@ scl_error_t scl_csegtree_update(scl_allocator_t *alloc, scl_concurrent_segtree_t
                       tree->data + (2 * p) * esize,
                       tree->data + (2 * p + 1) * esize);
 
-    spin_unlock(&tree->lock);
+    scl_spinlock_unlock(&tree->lock);
     return SCL_OK;
 }
 
@@ -78,7 +67,7 @@ scl_error_t scl_csegtree_query(const scl_concurrent_segtree_t *tree, size_t l, s
     if (!tree || !out) return SCL_ERR_NULL_PTR;
     if (l >= r || r > tree->n) return SCL_ERR_INVALID_ARG;
 
-    spin_lock((atomic_flag *)&tree->lock);
+    scl_spinlock_lock((scl_spinlock_t *)&tree->lock);
 
     size_t esize = tree->element_size;
     l += tree->size;
@@ -116,6 +105,6 @@ scl_error_t scl_csegtree_query(const scl_concurrent_segtree_t *tree, size_t l, s
         }
     }
 
-    spin_unlock((atomic_flag *)&tree->lock);
+    scl_spinlock_unlock((scl_spinlock_t *)&tree->lock);
     return first ? SCL_ERR_EMPTY : SCL_OK;
 }

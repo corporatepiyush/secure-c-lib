@@ -10,7 +10,7 @@ typedef struct {
     size_t element_size;
     void (*add)(void *out, const void *a, const void *b);
     void (*sub)(void *out, const void *a, const void *b);
-    atomic_flag lock;
+    scl_spinlock_t lock;
 } scl_concurrent_fenwick_t;
 
 scl_error_t scl_cfenwick_init(scl_allocator_t *alloc, scl_concurrent_fenwick_t *fw,

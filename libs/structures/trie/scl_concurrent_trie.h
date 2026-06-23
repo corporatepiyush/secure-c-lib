@@ -14,7 +14,7 @@ typedef struct scl_concurrent_trie_node {
     struct scl_concurrent_trie_node *children[SCL_TRIE_ALPHABET];
     void *value;
     bool terminal;
-    atomic_flag lock;
+    scl_spinlock_t lock;
 } scl_concurrent_trie_node_t;
 
 typedef struct {

@@ -6,18 +6,6 @@
 #pragma GCC optimize ("O3", "unroll-loops", "tree-vectorize", "inline")
 #endif
 
-static inline void spin_lock(atomic_flag *lock)
-{
-    while (atomic_flag_test_and_set_explicit(lock, memory_order_acquire)) {
-        scl_cpu_pause();
-    }
-}
-
-static inline void spin_unlock(atomic_flag *lock)
-{
-    atomic_flag_clear_explicit(lock, memory_order_release);
-}
-
 static size_t random_level(void)
 {
     size_t lvl = 1;
@@ -54,7 +42,7 @@ scl_error_t scl_cskiplist_init(scl_allocator_t *alloc, scl_concurrent_skiplist_t
     atomic_init(&sl->count, 0);
     sl->cmp = cmp;
     atomic_init(&sl->level, 1);
-    atomic_flag_clear(&sl->lock);
+    scl_spinlock_init(&sl->lock);
     srand((unsigned int)time(NULL));
     return SCL_OK;
 }
@@ -76,7 +64,7 @@ void scl_cskiplist_destroy(scl_allocator_t *alloc, scl_concurrent_skiplist_t *sl
 scl_error_t scl_cskiplist_insert(scl_allocator_t *alloc, scl_concurrent_skiplist_t *sl, const void *element)
 {
     if (!sl || !element) return SCL_ERR_NULL_PTR;
-    spin_lock(&sl->lock);
+    scl_spinlock_lock(&sl->lock);
     scl_concurrent_skiplist_node_t *update[SCL_SKIPLIST_MAX_LEVEL];
     scl_concurrent_skiplist_node_t *cur = sl->head;
     for (size_t i = atomic_load_explicit(&sl->level, memory_order_relaxed); i > 0; i--) {
@@ -88,7 +76,7 @@ scl_error_t scl_cskiplist_insert(scl_allocator_t *alloc, scl_concurrent_skiplist
     cur = cur->forward[0];
     if (cur && sl->cmp(cur->data, element) == 0) {
         scl_memcpy(cur->data, element, sl->element_size);
-        spin_unlock(&sl->lock);
+        scl_spinlock_unlock(&sl->lock);
         return SCL_OK;
     }
     size_t lvl = random_level();
@@ -98,20 +86,20 @@ scl_error_t scl_cskiplist_insert(scl_allocator_t *alloc, scl_concurrent_skiplist
         atomic_store_explicit(&sl->level, lvl, memory_order_relaxed);
     }
     scl_concurrent_skiplist_node_t *n = create_node(alloc, element, sl->element_size, lvl);
-    if (!n) { spin_unlock(&sl->lock); return SCL_ERR_OUT_OF_MEMORY; }
+    if (!n) { scl_spinlock_unlock(&sl->lock); return SCL_ERR_OUT_OF_MEMORY; }
     for (size_t i = 0; i < lvl; i++) {
         n->forward[i] = update[i]->forward[i];
         update[i]->forward[i] = n;
     }
     atomic_fetch_add_explicit(&sl->count, 1, memory_order_relaxed);
-    spin_unlock(&sl->lock);
+    scl_spinlock_unlock(&sl->lock);
     return SCL_OK;
 }
 
 scl_error_t scl_cskiplist_remove(scl_allocator_t *alloc, scl_concurrent_skiplist_t *sl, const void *key)
 {
     if (!sl || !key) return SCL_ERR_NULL_PTR;
-    spin_lock(&sl->lock);
+    scl_spinlock_lock(&sl->lock);
     scl_concurrent_skiplist_node_t *update[SCL_SKIPLIST_MAX_LEVEL];
     scl_concurrent_skiplist_node_t *cur = sl->head;
     for (size_t i = atomic_load_explicit(&sl->level, memory_order_relaxed); i > 0; i--) {
@@ -122,7 +110,7 @@ scl_error_t scl_cskiplist_remove(scl_allocator_t *alloc, scl_concurrent_skiplist
     }
     cur = cur->forward[0];
     if (!cur || sl->cmp(cur->data, key) != 0) {
-        spin_unlock(&sl->lock);
+        scl_spinlock_unlock(&sl->lock);
         return SCL_ERR_NOT_FOUND;
     }
     size_t lvl = atomic_load_explicit(&cur->level, memory_order_relaxed);
@@ -135,14 +123,14 @@ scl_error_t scl_cskiplist_remove(scl_allocator_t *alloc, scl_concurrent_skiplist
            !sl->head->forward[atomic_load_explicit(&sl->level, memory_order_relaxed) - 1])
         atomic_fetch_sub_explicit(&sl->level, 1, memory_order_relaxed);
     atomic_fetch_sub_explicit(&sl->count, 1, memory_order_relaxed);
-    spin_unlock(&sl->lock);
+    scl_spinlock_unlock(&sl->lock);
     return SCL_OK;
 }
 
 bool scl_cskiplist_contains(const scl_concurrent_skiplist_t *sl, const void *key)
 {
     if (!sl || !key) return false;
-    spin_lock((atomic_flag *)&sl->lock);
+    scl_spinlock_lock((scl_spinlock_t *)&sl->lock);
     scl_concurrent_skiplist_node_t *cur = sl->head;
     for (size_t i = atomic_load_explicit(&sl->level, memory_order_relaxed); i > 0; i--) {
         size_t idx = i - 1;
@@ -151,14 +139,14 @@ bool scl_cskiplist_contains(const scl_concurrent_skiplist_t *sl, const void *key
     }
     cur = cur->forward[0];
     bool found = cur && sl->cmp(cur->data, key) == 0;
-    spin_unlock((atomic_flag *)&sl->lock);
+    scl_spinlock_unlock((scl_spinlock_t *)&sl->lock);
     return found;
 }
 
 scl_error_t scl_cskiplist_find(const scl_concurrent_skiplist_t *sl, const void *key, void *out)
 {
     if (!sl || !key || !out) return SCL_ERR_NULL_PTR;
-    spin_lock((atomic_flag *)&sl->lock);
+    scl_spinlock_lock((scl_spinlock_t *)&sl->lock);
     scl_concurrent_skiplist_node_t *cur = sl->head;
     for (size_t i = atomic_load_explicit(&sl->level, memory_order_relaxed); i > 0; i--) {
         size_t idx = i - 1;
@@ -168,10 +156,10 @@ scl_error_t scl_cskiplist_find(const scl_concurrent_skiplist_t *sl, const void *
     cur = cur->forward[0];
     if (cur && sl->cmp(cur->data, key) == 0) {
         scl_memcpy(out, cur->data, sl->element_size);
-        spin_unlock((atomic_flag *)&sl->lock);
+        scl_spinlock_unlock((scl_spinlock_t *)&sl->lock);
         return SCL_OK;
     }
-    spin_unlock((atomic_flag *)&sl->lock);
+    scl_spinlock_unlock((scl_spinlock_t *)&sl->lock);
     return SCL_ERR_NOT_FOUND;
 }
 
