@@ -45,9 +45,22 @@ static scl_error_t scl_threadpool_create_threads(scl_threadpool_t *pool) {
     pool->thread_handles = (scl_thread_t *)scl_calloc(pool->alloc, pool->thread_count, sizeof(scl_thread_t), _Alignof(max_align_t));
     if (!pool->thread_handles) return SCL_ERR_OUT_OF_MEMORY;
 
+    unsigned int created = 0;
     for (unsigned int i = 0; i < pool->thread_count; i++) {
         scl_error_t err = scl_thread_create(&pool->thread_handles[i], scl_threadpool_worker, pool);
-        if (err != SCL_OK) return err;
+        if (err != SCL_OK) {
+            /* Stop the threads that did start */
+            scl_mutex_lock(&pool->lock);
+            pool->active = 0;
+            scl_cond_broadcast(&pool->cond);
+            scl_mutex_unlock(&pool->lock);
+            for (unsigned int j = 0; j < created; j++)
+                scl_thread_join(pool->thread_handles[j], NULL);
+            scl_free(pool->alloc, pool->thread_handles);
+            pool->thread_handles = NULL;
+            return err;
+        }
+        created++;
     }
     return SCL_OK;
 }

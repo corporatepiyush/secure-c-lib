@@ -21,12 +21,21 @@ scl_error_t scl_bst_init(scl_allocator_t *alloc, scl_bst_t *tree, size_t element
 void scl_bst_destroy(scl_allocator_t *alloc, scl_bst_t *tree)
 {
     if (!tree || !tree->root) return;
-    scl_bst_node_t *stack[256];
+    size_t cap = 64;
+    scl_bst_node_t **stack = scl_alloc(alloc, cap * sizeof(stack[0]), alignof(max_align_t));
+    if (!stack) return;
     int sp = -1;
     scl_bst_node_t *cur = tree->root;
     scl_bst_node_t *last = NULL;
     while (cur || sp >= 0) {
         while (cur) {
+            if ((size_t)(sp + 1) >= cap) {
+                size_t new_cap = cap * 2;
+                scl_bst_node_t **ns = scl_realloc(alloc, stack, cap * sizeof(stack[0]), new_cap * sizeof(stack[0]), alignof(max_align_t));
+                if (!ns) { scl_free(alloc, stack); return; }
+                stack = ns;
+                cap = new_cap;
+            }
             stack[++sp] = cur;
             cur = cur->left;
         }
@@ -40,6 +49,7 @@ void scl_bst_destroy(scl_allocator_t *alloc, scl_bst_t *tree)
             last = peek;
         }
     }
+    scl_free(alloc, stack);
     tree->root = NULL;
     tree->count = 0;
 }

@@ -7,6 +7,7 @@
 #endif
 
 #include "scl_common.h"
+#include "scl_atomic.h"
 #include "scl_pthread.h"
 
 typedef void (*scl_threadpool_task_fn)(void *arg);
@@ -20,7 +21,7 @@ typedef struct scl_threadpool_task {
 typedef struct {
     scl_allocator_t *alloc;
     unsigned int thread_count;
-    int active;
+    scl_atomic_int active;
     scl_threadpool_task_t *head;
     scl_threadpool_task_t *tail;
     scl_thread_t *thread_handles;

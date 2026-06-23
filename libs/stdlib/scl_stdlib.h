@@ -23,14 +23,11 @@ int scl_abs(int x);
 long scl_labs(long x);
 long long scl_llabs(long long x);
 
-/* Random numbers */
+/* Random numbers — backed by system CSPRNG */
 int scl_rand(void);
 void scl_srand(unsigned int seed);
 
 /* Environment */
 char *scl_getenv(const char *name);
-
-/* Execution */
-int scl_system(const char *command);
 
 #endif // SCL_STDLIB_H

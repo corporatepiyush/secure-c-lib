@@ -41,22 +41,16 @@ static void test_labs(scl_test_runner_t *tr) {
 
 static void test_rand(scl_test_runner_t *tr) {
     scl_test_group("scl_rand");
-    scl_srand(42);
     int a = scl_rand();
     int b = scl_rand();
     (void)a; (void)b;
-    SCL_EXPECT_TRUE(tr, 1); /* rand/srand smoke test */
+    SCL_EXPECT_TRUE(tr, 1);
 }
 
 static void test_getenv(scl_test_runner_t *tr) {
     scl_test_group("scl_getenv");
     SCL_EXPECT_NOT_NULL(tr, scl_getenv("PATH"));
     SCL_EXPECT_NULL(tr, scl_getenv(NULL));
-}
-
-static void test_system(scl_test_runner_t *tr) {
-    scl_test_group("scl_system");
-    SCL_EXPECT_EQ_I(tr, scl_system(NULL), -1);
 }
 
 int main(void) {
@@ -70,7 +64,6 @@ int main(void) {
     test_labs(&tr);
     test_rand(&tr);
     test_getenv(&tr);
-    test_system(&tr);
 
     scl_test_summary(&tr);
     return tr.failed > 0 ? 1 : 0;

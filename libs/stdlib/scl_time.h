@@ -1,0 +1,56 @@
+#ifndef SCL_TIME_H
+#define SCL_TIME_H
+
+#include "scl_common.h"
+#include <time.h>
+#if defined(SCL_OS_MACOS)
+#include <sys/time.h>
+#endif
+
+/* ── Time type (thin wrapper around struct timespec) ──────────── */
+typedef struct timespec scl_timespec_t;
+
+/* ── Clock operations ─────────────────────────────────────────── */
+
+/* Fill ts with CLOCK_REALTIME (portable across macOS/Linux/FreeBSD) */
+static inline scl_error_t scl_clock_realtime(scl_timespec_t *ts) {
+    if (scl_unlikely(!ts)) return SCL_ERR_NULL_PTR;
+#if defined(SCL_OS_MACOS)
+    struct timeval tv;
+    if (gettimeofday(&tv, NULL) != 0) return SCL_ERR_IO;
+    ts->tv_sec  = tv.tv_sec;
+    ts->tv_nsec = tv.tv_usec * 1000;
+#else
+    if (clock_gettime(CLOCK_REALTIME, ts) != 0) return SCL_ERR_IO;
+#endif
+    return SCL_OK;
+}
+
+/* Add ms (milliseconds) to an existing timespec in-place */
+static inline void scl_timespec_add_ms(scl_timespec_t *ts, int64_t ms) {
+    if (ms < 0) return;
+    int64_t nsec = ts->tv_nsec + (ms % 1000) * 1000000L;
+    ts->tv_sec  += ms / 1000 + nsec / 1000000000L;
+    ts->tv_nsec  = nsec % 1000000000L;
+}
+
+/* Convenience: fill ts with current CLOCK_REALTIME + ms offset.
+   Returns SCL_OK on success. */
+static inline scl_error_t scl_deadline_from_now_ms(scl_timespec_t *ts, int64_t ms) {
+    scl_error_t err = scl_clock_realtime(ts);
+    if (err != SCL_OK) return err;
+    scl_timespec_add_ms(ts, ms);
+    return SCL_OK;
+}
+
+/* Sleep for ms milliseconds (nanosleep-based) */
+static inline scl_error_t scl_sleep_ms(int64_t ms) {
+    if (ms <= 0) return SCL_OK;
+    scl_timespec_t ts;
+    ts.tv_sec  = ms / 1000;
+    ts.tv_nsec = (ms % 1000) * 1000000L;
+    if (nanosleep(&ts, NULL) != 0) return SCL_ERR_IO;
+    return SCL_OK;
+}
+
+#endif /* SCL_TIME_H */

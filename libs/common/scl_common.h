@@ -120,11 +120,8 @@ static inline bool scl_mul_overflow(size_t a, size_t b, size_t *out) {
     return false;
 }
 
-/* Volatile zero — prevents the compiler from eliding the wipe of sensitive data. */
-static inline void scl_secure_zero(void *ptr, size_t len) {
-    volatile unsigned char *p = (volatile unsigned char *)ptr;
-    while (len--) *p++ = 0;
-}
+/* Secure memory zero — prevents compiler from eliding the wipe. */
+void scl_secure_zero(void *ptr, size_t len);
 
 /* ── Cache-line constants (x86-64 / ARM64) ──────────────────── */
 #if defined(SCL_ARCH_ARM64)

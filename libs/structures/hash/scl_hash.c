@@ -1,5 +1,6 @@
 #include "scl_hash.h"
 #include "scl_string.h"
+#include "scl_stdlib.h"
 
 #if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC optimize ("O3", "unroll-loops", "tree-vectorize", "inline")
@@ -46,9 +47,10 @@ static SCL_COLD_PATH scl_error_t scl_hash_grow(scl_allocator_t *alloc, scl_hash_
 
     /* Rehash all occupied entries into new table */
     scl_hash_func_t hf = ht->hash_func;
+    uint64_t seed = ht->seed;
     for (size_t i = 0; i < ht->capacity; i++) {
         if (ht->states[i] == SCL_HASH_OCCUPIED) {
-            size_t idx = hf(ht->keys + i * ksz, ksz) & new_mask;
+            size_t idx = (hf(ht->keys + i * ksz, ksz) ^ seed) & new_mask;
             while (new_states[idx] == SCL_HASH_OCCUPIED)
                 idx = (idx + 1) & new_mask;
             scl_memcpy(new_keys + idx * ksz, ht->keys + i * ksz, ksz);
@@ -98,6 +100,7 @@ scl_error_t scl_hash_init(scl_allocator_t *alloc, scl_hash_t *ht, size_t key_siz
     ht->count = 0;
     ht->hash_func = hf;
     ht->eq_func = eq ? eq : scl_hash_eq_mem;
+    ht->seed = ((uint64_t)(unsigned int)scl_rand() << 32) | (uint64_t)(unsigned int)scl_rand();
     ht->key_size = ksz;
     ht->value_size = vsz;
     return SCL_OK;
@@ -137,7 +140,7 @@ scl_error_t scl_hash_insert(scl_allocator_t *alloc, scl_hash_t *ht, const void *
         mask = ht->mask;
     }
 
-    size_t idx = hf(key, ksz) & mask;
+    size_t idx = (hf(key, ksz) ^ ht->seed) & mask;
     size_t start = idx;
 
     /* Linear probing: find existing key or empty slot */
@@ -170,7 +173,7 @@ scl_error_t scl_hash_get(const scl_hash_t *ht, const void *key, void *out_value)
     scl_hash_func_t hf = ht->hash_func;
     scl_hash_eq_func_t eq = ht->eq_func;
 
-    size_t idx = hf(key, ksz) & mask;
+    size_t idx = (hf(key, ksz) ^ ht->seed) & mask;
     size_t start = idx;
 
     for (;;) {
@@ -196,7 +199,7 @@ scl_error_t scl_hash_remove(scl_allocator_t *alloc, scl_hash_t *ht, const void *
     scl_hash_func_t hf = ht->hash_func;
     scl_hash_eq_func_t eq = ht->eq_func;
 
-    size_t idx = hf(key, ksz) & mask;
+    size_t idx = (hf(key, ksz) ^ ht->seed) & mask;
     size_t start = idx;
 
     for (;;) {
@@ -222,7 +225,7 @@ bool scl_hash_contains(const scl_hash_t *ht, const void *key)
     scl_hash_func_t hf = ht->hash_func;
     scl_hash_eq_func_t eq = ht->eq_func;
 
-    size_t idx = hf(key, ksz) & mask;
+    size_t idx = (hf(key, ksz) ^ ht->seed) & mask;
     size_t start = idx;
 
     for (;;) {

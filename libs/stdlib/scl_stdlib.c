@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <errno.h>
 #include <limits.h>
+#include <stdio.h>
 
 /*
  * scl_stdlib -- secure proxy over <stdlib.h>.
@@ -88,20 +89,26 @@ long long scl_llabs(long long x) {
     return llabs(x);
 }
 
+/* Random numbers — backed by system CSPRNG */
 int scl_rand(void) {
-    return rand();
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
+    return (int)(arc4random() & INT_MAX);
+#else
+    unsigned int val = 0;
+    FILE *f = fopen("/dev/urandom", "rb");
+    if (f) {
+        if (fread(&val, sizeof(val), 1, f) == 1) { fclose(f); return (int)(val & INT_MAX); }
+        fclose(f);
+    }
+    return 0;
+#endif
 }
 
 void scl_srand(unsigned int seed) {
-    srand(seed);
+    (void)seed;
 }
 
 char *scl_getenv(const char *name) {
     if (scl_unlikely(!name)) return NULL;
     return getenv(name);
-}
-
-int scl_system(const char *command) {
-    if (scl_unlikely(!command)) return -1;
-    return system(command);
 }

@@ -25,12 +25,21 @@ scl_error_t scl_rbtree_init(scl_allocator_t *alloc, scl_rbtree_t *tree, size_t e
 void scl_rbtree_destroy(scl_allocator_t *alloc, scl_rbtree_t *tree)
 {
     if (!tree || !tree->root) return;
-    scl_rbtree_node_t *stack[256];
+    size_t cap = 64;
+    scl_rbtree_node_t **stack = scl_alloc(alloc, cap * sizeof(stack[0]), alignof(max_align_t));
+    if (!stack) return;
     int sp = -1;
     scl_rbtree_node_t *cur = tree->root;
     scl_rbtree_node_t *last = NULL;
     while (cur || sp >= 0) {
         while (cur) {
+            if ((size_t)(sp + 1) >= cap) {
+                size_t new_cap = cap * 2;
+                scl_rbtree_node_t **ns = scl_realloc(alloc, stack, cap * sizeof(stack[0]), new_cap * sizeof(stack[0]), alignof(max_align_t));
+                if (!ns) { scl_free(alloc, stack); return; }
+                stack = ns;
+                cap = new_cap;
+            }
             stack[++sp] = cur;
             cur = cur->left;
         }
@@ -44,6 +53,7 @@ void scl_rbtree_destroy(scl_allocator_t *alloc, scl_rbtree_t *tree)
             last = peek;
         }
     }
+    scl_free(alloc, stack);
     tree->root = NULL;
     tree->count = 0;
 }
@@ -172,6 +182,67 @@ scl_error_t scl_rbtree_insert(scl_allocator_t *alloc, scl_rbtree_t *tree, const 
     return SCL_OK;
 }
 
+static inline bool scl_rb_is_black_or_null(const scl_rbtree_node_t *n) {
+    return !n || n->color == SCL_RB_BLACK;
+}
+
+static void scl_rbtree_remove_fixup(scl_rbtree_t *tree,
+                                     scl_rbtree_node_t *x,
+                                     scl_rbtree_node_t *x_parent) {
+    while (x != tree->root && scl_rb_is_black_or_null(x)) {
+        bool x_is_left = (x == x_parent->left);
+        scl_rbtree_node_t *w = x_is_left ? x_parent->right : x_parent->left;
+
+        /* Case 1: sibling is red */
+        if (w && w->color == SCL_RB_RED) {
+            w->color = SCL_RB_BLACK;
+            x_parent->color = SCL_RB_RED;
+            if (x_is_left)
+                scl_rbtree_left_rotate(tree, x_parent);
+            else
+                scl_rbtree_right_rotate(tree, x_parent);
+            w = x_is_left ? x_parent->right : x_parent->left;
+        }
+
+        /* Case 2: sibling's children are both black (or sibling is NULL) */
+        if (!w || (scl_rb_is_black_or_null(w->left) && scl_rb_is_black_or_null(w->right))) {
+            if (w) w->color = SCL_RB_RED;
+            x = x_parent;
+            x_parent = x_parent->parent;
+            continue;
+        }
+
+        /* Case 3: sibling's far child is black */
+        if (x_is_left) {
+            if (scl_rb_is_black_or_null(w->right)) {
+                if (w->left) w->left->color = SCL_RB_BLACK;
+                w->color = SCL_RB_RED;
+                scl_rbtree_right_rotate(tree, w);
+                w = x_parent->right;
+            }
+            /* Case 4: sibling's far child is red */
+            w->color = x_parent->color;
+            x_parent->color = SCL_RB_BLACK;
+            if (w->right) w->right->color = SCL_RB_BLACK;
+            scl_rbtree_left_rotate(tree, x_parent);
+        } else {
+            if (scl_rb_is_black_or_null(w->left)) {
+                if (w->right) w->right->color = SCL_RB_BLACK;
+                w->color = SCL_RB_RED;
+                scl_rbtree_left_rotate(tree, w);
+                w = x_parent->left;
+            }
+            w->color = x_parent->color;
+            x_parent->color = SCL_RB_BLACK;
+            if (w->left) w->left->color = SCL_RB_BLACK;
+            scl_rbtree_right_rotate(tree, x_parent);
+        }
+        x = tree->root;
+        x_parent = NULL;
+    }
+    if (x) x->color = SCL_RB_BLACK;
+}
+
 scl_error_t scl_rbtree_remove(scl_allocator_t *alloc, scl_rbtree_t *tree, const void *key)
 {
     if (!tree || !key) return SCL_ERR_NULL_PTR;
@@ -185,10 +256,12 @@ scl_error_t scl_rbtree_remove(scl_allocator_t *alloc, scl_rbtree_t *tree, const 
     }
     if (!z) return SCL_ERR_NOT_FOUND;
 
-    scl_rbtree_node_t *x, *y = z;
+    scl_rbtree_node_t *x, *y = z, *x_parent = NULL;
+    scl_rb_color_t y_original_color = y->color;
 
     if (!z->left) {
         x = z->right;
+        x_parent = z->parent;
         if (!z->parent)
             tree->root = x;
         else if (z == z->parent->left)
@@ -198,6 +271,7 @@ scl_error_t scl_rbtree_remove(scl_allocator_t *alloc, scl_rbtree_t *tree, const 
         if (x) x->parent = z->parent;
     } else if (!z->right) {
         x = z->left;
+        x_parent = z->parent;
         if (!z->parent)
             tree->root = x;
         else if (z == z->parent->left)
@@ -208,11 +282,14 @@ scl_error_t scl_rbtree_remove(scl_allocator_t *alloc, scl_rbtree_t *tree, const 
     } else {
         y = z->right;
         while (y->left) y = y->left;
+        y_original_color = y->color;
         x = y->right;
 
         if (y->parent == z) {
+            x_parent = y;
             if (x) x->parent = y;
         } else {
+            x_parent = y->parent;
             if (!y->parent)
                 tree->root = x;
             else if (y == y->parent->left)
@@ -235,6 +312,9 @@ scl_error_t scl_rbtree_remove(scl_allocator_t *alloc, scl_rbtree_t *tree, const 
         z->left->parent = y;
         y->color = z->color;
     }
+
+    if (y_original_color == SCL_RB_BLACK)
+        scl_rbtree_remove_fixup(tree, x, x_parent);
 
     scl_free(alloc, z->data);
     scl_free(alloc, z);

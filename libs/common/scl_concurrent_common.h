@@ -41,7 +41,7 @@ static inline int scl_spinlock_trylock(scl_spinlock_t *lock) {
 }
 
 static inline void scl_spinlock_unlock(scl_spinlock_t *lock) {
-    atomic_flag_clear(&lock->flag);
+    atomic_flag_clear_explicit(&lock->flag, memory_order_release);
 }
 
 /* ── Tagged pointer helpers (ABA prevention) ──────────────── */

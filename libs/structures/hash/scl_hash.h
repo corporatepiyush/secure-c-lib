@@ -30,6 +30,7 @@ typedef struct {
     size_t count;
     scl_hash_func_t hash_func;
     scl_hash_eq_func_t eq_func;
+    uint64_t seed;              /* random per-table seed (hash DoS mitigation) */
     size_t key_size;
     size_t value_size;
 } scl_hash_t;

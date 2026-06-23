@@ -2,12 +2,9 @@
 #define SCL_PTHREAD_H
 
 #include "scl_common.h"
+#include "scl_time.h"
+#include "scl_string.h"
 #include <pthread.h>
-#include <string.h>
-#include <time.h>
-#if defined(SCL_OS_MACOS)
-#include <sys/time.h>
-#endif
 
 /* ── Platform detection (from scl_common.h) ────────────── */
 /* Already defined in scl_common.h:
@@ -183,7 +180,7 @@ static inline scl_error_t scl_thread_create_named(scl_thread_t *t,
     }
 #ifdef SCL_PTHREAD_DEBUG
     if (name) {
-        strncpy(t->name, name, sizeof(t->name) - 1);
+        scl_strncpy(t->name, name, sizeof(t->name) - 1);
         t->name[sizeof(t->name) - 1] = '\0';
     } else {
         t->name[0] = '\0';
@@ -268,18 +265,9 @@ static inline scl_error_t scl_cond_wait_for(scl_cond_t *c, scl_mutex_t *m,
     if (scl_unlikely(!c || !m)) return SCL_ERR_NULL_PTR;
     if (timeout_ms < 0) return scl_cond_wait(c, m);
 
-    struct timespec ts;
-#if defined(SCL_OS_MACOS)
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    ts.tv_sec  = tv.tv_sec;
-    ts.tv_nsec = tv.tv_usec * 1000;
-#else
-    clock_gettime(CLOCK_REALTIME, &ts);
-#endif
-    int64_t nsec = ts.tv_nsec + (timeout_ms % 1000) * 1000000L;
-    ts.tv_sec  += timeout_ms / 1000 + nsec / 1000000000L;
-    ts.tv_nsec  = nsec % 1000000000L;
+    scl_timespec_t ts;
+    scl_error_t err = scl_deadline_from_now_ms(&ts, timeout_ms);
+    if (err != SCL_OK) return err;
 
 #ifdef SCL_PTHREAD_DEBUG
     if (m->lock_count > 0) m->lock_count--;

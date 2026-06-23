@@ -44,12 +44,68 @@ static void test_rbtree_ordered(scl_test_runner_t *tr) {
     scl_rbtree_destroy(alloc, &tree);
 }
 
+static void test_rbtree_remove(scl_test_runner_t *tr) {
+    scl_test_group("RBTree: remove and rebalance");
+    scl_allocator_t *alloc = scl_allocator_default();
+    scl_rbtree_t tree;
+    scl_rbtree_init(alloc, &tree, sizeof(int), int_cmp);
+
+    int entries[] = {5, 3, 7, 1, 9, 2, 8, 4, 6, 10};
+    for (int i = 0; i < 10; i++)
+        scl_rbtree_insert(alloc, &tree, &entries[i]);
+    SCL_EXPECT_EQ_SZ(tr, scl_rbtree_count(&tree), 10);
+
+    /* Remove leaf (1 has no children) */
+    int key = 1;
+    SCL_EXPECT_OK(tr, scl_rbtree_remove(alloc, &tree, &key));
+    SCL_EXPECT_FALSE(tr, scl_rbtree_contains(&tree, &key));
+    SCL_EXPECT_EQ_SZ(tr, scl_rbtree_count(&tree), 9);
+
+    /* Remove node with one child (3 has left child 2) */
+    key = 3;
+    SCL_EXPECT_OK(tr, scl_rbtree_remove(alloc, &tree, &key));
+    SCL_EXPECT_FALSE(tr, scl_rbtree_contains(&tree, &key));
+    SCL_EXPECT_EQ_SZ(tr, scl_rbtree_count(&tree), 8);
+
+    /* Remove node with two children (5 is root) */
+    key = 5;
+    SCL_EXPECT_OK(tr, scl_rbtree_remove(alloc, &tree, &key));
+    SCL_EXPECT_FALSE(tr, scl_rbtree_contains(&tree, &key));
+    SCL_EXPECT_EQ_SZ(tr, scl_rbtree_count(&tree), 7);
+
+    /* Remove non-existent */
+    key = 99;
+    SCL_EXPECT_TRUE(tr, scl_rbtree_remove(alloc, &tree, &key) != SCL_OK);
+
+    /* Remove remaining entries */
+    key = 2;
+    SCL_EXPECT_OK(tr, scl_rbtree_remove(alloc, &tree, &key));
+    key = 4;
+    SCL_EXPECT_OK(tr, scl_rbtree_remove(alloc, &tree, &key));
+    key = 6;
+    SCL_EXPECT_OK(tr, scl_rbtree_remove(alloc, &tree, &key));
+    key = 7;
+    SCL_EXPECT_OK(tr, scl_rbtree_remove(alloc, &tree, &key));
+    key = 8;
+    SCL_EXPECT_OK(tr, scl_rbtree_remove(alloc, &tree, &key));
+    key = 9;
+    SCL_EXPECT_OK(tr, scl_rbtree_remove(alloc, &tree, &key));
+    key = 10;
+    SCL_EXPECT_OK(tr, scl_rbtree_remove(alloc, &tree, &key));
+
+    SCL_EXPECT_TRUE(tr, scl_rbtree_empty(&tree));
+    SCL_EXPECT_EQ_SZ(tr, scl_rbtree_count(&tree), 0);
+
+    scl_rbtree_destroy(alloc, &tree);
+}
+
 int main(void) {
     scl_test_runner_t tr;
     scl_test_init(&tr);
     test_rbtree_init_destroy(&tr);
     test_rbtree_insert_find(&tr);
     test_rbtree_ordered(&tr);
+    test_rbtree_remove(&tr);
     scl_test_summary(&tr);
     return tr.failed > 0 ? 1 : 0;
 }

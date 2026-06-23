@@ -34,12 +34,21 @@ void scl_cbst_destroy(scl_allocator_t *alloc, scl_concurrent_bst_t *tree)
     if (!tree) return;
     spin_lock(&tree->lock);
     if (tree->root) {
-        scl_concurrent_bst_node_t *stack[256];
+        size_t cap = 64;
+        scl_concurrent_bst_node_t **stack = scl_alloc(alloc, cap * sizeof(stack[0]), alignof(max_align_t));
+        if (!stack) { spin_unlock(&tree->lock); return; }
         int sp = -1;
         scl_concurrent_bst_node_t *cur = tree->root;
         scl_concurrent_bst_node_t *last = NULL;
         while (cur || sp >= 0) {
             while (cur) {
+                if ((size_t)(sp + 1) >= cap) {
+                    size_t new_cap = cap * 2;
+                    scl_concurrent_bst_node_t **ns = scl_realloc(alloc, stack, cap * sizeof(stack[0]), new_cap * sizeof(stack[0]), alignof(max_align_t));
+                    if (!ns) { scl_free(alloc, stack); spin_unlock(&tree->lock); return; }
+                    stack = ns;
+                    cap = new_cap;
+                }
                 stack[++sp] = cur;
                 cur = cur->left;
             }
@@ -53,6 +62,7 @@ void scl_cbst_destroy(scl_allocator_t *alloc, scl_concurrent_bst_t *tree)
                 last = peek;
             }
         }
+        scl_free(alloc, stack);
     }
     tree->root = NULL;
     atomic_store_explicit(&tree->count, 0, memory_order_relaxed);

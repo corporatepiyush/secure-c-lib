@@ -1,27 +1,43 @@
 #include "scl_common.h"
 
 /* ── Default libc-backed allocator ──────────────────────────── */
-struct scl_default_alloc_state {
-    int dummy; /* placeholder */
-};
 
 static void *def_malloc(void *state, size_t size, size_t alignment) {
     (void)state;
-    (void)alignment;
+    if (size == 0) return NULL;
+    if (alignment <= alignof(max_align_t))
+        return malloc(size);
+#if defined(_POSIX_C_SOURCE) || defined(__APPLE__)
+    void *p = NULL;
+    if (posix_memalign(&p, alignment, size) != 0) return NULL;
+    return p;
+#else
     return malloc(size);
+#endif
 }
 
 static void *def_calloc(void *state, size_t count, size_t size, size_t alignment) {
     (void)state;
-    (void)alignment;
-    return calloc(count, size);
+    if (count == 0 || size == 0) return NULL;
+    size_t total;
+    if (__builtin_mul_overflow(count, size, &total)) return NULL;
+    void *p = def_malloc(state, total, alignment);
+    if (p) memset(p, 0, total);
+    return p;
 }
 
 static void *def_realloc(void *state, void *ptr, size_t old_size, size_t new_size, size_t alignment) {
     (void)state;
-    (void)old_size;
-    (void)alignment;
-    return realloc(ptr, new_size);
+    if (new_size == 0) { free(ptr); return NULL; }
+    if (!ptr) return def_malloc(state, new_size, alignment);
+    if (alignment <= alignof(max_align_t))
+        return realloc(ptr, new_size);
+    void *newp = def_malloc(state, new_size, alignment);
+    if (!newp) return NULL;
+    size_t copy_sz = old_size < new_size ? old_size : new_size;
+    memcpy(newp, ptr, copy_sz);
+    free(ptr);
+    return newp;
 }
 
 static void def_free(void *state, void *ptr) {
@@ -29,13 +45,12 @@ static void def_free(void *state, void *ptr) {
     free(ptr);
 }
 
-static struct scl_default_alloc_state default_state;
 static scl_allocator_t default_allocator = {
     .malloc_fn = def_malloc,
     .calloc_fn = def_calloc,
     .realloc_fn = def_realloc,
     .free_fn  = def_free,
-    .state    = &default_state
+    .state    = NULL
 };
 
 scl_allocator_t *scl_allocator_default(void) {
@@ -59,6 +74,14 @@ size_t scl_strlcat(char *dst, const char *src, size_t dsize) {
     if (dsize > 0) dst[di] = '\0';
     while (src[si]) si++;
     return di + si;
+}
+
+/* ── Secure memory zero (cannot be elided by compiler) ──────── */
+static void *(*volatile scl_secure_memset)(void *, int, size_t) = memset;
+
+void scl_secure_zero(void *ptr, size_t len) {
+    if (ptr && len)
+        (void)scl_secure_memset(ptr, 0, len);
 }
 
 /* ── Bit utilities ─────────────────────────────────────────── */
