@@ -4,6 +4,7 @@
 
 #include "scl_rand_uuid.h"
 #include "../../stdlib/scl_stdlib.h"
+#include "../../string/scl_string.h"
 
 #if defined(_WIN32)
 #include <windows.h>

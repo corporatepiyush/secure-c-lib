@@ -5,6 +5,7 @@
 #include "scl_rand_noise.h"
 #include <math.h>
 #include "../../stdlib/scl_stdlib.h"
+#include "../../string/scl_string.h"
 
 static inline double fade(double t) {
     return t * t * t * (t * (t * 6.0 - 15.0) + 10.0);

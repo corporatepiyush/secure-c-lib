@@ -5,6 +5,7 @@
 #include "scl_rand_distribution.h"
 #include <math.h>
 #include "../../stdlib/scl_stdlib.h"
+#include "../../string/scl_string.h"
 
 scl_error_t scl_rand_dist_init(scl_rand_dist_t *dist, uint64_t seed) {
     if (!dist) return SCL_ERR_NULL_PTR;
