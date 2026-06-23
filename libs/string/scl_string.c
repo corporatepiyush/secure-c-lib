@@ -11,16 +11,8 @@ size_t scl_strlen(const char *s) {
 
 /* ── Copy / concat ──────────────────────────────────────────── */
 
-char *scl_strcpy(char *restrict dest, const char *restrict src) {
-    return strcpy(dest, src);
-}
-
 char *scl_strncpy(char *restrict dest, const char *restrict src, size_t n) {
     return strncpy(dest, src, n);
-}
-
-char *scl_strcat(char *restrict dest, const char *restrict src) {
-    return strcat(dest, src);
 }
 
 char *scl_strncat(char *restrict dest, const char *restrict src, size_t n) {

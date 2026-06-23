@@ -5,10 +5,10 @@
 #pragma GCC optimize ("O3", "unroll-loops", "tree-vectorize", "inline")
 #endif
 
-static void sift_up(unsigned char *data, size_t element_size, scl_cmp_func_t cmp, size_t idx)
+static scl_error_t sift_up(scl_allocator_t *alloc, unsigned char *data, size_t element_size, scl_cmp_func_t cmp, size_t idx)
 {
-    unsigned char *tmp = malloc(element_size);
-    if (!tmp) return;
+    unsigned char *tmp = scl_alloc(alloc, element_size, alignof(max_align_t));
+    if (!tmp) return SCL_ERR_OUT_OF_MEMORY;
     scl_memcpy(tmp, data + idx * element_size, element_size);
     while (idx > 0) {
         size_t parent = (idx - 1) / 2;
@@ -17,14 +17,15 @@ static void sift_up(unsigned char *data, size_t element_size, scl_cmp_func_t cmp
         idx = parent;
     }
     scl_memcpy(data + idx * element_size, tmp, element_size);
-    free(tmp);
+    scl_free(alloc, tmp);
+    return SCL_OK;
 }
 
-static void sift_down(unsigned char *data, size_t element_size, scl_cmp_func_t cmp,
+static scl_error_t sift_down(scl_allocator_t *alloc, unsigned char *data, size_t element_size, scl_cmp_func_t cmp,
                       size_t count, size_t idx)
 {
-    unsigned char *tmp = malloc(element_size);
-    if (!tmp) return;
+    unsigned char *tmp = scl_alloc(alloc, element_size, alignof(max_align_t));
+    if (!tmp) return SCL_ERR_OUT_OF_MEMORY;
     scl_memcpy(tmp, data + idx * element_size, element_size);
     while (1) {
         size_t smallest = idx;
@@ -39,7 +40,8 @@ static void sift_down(unsigned char *data, size_t element_size, scl_cmp_func_t c
         idx = smallest;
     }
     scl_memcpy(data + idx * element_size, tmp, element_size);
-    free(tmp);
+    scl_free(alloc, tmp);
+    return SCL_OK;
 }
 
 scl_error_t scl_cheap_init(scl_allocator_t *alloc, scl_concurrent_heap_t *heap, size_t element_size,
@@ -71,7 +73,6 @@ void scl_cheap_destroy(scl_allocator_t *alloc, scl_concurrent_heap_t *heap)
 
 scl_error_t scl_cheap_push(scl_allocator_t *alloc, scl_concurrent_heap_t *heap, const void *element)
 {
-    (void)alloc;
     if (!heap || !element) return SCL_ERR_NULL_PTR;
     scl_spinlock_lock(&heap->lock);
     size_t cnt = atomic_load_explicit(&heap->count, memory_order_relaxed);
@@ -80,13 +81,14 @@ scl_error_t scl_cheap_push(scl_allocator_t *alloc, scl_concurrent_heap_t *heap, 
         return SCL_ERR_FULL;
     }
     scl_memcpy(heap->data + cnt * heap->element_size, element, heap->element_size);
-    sift_up(heap->data, heap->element_size, heap->cmp, cnt);
+    scl_error_t err = sift_up(alloc, heap->data, heap->element_size, heap->cmp, cnt);
+    if (err != SCL_OK) { scl_spinlock_unlock(&heap->lock); return err; }
     atomic_fetch_add_explicit(&heap->count, 1, memory_order_relaxed);
     scl_spinlock_unlock(&heap->lock);
     return SCL_OK;
 }
 
-scl_error_t scl_cheap_pop(scl_concurrent_heap_t *heap, void *out)
+scl_error_t scl_cheap_pop(scl_allocator_t *alloc, scl_concurrent_heap_t *heap, void *out)
 {
     if (!heap || !out) return SCL_ERR_NULL_PTR;
     scl_spinlock_lock(&heap->lock);
@@ -99,7 +101,8 @@ scl_error_t scl_cheap_pop(scl_concurrent_heap_t *heap, void *out)
     cnt--;
     if (cnt > 0) {
         scl_memcpy(heap->data, heap->data + cnt * heap->element_size, heap->element_size);
-        sift_down(heap->data, heap->element_size, heap->cmp, cnt, 0);
+        scl_error_t err = sift_down(alloc, heap->data, heap->element_size, heap->cmp, cnt, 0);
+        if (err != SCL_OK) { scl_spinlock_unlock(&heap->lock); return err; }
     }
     atomic_store_explicit(&heap->count, cnt, memory_order_relaxed);
     scl_spinlock_unlock(&heap->lock);

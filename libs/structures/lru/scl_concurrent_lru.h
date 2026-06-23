@@ -34,7 +34,7 @@ scl_error_t scl_clru_init(scl_allocator_t *alloc, scl_concurrent_lru_t *cache, s
 void        scl_clru_destroy(scl_allocator_t *alloc, scl_concurrent_lru_t *cache);
 scl_error_t scl_clru_put(scl_allocator_t *alloc, scl_concurrent_lru_t *cache, const void *key, const void *value) SCL_WARN_UNUSED;
 scl_error_t scl_clru_get(scl_concurrent_lru_t *cache, const void *key, void *out_value) SCL_WARN_UNUSED;
-bool        scl_clru_contains(const scl_concurrent_lru_t *cache, const void *key);
+bool        scl_clru_contains(scl_concurrent_lru_t *cache, const void *key);
 scl_error_t scl_clru_remove(scl_allocator_t *alloc, scl_concurrent_lru_t *cache, const void *key) SCL_WARN_UNUSED;
 size_t      scl_clru_count(const scl_concurrent_lru_t *cache);
 

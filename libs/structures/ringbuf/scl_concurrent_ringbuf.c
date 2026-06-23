@@ -20,6 +20,7 @@ scl_error_t scl_cringbuf_init(scl_allocator_t *alloc, scl_concurrent_ringbuf_t *
     rb->mask = cap - 1;
     atomic_init(&rb->head, 0);
     atomic_init(&rb->count, 0);
+    scl_spinlock_init(&rb->lock);
     return SCL_OK;
 }
 
@@ -36,8 +37,9 @@ void scl_cringbuf_destroy(scl_allocator_t *alloc, scl_concurrent_ringbuf_t *rb)
 scl_error_t scl_cringbuf_push(scl_concurrent_ringbuf_t *rb, const void *element)
 {
     if (!rb || !element) return SCL_ERR_NULL_PTR;
+    scl_spinlock_lock(&rb->lock);
     size_t cnt = atomic_load_explicit(&rb->count, memory_order_relaxed);
-    if (scl_unlikely(cnt == rb->capacity)) return SCL_ERR_FULL;
+    if (scl_unlikely(cnt == rb->capacity)) { scl_spinlock_unlock(&rb->lock); return SCL_ERR_FULL; }
 
     size_t head = atomic_load_explicit(&rb->head, memory_order_acquire);
     size_t es = rb->element_size;
@@ -45,14 +47,16 @@ scl_error_t scl_cringbuf_push(scl_concurrent_ringbuf_t *rb, const void *element)
     scl_memcpy(rb->data + idx * es, element, es);
     atomic_thread_fence(memory_order_release);
     atomic_store_explicit(&rb->count, cnt + 1, memory_order_release);
+    scl_spinlock_unlock(&rb->lock);
     return SCL_OK;
 }
 
 scl_error_t scl_cringbuf_pop(scl_concurrent_ringbuf_t *rb, void *out)
 {
     if (!rb || !out) return SCL_ERR_NULL_PTR;
+    scl_spinlock_lock(&rb->lock);
     size_t cnt = atomic_load_explicit(&rb->count, memory_order_acquire);
-    if (scl_unlikely(cnt == 0)) return SCL_ERR_EMPTY;
+    if (scl_unlikely(cnt == 0)) { scl_spinlock_unlock(&rb->lock); return SCL_ERR_EMPTY; }
 
     size_t head = atomic_load_explicit(&rb->head, memory_order_relaxed);
     size_t es = rb->element_size;
@@ -60,6 +64,7 @@ scl_error_t scl_cringbuf_pop(scl_concurrent_ringbuf_t *rb, void *out)
     atomic_thread_fence(memory_order_release);
     atomic_store_explicit(&rb->head, (head + 1) & rb->mask, memory_order_release);
     atomic_store_explicit(&rb->count, cnt - 1, memory_order_release);
+    scl_spinlock_unlock(&rb->lock);
     return SCL_OK;
 }
 

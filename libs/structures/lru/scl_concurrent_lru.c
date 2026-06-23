@@ -150,20 +150,20 @@ scl_error_t scl_clru_get(scl_concurrent_lru_t *cache, const void *key, void *out
     return SCL_ERR_NOT_FOUND;
 }
 
-bool scl_clru_contains(const scl_concurrent_lru_t *cache, const void *key)
+bool scl_clru_contains(scl_concurrent_lru_t *cache, const void *key)
 {
     if (!cache || !key) return false;
-    scl_spinlock_lock((scl_spinlock_t *)&cache->lock);
-    size_t idx = index_of((scl_concurrent_lru_t *)cache, key);
+    scl_spinlock_lock(&cache->lock);
+    size_t idx = index_of(cache, key);
     scl_concurrent_lru_node_t *cur = cache->index[idx];
     while (cur) {
-        if (key_equal((scl_concurrent_lru_t *)cache, cur->key, key)) {
-            scl_spinlock_unlock((scl_spinlock_t *)&cache->lock);
+        if (key_equal(cache, cur->key, key)) {
+            scl_spinlock_unlock(&cache->lock);
             return true;
         }
         cur = cur->next;
     }
-    scl_spinlock_unlock((scl_spinlock_t *)&cache->lock);
+    scl_spinlock_unlock(&cache->lock);
     return false;
 }
 

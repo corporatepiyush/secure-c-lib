@@ -14,7 +14,7 @@ typedef struct scl_concurrent_stack_node {
 } scl_concurrent_stack_node_t;
 
 typedef struct {
-    atomic_uintptr_t top;
+    _Atomic scl_tagged_ptr_t top;
     size_t element_size;
     atomic_size_t count;
 } scl_concurrent_stack_t;

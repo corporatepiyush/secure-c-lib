@@ -42,6 +42,7 @@ scl_error_t scl_parse_icelake_open(scl_allocator_t *alloc, scl_parse_icelake_t *
 
     fseek(fp, 0, SEEK_END);
     long sz = ftell(fp);
+    if (sz < 0) { fclose(fp); scl_free(alloc, meta_path); scl_free(alloc, parser->filename); return SCL_ERR_ALLOC; }
     rewind(fp);
     json_buf = (char *)scl_alloc(alloc, (size_t)sz + 1, _Alignof(max_align_t));
     if (!json_buf) {

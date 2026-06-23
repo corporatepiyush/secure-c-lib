@@ -14,7 +14,7 @@ typedef struct scl_concurrent_slist_node {
 } scl_concurrent_slist_node_t;
 
 typedef struct {
-    atomic_uintptr_t head;
+    _Atomic scl_tagged_ptr_t head;
     size_t element_size;
     atomic_size_t count;
 } scl_concurrent_slist_t;

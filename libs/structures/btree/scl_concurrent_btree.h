@@ -32,9 +32,9 @@ scl_error_t scl_cbtree_init(scl_allocator_t *alloc, scl_concurrent_btree_t *tree
                            int degree, scl_cmp_func_t cmp) SCL_WARN_UNUSED;
 void        scl_cbtree_destroy(scl_allocator_t *alloc, scl_concurrent_btree_t *tree);
 scl_error_t scl_cbtree_insert(scl_allocator_t *alloc, scl_concurrent_btree_t *tree, const void *key, const void *value) SCL_WARN_UNUSED;
-scl_error_t scl_cbtree_get(const scl_concurrent_btree_t *tree, const void *key, void *out_value) SCL_WARN_UNUSED;
+scl_error_t scl_cbtree_get(scl_concurrent_btree_t *tree, const void *key, void *out_value) SCL_WARN_UNUSED;
 scl_error_t scl_cbtree_remove(scl_allocator_t *alloc, scl_concurrent_btree_t *tree, const void *key) SCL_WARN_UNUSED;
-bool        scl_cbtree_contains(const scl_concurrent_btree_t *tree, const void *key);
+bool        scl_cbtree_contains(scl_concurrent_btree_t *tree, const void *key);
 size_t      scl_cbtree_count(const scl_concurrent_btree_t *tree);
 
 #ifdef __GNUC__

@@ -17,6 +17,7 @@ typedef struct {
     char _pad0[SCL_CACHE_LINE_SIZE - 4 * sizeof(size_t)];
     atomic_size_t head SCL_CACHE_ALIGNED;
     atomic_size_t count SCL_CACHE_ALIGNED;
+    scl_spinlock_t lock;
 } scl_concurrent_ringbuf_t;
 
 scl_error_t scl_cringbuf_init(scl_allocator_t *alloc, scl_concurrent_ringbuf_t *rb, size_t element_size,

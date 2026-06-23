@@ -177,9 +177,10 @@ scl_error_t scl_cbtree_insert(scl_allocator_t *alloc, scl_concurrent_btree_t *tr
     return SCL_OK;
 }
 
-scl_error_t scl_cbtree_get(const scl_concurrent_btree_t *tree, const void *key, void *out_value)
+scl_error_t scl_cbtree_get(scl_concurrent_btree_t *tree, const void *key, void *out_value)
 {
     if (!tree || !key || !out_value) return SCL_ERR_NULL_PTR;
+    spin_lock(&tree->lock);
 
     scl_concurrent_btree_node_t *node = tree->root;
     while (node) {
@@ -188,27 +189,33 @@ scl_error_t scl_cbtree_get(const scl_concurrent_btree_t *tree, const void *key, 
             i++;
         if (i < (int)node->count && tree->cmp(key, node->keys[i]) == 0) {
             scl_memcpy(out_value, node->values[i], tree->value_size);
+            spin_unlock(&tree->lock);
             return SCL_OK;
         }
         if (node->leaf) break;
         node = node->children[i];
     }
+    spin_unlock(&tree->lock);
     return SCL_ERR_NOT_FOUND;
 }
 
-bool scl_cbtree_contains(const scl_concurrent_btree_t *tree, const void *key)
+bool scl_cbtree_contains(scl_concurrent_btree_t *tree, const void *key)
 {
     if (!tree || !key) return false;
+    spin_lock(&tree->lock);
     scl_concurrent_btree_node_t *node = tree->root;
     while (node) {
         int i = 0;
         while (i < (int)node->count && tree->cmp(key, node->keys[i]) > 0)
             i++;
-        if (i < (int)node->count && tree->cmp(key, node->keys[i]) == 0)
+        if (i < (int)node->count && tree->cmp(key, node->keys[i]) == 0) {
+            spin_unlock(&tree->lock);
             return true;
+        }
         if (node->leaf) break;
         node = node->children[i];
     }
+    spin_unlock(&tree->lock);
     return false;
 }
 

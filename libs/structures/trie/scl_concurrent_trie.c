@@ -122,12 +122,18 @@ scl_error_t scl_ctrie_get(const scl_concurrent_trie_t *trie, const unsigned char
 {
     if (!trie || !key || !out_value) return SCL_ERR_NULL_PTR;
     scl_concurrent_trie_node_t *cur = trie->root;
+    spin_lock(&cur->lock);
+    scl_concurrent_trie_node_t *prev = NULL;
     for (size_t i = 0; i < key_len; i++) {
         unsigned char c = key[i];
-        if (!cur->children[c]) return SCL_ERR_NOT_FOUND;
-        cur = cur->children[c];
+        scl_concurrent_trie_node_t *next = cur->children[c];
+        if (!next) { if (prev) spin_unlock(&prev->lock); spin_unlock(&cur->lock); return SCL_ERR_NOT_FOUND; }
+        spin_lock(&next->lock);
+        if (prev) spin_unlock(&prev->lock);
+        prev = cur;
+        cur = next;
     }
-    spin_lock(&cur->lock);
+    if (prev) spin_unlock(&prev->lock);
     if (cur->terminal) {
         scl_memcpy(out_value, cur->value, trie->value_size);
         spin_unlock(&cur->lock);
@@ -142,12 +148,18 @@ bool scl_ctrie_contains(const scl_concurrent_trie_t *trie, const unsigned char *
 {
     if (!trie || !key) return false;
     scl_concurrent_trie_node_t *cur = trie->root;
+    spin_lock(&cur->lock);
+    scl_concurrent_trie_node_t *prev = NULL;
     for (size_t i = 0; i < key_len; i++) {
         unsigned char c = key[i];
-        if (!cur->children[c]) return false;
-        cur = cur->children[c];
+        scl_concurrent_trie_node_t *next = cur->children[c];
+        if (!next) { if (prev) spin_unlock(&prev->lock); spin_unlock(&cur->lock); return false; }
+        spin_lock(&next->lock);
+        if (prev) spin_unlock(&prev->lock);
+        prev = cur;
+        cur = next;
     }
-    spin_lock(&cur->lock);
+    if (prev) spin_unlock(&prev->lock);
     bool result = cur->terminal;
     spin_unlock(&cur->lock);
     return result;
@@ -158,31 +170,35 @@ scl_error_t scl_ctrie_remove(scl_allocator_t *alloc, scl_concurrent_trie_t *trie
 {
     if (!trie || !key) return SCL_ERR_NULL_PTR;
     if (key_len == 0) return SCL_ERR_INVALID_ARG;
-    if (!scl_ctrie_contains(trie, key, key_len)) return SCL_ERR_NOT_FOUND;
 
     scl_concurrent_trie_node_t *path[1024];
     int path_len = 0;
     scl_concurrent_trie_node_t *cur = trie->root;
     path[path_len++] = cur;
+    spin_lock(&cur->lock);
+    scl_concurrent_trie_node_t *prev = NULL;
 
     for (size_t i = 0; i < key_len; i++) {
         unsigned char c = key[i];
-        cur = cur->children[c];
-        path[path_len++] = cur;
+        scl_concurrent_trie_node_t *next = cur->children[c];
+        if (!next) { if (prev) spin_unlock(&prev->lock); spin_unlock(&cur->lock); return SCL_ERR_NOT_FOUND; }
+        spin_lock(&next->lock);
+        if (prev) spin_unlock(&prev->lock);
+        path[path_len++] = next;
+        prev = cur;
+        cur = next;
     }
 
-    scl_concurrent_trie_node_t *target = path[path_len - 1];
-    spin_lock(&target->lock);
-    target->terminal = false;
-    scl_free(alloc, target->value);
-    target->value = NULL;
-    spin_unlock(&target->lock);
-
+    if (prev) spin_unlock(&prev->lock);
+    if (!cur->terminal) { spin_unlock(&cur->lock); return SCL_ERR_NOT_FOUND; }
+    cur->terminal = false;
+    scl_free(alloc, cur->value);
+    cur->value = NULL;
     atomic_fetch_sub_explicit(&trie->count, 1, memory_order_relaxed);
 
     bool can_free = true;
     for (int i = 0; i < SCL_TRIE_ALPHABET && can_free; i++)
-        if (target->children[i]) can_free = false;
+        if (cur->children[i]) can_free = false;
 
     if (can_free) {
         unsigned char c = key[key_len - 1];
@@ -190,7 +206,10 @@ scl_error_t scl_ctrie_remove(scl_allocator_t *alloc, scl_concurrent_trie_t *trie
         spin_lock(&parent->lock);
         parent->children[c] = NULL;
         spin_unlock(&parent->lock);
-        scl_free(alloc, target);
+        spin_unlock(&cur->lock);
+        scl_free(alloc, cur);
+    } else {
+        spin_unlock(&cur->lock);
     }
 
     return SCL_OK;

@@ -23,7 +23,7 @@ int main(void) {
     printf("\nPops:\n");
     for (int i = 0; i < 7; i++) {
         int out;
-        (void)scl_cheap_pop(&h, &out);
+        (void)scl_cheap_pop(alloc, &h, &out);
         printf("Pop: %d, count=%zu\n", out, scl_cheap_count(&h));
         for (size_t j = 0; j < scl_cheap_count(&h); j++)
             printf("  [%zu] = %d\n", j, ((int *)h.data)[j]);

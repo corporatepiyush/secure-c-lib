@@ -58,8 +58,7 @@ static char *xlsx_extract_tag_value(scl_allocator_t *alloc, const char *xml, siz
         if (!start) return NULL;
         const char *gt = start;
         while ((size_t)(gt - start) < xlen - (size_t)(start - xml) && *gt != '>') gt++;
-        if (*gt != '>') return NULL;
-        if (!gt) return NULL;
+        if (gt >= xml + xlen || *gt != '>') return NULL;
         start = gt + 1;
     } else {
         start += scl_strlen(open);
