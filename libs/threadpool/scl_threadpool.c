@@ -6,22 +6,17 @@
 #include "scl_stdlib.h"
 #include "scl_string.h"
 
-#include <pthread.h>
-
 static void *scl_threadpool_worker(void *arg) {
     scl_threadpool_t *pool = (scl_threadpool_t *)arg;
 
     while (1) {
-        pthread_mutex_t *lock = (pthread_mutex_t *)pool->lock;
-        pthread_cond_t *cond = (pthread_cond_t *)pool->cond;
-
-        pthread_mutex_lock(lock);
+        scl_mutex_lock(&pool->lock);
 
         while (pool->active && !pool->head)
-            pthread_cond_wait(cond, lock);
+            scl_cond_wait(&pool->cond, &pool->lock);
 
         if (!pool->active) {
-            pthread_mutex_unlock(lock);
+            scl_mutex_unlock(&pool->lock);
             return NULL;
         }
 
@@ -31,14 +26,14 @@ static void *scl_threadpool_worker(void *arg) {
         pool->working++;
         pool->queued--;
 
-        pthread_mutex_unlock(lock);
+        scl_mutex_unlock(&pool->lock);
 
         task->func(task->arg);
 
-        pthread_mutex_lock(lock);
+        scl_mutex_lock(&pool->lock);
         pool->working--;
-        pthread_cond_broadcast(cond);
-        pthread_mutex_unlock(lock);
+        scl_cond_broadcast(&pool->cond);
+        scl_mutex_unlock(&pool->lock);
 
         scl_free(pool->alloc, task);
     }
@@ -46,16 +41,15 @@ static void *scl_threadpool_worker(void *arg) {
     return NULL;
 }
 
-static int scl_threadpool_create_threads(scl_threadpool_t *pool) {
-    pthread_t *threads = (pthread_t *)scl_calloc(pool->alloc, pool->thread_count, sizeof(pthread_t), _Alignof(max_align_t));
-    if (!threads) return -1;
-    pool->thread_handles = threads;
+static scl_error_t scl_threadpool_create_threads(scl_threadpool_t *pool) {
+    pool->thread_handles = (scl_pthread_t *)scl_calloc(pool->alloc, pool->thread_count, sizeof(scl_pthread_t), _Alignof(max_align_t));
+    if (!pool->thread_handles) return SCL_ERR_OUT_OF_MEMORY;
 
     for (unsigned int i = 0; i < pool->thread_count; i++) {
-        if (pthread_create(&threads[i], NULL, scl_threadpool_worker, pool) != 0)
-            return -1;
+        scl_error_t err = scl_pthread_create(&pool->thread_handles[i], NULL, scl_threadpool_worker, pool);
+        if (err != SCL_OK) return err;
     }
-    return 0;
+    return SCL_OK;
 }
 
 scl_error_t scl_threadpool_init(scl_allocator_t *alloc, scl_threadpool_t *pool, unsigned int thread_count) {
@@ -67,26 +61,22 @@ scl_error_t scl_threadpool_init(scl_allocator_t *alloc, scl_threadpool_t *pool, 
     pool->thread_count = thread_count;
     pool->active = 1;
 
-    pthread_mutex_t *lock = (pthread_mutex_t *)scl_alloc(alloc, sizeof(pthread_mutex_t), _Alignof(max_align_t));
-    if (!lock) return SCL_ERR_OUT_OF_MEMORY;
-    pthread_mutex_init(lock, NULL);
-    pool->lock = lock;
+    scl_error_t err;
 
-    pthread_cond_t *cond = (pthread_cond_t *)scl_alloc(alloc, sizeof(pthread_cond_t), _Alignof(max_align_t));
-    if (!cond) {
-        pthread_mutex_destroy(lock);
-        scl_free(alloc, lock);
-        return SCL_ERR_OUT_OF_MEMORY;
+    err = scl_mutex_init(&pool->lock, NULL);
+    if (err != SCL_OK) return err;
+
+    err = scl_cond_init(&pool->cond, NULL);
+    if (err != SCL_OK) {
+        scl_mutex_destroy(&pool->lock);
+        return err;
     }
-    pthread_cond_init(cond, NULL);
-    pool->cond = cond;
 
-    if (scl_threadpool_create_threads(pool) != 0) {
-        pthread_cond_destroy(cond);
-        scl_free(alloc, cond);
-        pthread_mutex_destroy(lock);
-        scl_free(alloc, lock);
-        return SCL_ERR_ALLOC;
+    err = scl_threadpool_create_threads(pool);
+    if (err != SCL_OK) {
+        scl_cond_destroy(&pool->cond);
+        scl_mutex_destroy(&pool->lock);
+        return err;
     }
 
     return SCL_OK;
@@ -103,10 +93,7 @@ scl_error_t scl_threadpool_enqueue(scl_threadpool_t *pool, scl_threadpool_task_f
     task->arg = arg;
     task->next = NULL;
 
-    pthread_mutex_t *lock = (pthread_mutex_t *)pool->lock;
-    pthread_cond_t *cond = (pthread_cond_t *)pool->cond;
-
-    pthread_mutex_lock(lock);
+    scl_mutex_lock(&pool->lock);
 
     if (pool->tail) {
         pool->tail->next = task;
@@ -116,8 +103,8 @@ scl_error_t scl_threadpool_enqueue(scl_threadpool_t *pool, scl_threadpool_task_f
     pool->tail = task;
     pool->queued++;
 
-    pthread_cond_signal(cond);
-    pthread_mutex_unlock(lock);
+    scl_cond_signal(&pool->cond);
+    scl_mutex_unlock(&pool->lock);
 
     return SCL_OK;
 }
@@ -125,13 +112,10 @@ scl_error_t scl_threadpool_enqueue(scl_threadpool_t *pool, scl_threadpool_task_f
 scl_error_t scl_threadpool_wait(scl_threadpool_t *pool) {
     if (scl_unlikely(!pool)) return SCL_ERR_NULL_PTR;
 
-    pthread_mutex_t *lock = (pthread_mutex_t *)pool->lock;
-    pthread_cond_t *cond = (pthread_cond_t *)pool->cond;
-
-    pthread_mutex_lock(lock);
+    scl_mutex_lock(&pool->lock);
     while (pool->queued > 0 || pool->working > 0)
-        pthread_cond_wait(cond, lock);
-    pthread_mutex_unlock(lock);
+        scl_cond_wait(&pool->cond, &pool->lock);
+    scl_mutex_unlock(&pool->lock);
 
     return SCL_OK;
 }
@@ -139,19 +123,15 @@ scl_error_t scl_threadpool_wait(scl_threadpool_t *pool) {
 scl_error_t scl_threadpool_destroy(scl_threadpool_t *pool) {
     if (scl_unlikely(!pool)) return SCL_ERR_NULL_PTR;
 
-    pthread_mutex_t *lock = (pthread_mutex_t *)pool->lock;
-    pthread_cond_t *cond = (pthread_cond_t *)pool->cond;
-
-    pthread_mutex_lock(lock);
+    scl_mutex_lock(&pool->lock);
     pool->active = 0;
-    pthread_cond_broadcast(cond);
-    pthread_mutex_unlock(lock);
+    scl_cond_broadcast(&pool->cond);
+    scl_mutex_unlock(&pool->lock);
 
-    pthread_t *threads = (pthread_t *)pool->thread_handles;
     for (unsigned int i = 0; i < pool->thread_count; i++)
-        pthread_join(threads[i], NULL);
+        scl_pthread_join(pool->thread_handles[i], NULL);
 
-    scl_free(pool->alloc, threads);
+    scl_free(pool->alloc, pool->thread_handles);
     pool->thread_handles = NULL;
 
     while (pool->head) {
@@ -161,12 +141,8 @@ scl_error_t scl_threadpool_destroy(scl_threadpool_t *pool) {
     }
     pool->tail = NULL;
 
-    pthread_cond_destroy(cond);
-    pthread_mutex_destroy(lock);
-    scl_free(pool->alloc, cond);
-    scl_free(pool->alloc, lock);
-    pool->cond = NULL;
-    pool->lock = NULL;
+    scl_cond_destroy(&pool->cond);
+    scl_mutex_destroy(&pool->lock);
 
     return SCL_OK;
 }

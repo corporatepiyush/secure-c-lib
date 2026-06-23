@@ -2,7 +2,7 @@
 #define SCL_CONCURRENT_COMMON_H
 
 #include "scl_common.h"
-#include <stdatomic.h>
+#include "scl_atomic.h"
 
 /* ── Atomic flags (spinlock) ───────────────────────────────── */
 typedef struct {

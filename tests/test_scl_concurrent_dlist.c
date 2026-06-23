@@ -1,7 +1,7 @@
 #include "scl_test.h"
 #include "scl_concurrent_dlist.h"
-#include <pthread.h>
-#include <stdatomic.h>
+#include "scl_pthread.h"
+#include "scl_atomic.h"
 
 #define NTHREADS 4
 #define OPS_PER_THREAD 500

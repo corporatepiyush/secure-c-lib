@@ -1,6 +1,6 @@
 #include "scl_test.h"
 #include "scl_concurrent_bst.h"
-#include <pthread.h>
+#include "scl_pthread.h"
 #include <stdio.h>
 
 static int int_cmp(const void *a, const void *b) {

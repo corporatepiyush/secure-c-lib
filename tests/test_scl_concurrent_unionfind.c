@@ -1,7 +1,7 @@
 #include "scl_test.h"
 #include "scl_concurrent_unionfind.h"
-#include <pthread.h>
-#include <stdatomic.h>
+#include "scl_pthread.h"
+#include "scl_atomic.h"
 
 #define NTHREADS 4
 #define N 128

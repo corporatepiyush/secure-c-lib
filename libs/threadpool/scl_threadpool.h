@@ -7,6 +7,7 @@
 #endif
 
 #include "scl_common.h"
+#include "scl_pthread.h"
 
 typedef void (*scl_threadpool_task_fn)(void *arg);
 
@@ -22,9 +23,9 @@ typedef struct {
     int active;
     scl_threadpool_task_t *head;
     scl_threadpool_task_t *tail;
-    void *thread_handles;
-    void *lock;
-    void *cond;
+    scl_pthread_t *thread_handles;
+    scl_mutex_t lock;
+    scl_cond_t cond;
     unsigned int working;
     unsigned int queued;
 } scl_threadpool_t;
