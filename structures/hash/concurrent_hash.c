@@ -26,14 +26,14 @@ static size_t default_hash(const void *key, size_t len)
     return h;
 }
 
-scl_error_t scl_atomic_hash_init(scl_allocator_t *alloc, scl_atomic_hash_t *ht, size_t key_size, size_t value_size,
+scl_error_t scl_chash_init(scl_allocator_t *alloc, scl_concurrent_hash_t *ht, size_t key_size, size_t value_size,
                           size_t bucket_count, scl_hash_func_t hf)
 {
     if (!ht) return SCL_ERR_NULL_PTR;
     if (key_size == 0 || value_size == 0 || bucket_count == 0) return SCL_ERR_INVALID_ARG;
-    ht->entries = scl_calloc(alloc, bucket_count, sizeof(scl_atomic_hash_entry_t *), alignof(max_align_t));
+    ht->entries = scl_calloc(alloc, bucket_count, sizeof(scl_concurrent_hash_entry_t *), alignof(max_align_t));
     if (!ht->entries) return SCL_ERR_OUT_OF_MEMORY;
-    ht->buckets = scl_calloc(alloc, bucket_count, sizeof(scl_atomic_hash_bucket_t), alignof(max_align_t));
+    ht->buckets = scl_calloc(alloc, bucket_count, sizeof(scl_concurrent_hash_bucket_t), alignof(max_align_t));
     if (!ht->buckets) {
         scl_free(alloc, ht->entries);
         return SCL_ERR_OUT_OF_MEMORY;
@@ -48,13 +48,17 @@ scl_error_t scl_atomic_hash_init(scl_allocator_t *alloc, scl_atomic_hash_t *ht, 
     return SCL_OK;
 }
 
-void scl_atomic_hash_destroy(scl_allocator_t *alloc, scl_atomic_hash_t *ht)
+void scl_chash_destroy(scl_allocator_t *alloc, scl_concurrent_hash_t *ht)
 {
     if (!ht) return;
+    size_t ksz = ht->key_size;
+    size_t vsz = ht->value_size;
     for (size_t i = 0; i < ht->bucket_count; i++) {
-        scl_atomic_hash_entry_t *e = ht->entries[i];
+        scl_concurrent_hash_entry_t *e = ht->entries[i];
         while (e) {
-            scl_atomic_hash_entry_t *next = e->next;
+            scl_concurrent_hash_entry_t *next = e->next;
+            if (e->key)   scl_secure_zero(e->key,   ksz);
+            if (e->value) scl_secure_zero(e->value, vsz);
             scl_free(alloc, e->key);
             scl_free(alloc, e->value);
             scl_free(alloc, e);
@@ -69,12 +73,12 @@ void scl_atomic_hash_destroy(scl_allocator_t *alloc, scl_atomic_hash_t *ht)
     atomic_store_explicit(&ht->count, 0, memory_order_relaxed);
 }
 
-scl_error_t scl_atomic_hash_insert(scl_allocator_t *alloc, scl_atomic_hash_t *ht, const void *key, const void *value)
+scl_error_t scl_chash_insert(scl_allocator_t *alloc, scl_concurrent_hash_t *ht, const void *key, const void *value)
 {
     if (!ht || !key || !value) return SCL_ERR_NULL_PTR;
     size_t idx = ht->hash_func(key, ht->key_size) % ht->bucket_count;
     bucket_lock(&ht->buckets[idx].lock);
-    scl_atomic_hash_entry_t *e = ht->entries[idx];
+    scl_concurrent_hash_entry_t *e = ht->entries[idx];
     while (e) {
         if (memcmp(e->key, key, ht->key_size) == 0) {
             memcpy(e->value, value, ht->value_size);
@@ -83,7 +87,7 @@ scl_error_t scl_atomic_hash_insert(scl_allocator_t *alloc, scl_atomic_hash_t *ht
         }
         e = e->next;
     }
-    scl_atomic_hash_entry_t *n = scl_alloc(alloc, sizeof(scl_atomic_hash_entry_t), alignof(max_align_t));
+    scl_concurrent_hash_entry_t *n = scl_alloc(alloc, sizeof(scl_concurrent_hash_entry_t), alignof(max_align_t));
     if (!n) { bucket_unlock(&ht->buckets[idx].lock); return SCL_ERR_OUT_OF_MEMORY; }
     n->key = scl_alloc(alloc, ht->key_size, alignof(max_align_t));
     n->value = scl_alloc(alloc, ht->value_size, alignof(max_align_t));
@@ -101,12 +105,12 @@ scl_error_t scl_atomic_hash_insert(scl_allocator_t *alloc, scl_atomic_hash_t *ht
     return SCL_OK;
 }
 
-scl_error_t scl_atomic_hash_get(const scl_atomic_hash_t *ht, const void *key, void *out_value)
+scl_error_t scl_chash_get(const scl_concurrent_hash_t *ht, const void *key, void *out_value)
 {
     if (!ht || !key || !out_value) return SCL_ERR_NULL_PTR;
     size_t idx = ht->hash_func(key, ht->key_size) % ht->bucket_count;
     bucket_lock(&ht->buckets[idx].lock);
-    scl_atomic_hash_entry_t *e = ht->entries[idx];
+    scl_concurrent_hash_entry_t *e = ht->entries[idx];
     while (e) {
         if (memcmp(e->key, key, ht->key_size) == 0) {
             memcpy(out_value, e->value, ht->value_size);
@@ -119,16 +123,18 @@ scl_error_t scl_atomic_hash_get(const scl_atomic_hash_t *ht, const void *key, vo
     return SCL_ERR_NOT_FOUND;
 }
 
-scl_error_t scl_atomic_hash_remove(scl_allocator_t *alloc, scl_atomic_hash_t *ht, const void *key)
+scl_error_t scl_chash_remove(scl_allocator_t *alloc, scl_concurrent_hash_t *ht, const void *key)
 {
     if (!ht || !key) return SCL_ERR_NULL_PTR;
     size_t idx = ht->hash_func(key, ht->key_size) % ht->bucket_count;
     bucket_lock(&ht->buckets[idx].lock);
-    scl_atomic_hash_entry_t **prev = &ht->entries[idx];
-    scl_atomic_hash_entry_t *e = ht->entries[idx];
+    scl_concurrent_hash_entry_t **prev = &ht->entries[idx];
+    scl_concurrent_hash_entry_t *e = ht->entries[idx];
     while (e) {
         if (memcmp(e->key, key, ht->key_size) == 0) {
             *prev = e->next;
+            scl_secure_zero(e->key,   ht->key_size);
+            scl_secure_zero(e->value, ht->value_size);
             scl_free(alloc, e->key);
             scl_free(alloc, e->value);
             scl_free(alloc, e);
@@ -143,12 +149,12 @@ scl_error_t scl_atomic_hash_remove(scl_allocator_t *alloc, scl_atomic_hash_t *ht
     return SCL_ERR_NOT_FOUND;
 }
 
-bool scl_atomic_hash_contains(const scl_atomic_hash_t *ht, const void *key)
+bool scl_chash_contains(const scl_concurrent_hash_t *ht, const void *key)
 {
     if (!ht || !key) return false;
     size_t idx = ht->hash_func(key, ht->key_size) % ht->bucket_count;
     bucket_lock(&ht->buckets[idx].lock);
-    scl_atomic_hash_entry_t *e = ht->entries[idx];
+    scl_concurrent_hash_entry_t *e = ht->entries[idx];
     while (e) {
         if (memcmp(e->key, key, ht->key_size) == 0) {
             bucket_unlock(&ht->buckets[idx].lock);
@@ -160,7 +166,7 @@ bool scl_atomic_hash_contains(const scl_atomic_hash_t *ht, const void *key)
     return false;
 }
 
-size_t scl_atomic_hash_count(const scl_atomic_hash_t *ht)
+size_t scl_chash_count(const scl_concurrent_hash_t *ht)
 {
     return ht ? atomic_load_explicit(&ht->count, memory_order_relaxed) : 0;
 }

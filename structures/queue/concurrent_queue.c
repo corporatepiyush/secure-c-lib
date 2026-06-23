@@ -5,11 +5,11 @@
 #pragma GCC optimize ("O3", "unroll-loops", "tree-vectorize", "inline")
 #endif
 
-scl_error_t scl_atomic_queue_init(scl_allocator_t *alloc, scl_atomic_queue_t *queue, size_t element_size)
+scl_error_t scl_cqueue_init(scl_allocator_t *alloc, scl_concurrent_queue_t *queue, size_t element_size)
 {
     if (!queue) return SCL_ERR_NULL_PTR;
     if (element_size == 0) return SCL_ERR_INVALID_ARG;
-    scl_atomic_queue_node_t *dummy = scl_alloc(alloc, sizeof(scl_atomic_queue_node_t), alignof(max_align_t));
+    scl_concurrent_queue_node_t *dummy = scl_alloc(alloc, sizeof(scl_concurrent_queue_node_t), alignof(max_align_t));
     if (!dummy) return SCL_ERR_OUT_OF_MEMORY;
     dummy->data = NULL;
     atomic_init(&dummy->next, (uintptr_t)NULL);
@@ -20,12 +20,14 @@ scl_error_t scl_atomic_queue_init(scl_allocator_t *alloc, scl_atomic_queue_t *qu
     return SCL_OK;
 }
 
-void scl_atomic_queue_destroy(scl_allocator_t *alloc, scl_atomic_queue_t *queue)
+void scl_cqueue_destroy(scl_allocator_t *alloc, scl_concurrent_queue_t *queue)
 {
     if (!queue) return;
-    scl_atomic_queue_node_t *cur = (scl_atomic_queue_node_t *)atomic_load_explicit(&queue->head, memory_order_acquire);
+    size_t esz = queue->element_size;
+    scl_concurrent_queue_node_t *cur = (scl_concurrent_queue_node_t *)atomic_load_explicit(&queue->head, memory_order_acquire);
     while (cur) {
-        scl_atomic_queue_node_t *next = (scl_atomic_queue_node_t *)atomic_load_explicit(&cur->next, memory_order_relaxed);
+        scl_concurrent_queue_node_t *next = (scl_concurrent_queue_node_t *)atomic_load_explicit(&cur->next, memory_order_relaxed);
+        if (cur->data) scl_secure_zero(cur->data, esz);
         scl_free(alloc, cur->data);
         scl_free(alloc, cur);
         cur = next;
@@ -35,10 +37,10 @@ void scl_atomic_queue_destroy(scl_allocator_t *alloc, scl_atomic_queue_t *queue)
     atomic_store_explicit(&queue->count, 0, memory_order_relaxed);
 }
 
-scl_error_t scl_atomic_queue_enqueue(scl_allocator_t *alloc, scl_atomic_queue_t *queue, const void *element)
+scl_error_t scl_cqueue_enqueue(scl_allocator_t *alloc, scl_concurrent_queue_t *queue, const void *element)
 {
     if (!queue || !element) return SCL_ERR_NULL_PTR;
-    scl_atomic_queue_node_t *node = scl_alloc(alloc, sizeof(scl_atomic_queue_node_t), alignof(max_align_t));
+    scl_concurrent_queue_node_t *node = scl_alloc(alloc, sizeof(scl_concurrent_queue_node_t), alignof(max_align_t));
     if (!node) return SCL_ERR_OUT_OF_MEMORY;
     node->data = scl_alloc(alloc, queue->element_size, alignof(max_align_t));
     if (!node->data) {
@@ -49,9 +51,9 @@ scl_error_t scl_atomic_queue_enqueue(scl_allocator_t *alloc, scl_atomic_queue_t 
     atomic_init(&node->next, (uintptr_t)NULL);
 
     while (1) {
-        scl_atomic_queue_node_t *tail = (scl_atomic_queue_node_t *)atomic_load_explicit(&queue->tail, memory_order_acquire);
-        scl_atomic_queue_node_t *next = (scl_atomic_queue_node_t *)atomic_load_explicit(&tail->next, memory_order_acquire);
-        if (tail != (scl_atomic_queue_node_t *)atomic_load_explicit(&queue->tail, memory_order_acquire))
+        scl_concurrent_queue_node_t *tail = (scl_concurrent_queue_node_t *)atomic_load_explicit(&queue->tail, memory_order_acquire);
+        scl_concurrent_queue_node_t *next = (scl_concurrent_queue_node_t *)atomic_load_explicit(&tail->next, memory_order_acquire);
+        if (tail != (scl_concurrent_queue_node_t *)atomic_load_explicit(&queue->tail, memory_order_acquire))
             continue;
         if (next == NULL) {
             uintptr_t expected = (uintptr_t)NULL;
@@ -64,7 +66,7 @@ scl_error_t scl_atomic_queue_enqueue(scl_allocator_t *alloc, scl_atomic_queue_t 
                 memory_order_release, memory_order_relaxed);
         }
     }
-    scl_atomic_queue_node_t *old_tail = (scl_atomic_queue_node_t *)atomic_load_explicit(&queue->tail, memory_order_relaxed);
+    scl_concurrent_queue_node_t *old_tail = (scl_concurrent_queue_node_t *)atomic_load_explicit(&queue->tail, memory_order_relaxed);
     atomic_compare_exchange_weak_explicit(&queue->tail,
         (uintptr_t *)&old_tail, (uintptr_t)node,
         memory_order_release, memory_order_relaxed);
@@ -72,15 +74,15 @@ scl_error_t scl_atomic_queue_enqueue(scl_allocator_t *alloc, scl_atomic_queue_t 
     return SCL_OK;
 }
 
-scl_error_t scl_atomic_queue_dequeue(scl_allocator_t *alloc, scl_atomic_queue_t *queue, void *out)
+scl_error_t scl_cqueue_dequeue(scl_allocator_t *alloc, scl_concurrent_queue_t *queue, void *out)
 {
     if (!queue || !out) return SCL_ERR_NULL_PTR;
     while (1) {
-        scl_atomic_queue_node_t *head = (scl_atomic_queue_node_t *)atomic_load_explicit(&queue->head, memory_order_acquire);
-        scl_atomic_queue_node_t *tail = (scl_atomic_queue_node_t *)atomic_load_explicit(&queue->tail, memory_order_acquire);
-        scl_atomic_queue_node_t *next = (scl_atomic_queue_node_t *)atomic_load_explicit(&head->next, memory_order_acquire);
+        scl_concurrent_queue_node_t *head = (scl_concurrent_queue_node_t *)atomic_load_explicit(&queue->head, memory_order_acquire);
+        scl_concurrent_queue_node_t *tail = (scl_concurrent_queue_node_t *)atomic_load_explicit(&queue->tail, memory_order_acquire);
+        scl_concurrent_queue_node_t *next = (scl_concurrent_queue_node_t *)atomic_load_explicit(&head->next, memory_order_acquire);
 
-        if (head != (scl_atomic_queue_node_t *)atomic_load_explicit(&queue->head, memory_order_acquire))
+        if (head != (scl_concurrent_queue_node_t *)atomic_load_explicit(&queue->head, memory_order_acquire))
             continue;
 
         if (head == tail) {
@@ -93,7 +95,7 @@ scl_error_t scl_atomic_queue_dequeue(scl_allocator_t *alloc, scl_atomic_queue_t 
             memcpy(out, next->data, queue->element_size);
             uintptr_t old_head = (uintptr_t)head;
             if (atomic_compare_exchange_weak_explicit(&queue->head, &old_head, (uintptr_t)next,
-                    memory_order_acquire, memory_order_relaxed)) {
+                    memory_order_acq_rel, memory_order_relaxed)) {
                 scl_free(alloc, head->data);
                 scl_free(alloc, head);
                 atomic_fetch_sub_explicit(&queue->count, 1, memory_order_relaxed);
@@ -103,15 +105,15 @@ scl_error_t scl_atomic_queue_dequeue(scl_allocator_t *alloc, scl_atomic_queue_t 
     }
 }
 
-size_t scl_atomic_queue_count(const scl_atomic_queue_t *queue)
+size_t scl_cqueue_count(const scl_concurrent_queue_t *queue)
 {
     return queue ? atomic_load_explicit(&queue->count, memory_order_relaxed) : 0;
 }
 
-bool scl_atomic_queue_empty(const scl_atomic_queue_t *queue)
+bool scl_cqueue_empty(const scl_concurrent_queue_t *queue)
 {
     if (!queue) return true;
-    scl_atomic_queue_node_t *head = (scl_atomic_queue_node_t *)atomic_load_explicit(&queue->head, memory_order_acquire);
-    scl_atomic_queue_node_t *next = (scl_atomic_queue_node_t *)atomic_load_explicit(&head->next, memory_order_acquire);
+    scl_concurrent_queue_node_t *head = (scl_concurrent_queue_node_t *)atomic_load_explicit(&queue->head, memory_order_acquire);
+    scl_concurrent_queue_node_t *next = (scl_concurrent_queue_node_t *)atomic_load_explicit(&head->next, memory_order_acquire);
     return next == NULL;
 }
