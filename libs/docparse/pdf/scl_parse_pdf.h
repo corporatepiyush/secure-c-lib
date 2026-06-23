@@ -6,7 +6,7 @@
 #pragma GCC diagnostic ignored "-Wpedantic"
 #endif
 
-#include "../../common/scl_common.h"
+#include "scl_common.h"
 
 #define SCL_PDF_MAX_OBJECTS 4096
 

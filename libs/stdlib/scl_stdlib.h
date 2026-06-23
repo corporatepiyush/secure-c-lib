@@ -3,7 +3,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
-#include "../common/scl_common.h"
+#include "scl_common.h"
 
 /* Integer conversion */
 int scl_atoi(const char *str);

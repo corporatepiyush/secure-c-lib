@@ -1,7 +1,7 @@
 #ifndef SCL_SORT_H
 #define SCL_SORT_H
 
-#include "../common/scl_common.h"
+#include "scl_common.h"
 
 #ifdef __GNUC__
 #pragma GCC diagnostic push

@@ -3,9 +3,9 @@
 #endif
 
 #include "scl_rand_distribution.h"
-#include <math.h>
-#include "../../stdlib/scl_stdlib.h"
-#include "../../string/scl_string.h"
+#include "scl_math.h"
+#include "scl_stdlib.h"
+#include "scl_string.h"
 
 scl_error_t scl_rand_dist_init(scl_rand_dist_t *dist, uint64_t seed) {
     if (!dist) return SCL_ERR_NULL_PTR;
@@ -22,7 +22,7 @@ double scl_rand_dist_normal(scl_rand_dist_t *dist, double mean, double stddev) {
     double u1 = scl_rand_prng_next_double(&dist->rng);
     double u2 = scl_rand_prng_next_double(&dist->rng);
     while (u1 <= 0.0) u1 = scl_rand_prng_next_double(&dist->rng);
-    double z0 = sqrt(-2.0 * log(u1)) * cos(2.0 * M_PI * u2);
+    double z0 = scl_sqrt(-2.0 * scl_log(u1)) * cos(2.0 * M_PI * u2);
     return mean + z0 * stddev;
 }
 
@@ -30,7 +30,7 @@ double scl_rand_dist_exponential(scl_rand_dist_t *dist, double lambda) {
     if (!dist || lambda <= 0.0) return 0.0;
     double u = scl_rand_prng_next_double(&dist->rng);
     while (u <= 0.0) u = scl_rand_prng_next_double(&dist->rng);
-    return -log(u) / lambda;
+    return -scl_log(u) / lambda;
 }
 
 bool scl_rand_dist_bernoulli(scl_rand_dist_t *dist, double p) {
@@ -42,7 +42,7 @@ bool scl_rand_dist_bernoulli(scl_rand_dist_t *dist, double p) {
 
 int64_t scl_rand_dist_poisson(scl_rand_dist_t *dist, double lambda) {
     if (!dist || lambda <= 0.0) return 0;
-    double L = exp(-lambda);
+    double L = scl_exp(-lambda);
     double p = 1.0;
     int64_t k = 0;
     do {

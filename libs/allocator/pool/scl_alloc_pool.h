@@ -6,7 +6,7 @@
 #pragma GCC diagnostic ignored "-Wpedantic"
 #endif
 
-#include "../../common/scl_common.h"
+#include "scl_common.h"
 
 scl_allocator_t *scl_alloc_pool_create(scl_allocator_t *backing, size_t block_size, size_t block_count, size_t alignment);
 void scl_alloc_pool_destroy(scl_allocator_t *alloc);

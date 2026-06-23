@@ -3,6 +3,8 @@
 *.so
 *.dylib
 *.dSYM
+*.tmp
+*.o.tmp
 .DS_Store
 build/
 *mcpmem*

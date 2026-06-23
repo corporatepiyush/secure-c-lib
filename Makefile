@@ -3,25 +3,24 @@ CFLAGS   = -std=c17 -Wall -Wextra -Wpedantic -Werror -O2
 LDFLAGS  = -lm -lpthread
 ARFLAGS  = rcs
 
-# Find all directories that might contain headers (in structures/ and libs/)
-LIBDIRS  := $(shell find ./structures -maxdepth 2 -type d -not -path '*/.git/*' | sort -u) \
-            $(shell find ./libs -maxdepth 2 -type d -not -path '*/.git/*' | sort -u)
+# All header directories live under libs/
+LIBDIRS  := $(shell find ./libs -maxdepth 3 -type d -not -path '*/.git/*' | sort -u)
 
-# Collect all sequential library .c files (excluding concurrent)
-LIBSRCS := $(shell find ./structures ./libs -name 'scl_*.c' -not -path '*/.git/*')
-LIBOBJS := $(patsubst %.c, build/%.o, $(LIBSRCS))
-LIBNAME = libscl.a
+# Sequential library sources (all scl_*.c under libs/, excluding test files)
+LIBSRCS  := $(shell find ./libs -name 'scl_*.c' -not -name 'test_*.c' -not -path '*/.git/*')
+LIBOBJS  := $(patsubst %.c, build/%.o, $(LIBSRCS))
+LIBNAME  = libscl.a
 
-# Collect all concurrent library .c files
-CONC_SRCS := $(shell find ./structures ./libs -name 'concurrent_*.c' -not -path '*/.git/*')
+# Concurrent library sources (all scl_concurrent_*.c under libs/)
+CONC_SRCS := $(shell find ./libs -name 'scl_concurrent_*.c' -not -path '*/.git/*')
 CONC_OBJS := $(patsubst %.c, build/%.o, $(CONC_SRCS))
 CONC_LIBNAME = libscl_concurrent.a
 
-# Collect all test files
-TESTSRCS := $(shell find ./structures ./libs -name 'test_*.c' -not -path '*/.git/*')
+# Test binaries (live in ./tests/)
+TESTSRCS := $(shell find ./tests -name 'test_*.c' -not -path '*/.git/*')
 TESTBINS := $(patsubst %.c, build/%_bin, $(TESTSRCS))
 
-# Build -I flags for all library directories
+# -I flags for every directory under libs/
 INCFLAGS := $(addprefix -I, $(LIBDIRS))
 
 .PHONY: all lib test clean
@@ -42,13 +41,13 @@ lib: $(LIBNAME) $(CONC_LIBNAME)
 
 build/%_bin: %.c $(LIBNAME)
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -Wno-unused-result $(INCFLAGS) -I$(dir $<) -o $@ $< -L. -lscl $(LDFLAGS)
+	$(CC) $(CFLAGS) -Wno-unused-result $(INCFLAGS) -o $@ $< -L. -lscl $(LDFLAGS)
 
 test: $(TESTBINS)
 	@passed=0; failed=0; \
 	for t in $(TESTBINS); do \
-		name=$$(echo $$t | sed 's|build/||; s|_bin$$||'); \
-		printf "%-60s" "$$name"; \
+		name=$$(basename $$t _bin); \
+		printf "%-50s" "$$name"; \
 		if ./$$t > /tmp/$$$$.log 2>&1; then \
 			echo "✓ PASS"; passed=$$((passed+1)); \
 		else \

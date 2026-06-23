@@ -6,7 +6,7 @@
 #pragma GCC diagnostic ignored "-Wpedantic"
 #endif
 
-#include "../../common/scl_common.h"
+#include "scl_common.h"
 
 scl_allocator_t *scl_alloc_tlsf_create(scl_allocator_t *backing, size_t memory_size);
 void scl_alloc_tlsf_destroy(scl_allocator_t *alloc);

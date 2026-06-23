@@ -6,7 +6,7 @@
 #pragma GCC diagnostic ignored "-Wpedantic"
 #endif
 
-#include "../../common/scl_common.h"
+#include "scl_common.h"
 
 typedef struct {
     uint64_t state[4];

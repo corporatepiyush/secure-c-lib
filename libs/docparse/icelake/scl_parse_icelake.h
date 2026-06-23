@@ -6,8 +6,8 @@
 #pragma GCC diagnostic ignored "-Wpedantic"
 #endif
 
-#include "../../common/scl_common.h"
-#include "../json/scl_parse_json.h"
+#include "scl_common.h"
+#include "json/scl_parse_json.h"
 
 typedef struct {
     scl_allocator_t *alloc;

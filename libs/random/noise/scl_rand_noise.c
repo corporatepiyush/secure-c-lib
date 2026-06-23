@@ -3,9 +3,9 @@
 #endif
 
 #include "scl_rand_noise.h"
-#include <math.h>
-#include "../../stdlib/scl_stdlib.h"
-#include "../../string/scl_string.h"
+#include "scl_math.h"
+#include "scl_stdlib.h"
+#include "scl_string.h"
 
 static inline double fade(double t) {
     return t * t * t * (t * (t * 6.0 - 15.0) + 10.0);
@@ -64,8 +64,8 @@ scl_error_t scl_rand_noise_init(scl_rand_noise_t *noise, uint64_t seed) {
 double scl_rand_noise_value1d(scl_rand_noise_t *noise, double x) {
     if (!noise) return 0.0;
     double fx = x * noise->freq;
-    int ix = (int)floor(fx) & 255;
-    double frac = fx - floor(fx);
+    int ix = (int)scl_floor(fx) & 255;
+    double frac = fx - scl_floor(fx);
     double s = smoothstep(frac);
     int a = noise->perm[ix];
     int b = noise->perm[ix + 1];
@@ -77,10 +77,10 @@ double scl_rand_noise_value1d(scl_rand_noise_t *noise, double x) {
 double scl_rand_noise_value2d(scl_rand_noise_t *noise, double x, double y) {
     if (!noise) return 0.0;
     double fx = x * noise->freq, fy = y * noise->freq;
-    int ix = (int)floor(fx) & 255;
-    int iy = (int)floor(fy) & 255;
-    double fracx = fx - floor(fx);
-    double fracy = fy - floor(fy);
+    int ix = (int)scl_floor(fx) & 255;
+    int iy = (int)scl_floor(fy) & 255;
+    double fracx = fx - scl_floor(fx);
+    double fracy = fy - scl_floor(fy);
     double sx = smoothstep(fracx);
     double sy = smoothstep(fracy);
     int aa = noise->perm[noise->perm[ix] + iy];
@@ -99,8 +99,8 @@ double scl_rand_noise_value2d(scl_rand_noise_t *noise, double x, double y) {
 double scl_rand_noise_perlin1d(scl_rand_noise_t *noise, double x) {
     if (!noise) return 0.0;
     double fx = x * noise->freq;
-    int ix = (int)floor(fx);
-    double frac = fx - floor(fx);
+    int ix = (int)scl_floor(fx);
+    double frac = fx - scl_floor(fx);
     double f = fade(frac);
     double n0 = grad1d(noise->perm[ix & 255], frac);
     double n1 = grad1d(noise->perm[(ix + 1) & 255], frac - 1.0);
@@ -110,10 +110,10 @@ double scl_rand_noise_perlin1d(scl_rand_noise_t *noise, double x) {
 double scl_rand_noise_perlin2d(scl_rand_noise_t *noise, double x, double y) {
     if (!noise) return 0.0;
     double fx = x * noise->freq, fy = y * noise->freq;
-    int ix = (int)floor(fx);
-    int iy = (int)floor(fy);
-    double fracx = fx - floor(fx);
-    double fracy = fy - floor(fy);
+    int ix = (int)scl_floor(fx);
+    int iy = (int)scl_floor(fy);
+    double fracx = fx - scl_floor(fx);
+    double fracy = fy - scl_floor(fy);
     double u = fade(fracx);
     double v = fade(fracy);
     int aa = noise->perm[noise->perm[ix & 255] + (iy & 255)];
@@ -128,12 +128,12 @@ double scl_rand_noise_perlin2d(scl_rand_noise_t *noise, double x, double y) {
 double scl_rand_noise_perlin3d(scl_rand_noise_t *noise, double x, double y, double z) {
     if (!noise) return 0.0;
     double fx = x * noise->freq, fy = y * noise->freq, fz = z * noise->freq;
-    int ix = (int)floor(fx);
-    int iy = (int)floor(fy);
-    int iz = (int)floor(fz);
-    double fracx = fx - floor(fx);
-    double fracy = fy - floor(fy);
-    double fracz = fz - floor(fz);
+    int ix = (int)scl_floor(fx);
+    int iy = (int)scl_floor(fy);
+    int iz = (int)scl_floor(fz);
+    double fracx = fx - scl_floor(fx);
+    double fracy = fy - scl_floor(fy);
+    double fracz = fz - scl_floor(fz);
     double u = fade(fracx);
     double v = fade(fracy);
     double w = fade(fracz);

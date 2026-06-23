@@ -6,7 +6,7 @@
 #pragma GCC diagnostic ignored "-Wpedantic"
 #endif
 
-#include "../common/scl_common.h"
+#include "scl_common.h"
 
 typedef void (*scl_threadpool_task_fn)(void *arg);
 

@@ -1,7 +1,7 @@
 #ifndef SCL_CONCURRENT_COMMON_H
 #define SCL_CONCURRENT_COMMON_H
 
-#include "../common/scl_common.h"
+#include "scl_common.h"
 #include <stdatomic.h>
 
 /* ── Atomic flags (spinlock) ───────────────────────────────── */

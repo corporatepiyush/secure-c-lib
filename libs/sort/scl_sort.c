@@ -1,5 +1,5 @@
 #include "scl_sort.h"
-#include <string.h>
+#include "scl_string.h"
 
 #if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC optimize ("O3", "unroll-loops", "tree-vectorize", "inline")
@@ -9,19 +9,19 @@ static void scl_sort_swap(unsigned char *SCL_RESTRICT a, unsigned char *SCL_REST
 {
     while (n >= sizeof(uint64_t)) {
         uint64_t t;
-        memcpy(&t, a, sizeof(uint64_t));
-        memcpy(a, b, sizeof(uint64_t));
-        memcpy(b, &t, sizeof(uint64_t));
+        scl_memcpy(&t, a, sizeof(uint64_t));
+        scl_memcpy(a, b, sizeof(uint64_t));
+        scl_memcpy(b, &t, sizeof(uint64_t));
         a += sizeof(uint64_t); b += sizeof(uint64_t); n -= sizeof(uint64_t);
     }
     if (n & 4) {
         uint32_t t;
-        memcpy(&t, a, 4); memcpy(a, b, 4); memcpy(b, &t, 4);
+        scl_memcpy(&t, a, 4); scl_memcpy(a, b, 4); scl_memcpy(b, &t, 4);
         a += 4; b += 4;
     }
     if (n & 2) {
         uint16_t t;
-        memcpy(&t, a, 2); memcpy(a, b, 2); memcpy(b, &t, 2);
+        scl_memcpy(&t, a, 2); scl_memcpy(a, b, 2); scl_memcpy(b, &t, 2);
         a += 2; b += 2;
     }
     if (n & 1) {
@@ -31,7 +31,7 @@ static void scl_sort_swap(unsigned char *SCL_RESTRICT a, unsigned char *SCL_REST
 
 static void scl_sort_copy(unsigned char *dest, const unsigned char *src, size_t element_size)
 {
-    memcpy(dest, src, element_size);
+    scl_memcpy(dest, src, element_size);
 }
 
 scl_error_t scl_sort_quick(void *base, size_t count, size_t element_size, scl_cmp_func_t cmp)
@@ -120,7 +120,7 @@ scl_error_t scl_sort_merge(scl_allocator_t *alloc, void *base, size_t count, siz
                               (unsigned char *)base + ri++ * element_size,
                               element_size);
 
-            memcpy((unsigned char *)base + i * element_size, tmp, ti * element_size);
+            scl_memcpy((unsigned char *)base + i * element_size, tmp, ti * element_size);
         }
     }
 
@@ -306,7 +306,7 @@ scl_error_t scl_sort_radix(scl_allocator_t *alloc, int32_t *base, size_t count)
             output[bucket[(unsigned char)val]++] = base[i];
         }
 
-        memcpy(base, output, bytes);
+        scl_memcpy(base, output, bytes);
     }
 
     scl_free(alloc, output);
@@ -361,13 +361,13 @@ scl_error_t scl_sort_bucket(scl_allocator_t *alloc, void *base, size_t count, si
                 return SCL_ERR_OUT_OF_MEMORY;
             }
             if (buckets[bucket_idx] && bucket_sizes[bucket_idx] > 0)
-                memcpy(tmp, buckets[bucket_idx], bucket_sizes[bucket_idx] * element_size);
+                scl_memcpy(tmp, buckets[bucket_idx], bucket_sizes[bucket_idx] * element_size);
             scl_free(alloc, buckets[bucket_idx]);
             buckets[bucket_idx] = tmp;
             bucket_caps[bucket_idx] = new_cap;
         }
 
-        memcpy(buckets[bucket_idx] + bucket_sizes[bucket_idx] * element_size,
+        scl_memcpy(buckets[bucket_idx] + bucket_sizes[bucket_idx] * element_size,
                ptr + i * element_size, element_size);
         bucket_sizes[bucket_idx]++;
     }
@@ -378,7 +378,7 @@ scl_error_t scl_sort_bucket(scl_allocator_t *alloc, void *base, size_t count, si
     for (size_t i = 0; i < bucket_count; i++) {
         if (bucket_sizes[i] > 0) {
             (void)scl_sort_insertion(buckets[i], bucket_sizes[i], element_size, cmp);
-            memcpy(ptr + pos * element_size, buckets[i],
+            scl_memcpy(ptr + pos * element_size, buckets[i],
                    bucket_sizes[i] * element_size);
             pos += bucket_sizes[i];
         }

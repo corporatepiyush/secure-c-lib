@@ -3,8 +3,8 @@
 #endif
 
 #include "scl_parse_pdf.h"
-#include "../../stdlib/scl_stdlib.h"
-#include "../../string/scl_string.h"
+#include "scl_stdlib.h"
+#include "scl_string.h"
 
 #define PDF_BUF_SIZE (1024 * 1024)
 

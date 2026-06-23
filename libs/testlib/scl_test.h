@@ -1,7 +1,7 @@
 #ifndef SCL_TEST_H
 #define SCL_TEST_H
 
-#include "../common/scl_common.h"
+#include "scl_common.h"
 #include <string.h>
 #include <stdio.h>
 

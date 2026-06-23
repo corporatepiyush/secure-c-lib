@@ -3,8 +3,8 @@
 #endif
 
 #include "scl_parse_icelake.h"
-#include "../../stdlib/scl_stdlib.h"
-#include "../../string/scl_string.h"
+#include "scl_stdlib.h"
+#include "scl_string.h"
 
 scl_error_t scl_parse_icelake_open(scl_allocator_t *alloc, scl_parse_icelake_t *parser, const char *path) {
     if (scl_unlikely(!parser)) return SCL_ERR_NULL_PTR;

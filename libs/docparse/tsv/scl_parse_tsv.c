@@ -3,8 +3,8 @@
 #endif
 
 #include "scl_parse_tsv.h"
-#include "../../stdlib/scl_stdlib.h"
-#include "../../string/scl_string.h"
+#include "scl_stdlib.h"
+#include "scl_string.h"
 
 #define TSV_INIT_BUF 4096
 

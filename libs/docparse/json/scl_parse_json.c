@@ -3,8 +3,8 @@
 #endif
 
 #include "scl_parse_json.h"
-#include "../../stdlib/scl_stdlib.h"
-#include "../../string/scl_string.h"
+#include "scl_stdlib.h"
+#include "scl_string.h"
 
 static void json_skip_ws(const char **p) {
     while (**p && (unsigned char)**p <= ' ') (*p)++;

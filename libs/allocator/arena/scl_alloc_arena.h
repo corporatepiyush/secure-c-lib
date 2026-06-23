@@ -6,7 +6,7 @@
 #pragma GCC diagnostic ignored "-Wpedantic"
 #endif
 
-#include "../../common/scl_common.h"
+#include "scl_common.h"
 
 scl_allocator_t *scl_alloc_arena_create(scl_allocator_t *backing, size_t capacity);
 void scl_alloc_arena_reset(scl_allocator_t *alloc);

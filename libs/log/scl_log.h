@@ -2,7 +2,7 @@
 #define SCL_LOG_H
 
 #include <stdarg.h>
-#include "../common/scl_common.h"
+#include "scl_common.h"
 
 typedef enum {
     SCL_LOG_DEBUG = 0,

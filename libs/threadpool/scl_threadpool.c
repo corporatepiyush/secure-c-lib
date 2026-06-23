@@ -3,8 +3,8 @@
 #endif
 
 #include "scl_threadpool.h"
-#include "../stdlib/scl_stdlib.h"
-#include "../string/scl_string.h"
+#include "scl_stdlib.h"
+#include "scl_string.h"
 
 #include <pthread.h>
 

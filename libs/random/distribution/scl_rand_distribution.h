@@ -6,8 +6,8 @@
 #pragma GCC diagnostic ignored "-Wpedantic"
 #endif
 
-#include "../../common/scl_common.h"
-#include "../prng/scl_rand_prng.h"
+#include "scl_common.h"
+#include "prng/scl_rand_prng.h"
 
 typedef struct {
     scl_rand_prng_t rng;

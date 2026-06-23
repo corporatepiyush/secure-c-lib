@@ -3,8 +3,8 @@
 #endif
 
 #include "scl_parse_docx.h"
-#include "../../stdlib/scl_stdlib.h"
-#include "../../string/scl_string.h"
+#include "scl_stdlib.h"
+#include "scl_string.h"
 
 #define ZIP_LOCAL_HDR_SZ 30
 #define ZIP_CENTRAL_HDR_SZ 46
