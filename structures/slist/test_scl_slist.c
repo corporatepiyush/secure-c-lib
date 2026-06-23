@@ -13,13 +13,13 @@ static void test_slist_push_pop(scl_test_runner_t *tr) {
         scl_error_t err = scl_slist_push_front(alloc, &list, &values[i]);
         SCL_EXPECT_OK(tr, err);
     }
-    SCL_EXPECT_EQ_SZ(tr, scl_slist_len(&list), 5);
-    
+    SCL_EXPECT_EQ_SZ(tr, scl_slist_count(&list), 5);
+
     int out;
     scl_error_t err = scl_slist_pop_front(alloc, &list, &out);
     SCL_EXPECT_OK(tr, err);
     SCL_EXPECT_EQ_I(tr, out, 5);
-    SCL_EXPECT_EQ_SZ(tr, scl_slist_len(&list), 4);
+    SCL_EXPECT_EQ_SZ(tr, scl_slist_count(&list), 4);
     
     scl_slist_destroy(alloc, &list);
 }

@@ -11,8 +11,8 @@ static void test_array_init_destroy(scl_test_runner_t *tr) {
     
     scl_error_t err = scl_array_init(alloc, &arr, sizeof(int), 10);
     SCL_EXPECT_OK(tr, err);
-    SCL_EXPECT_EQ_SZ(tr, scl_array_len(&arr), 0);
-    SCL_EXPECT_EQ_SZ(tr, scl_array_cap(&arr), 10);
+    SCL_EXPECT_EQ_SZ(tr, scl_array_count(&arr), 0);
+    SCL_EXPECT_EQ_SZ(tr, scl_array_capacity(&arr), 10);
     
     scl_array_destroy(alloc, &arr);
 }
@@ -29,13 +29,13 @@ static void test_array_push_pop(scl_test_runner_t *tr) {
         scl_error_t err = scl_array_push(alloc, &arr, &values[i]);
         SCL_EXPECT_OK(tr, err);
     }
-    SCL_EXPECT_EQ_SZ(tr, scl_array_len(&arr), 5);
-    
+    SCL_EXPECT_EQ_SZ(tr, scl_array_count(&arr), 5);
+
     int last;
     scl_error_t err = scl_array_pop(&arr, &last);
     SCL_EXPECT_OK(tr, err);
     SCL_EXPECT_EQ_I(tr, last, 50);
-    SCL_EXPECT_EQ_SZ(tr, scl_array_len(&arr), 4);
+    SCL_EXPECT_EQ_SZ(tr, scl_array_count(&arr), 4);
     
     scl_array_destroy(alloc, &arr);
 }
