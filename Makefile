@@ -4,7 +4,7 @@ LDFLAGS  = -lm -lpthread
 ARFLAGS  = rcs
 
 # All header directories live under libs/
-LIBDIRS  := $(shell find ./libs -maxdepth 3 -type d -not -path '*/.git/*' | sort -u)
+LIBDIRS  := $(shell find ./libs -maxdepth 4 -type d -not -path '*/.git/*' | sort -u)
 
 # Sequential library sources (all scl_*.c under libs/, excluding test files)
 LIBSRCS  := $(shell find ./libs -name 'scl_*.c' -not -name 'test_*.c' -not -path '*/.git/*')
