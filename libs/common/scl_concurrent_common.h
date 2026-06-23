@@ -3,6 +3,8 @@
 
 #include "scl_common.h"
 #include "scl_atomic.h"
+#include <sched.h>
+#include <time.h>
 
 /* ── Atomic flags (spinlock) ───────────────────────────────── */
 typedef struct {
@@ -14,8 +16,23 @@ static inline void scl_spinlock_init(scl_spinlock_t *lock) {
 }
 
 static inline void scl_spinlock_lock(scl_spinlock_t *lock) {
-    while (atomic_flag_test_and_set(&lock->flag)) {
-        scl_cpu_pause();
+    /* Fast path: one TAS attempt */
+    if (!atomic_flag_test_and_set_explicit(&lock->flag, memory_order_acquire))
+        return;
+
+    /* Slow path: exponential backoff with PAUSE burst, yield, nanosleep */
+    for (int backoff = 1; ; backoff++) {
+        int pauses = backoff < 10 ? (1 << backoff) : 1024;
+        for (int i = 0; i < pauses; i++)
+            scl_cpu_pause();
+
+        if (!atomic_flag_test_and_set_explicit(&lock->flag, memory_order_acquire))
+            return;
+
+        if (backoff > 12)
+            (void)nanosleep(&(struct timespec){0, 1000000}, NULL);
+        else if (backoff > 8)
+            (void)sched_yield();
     }
 }
 

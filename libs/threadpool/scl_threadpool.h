@@ -23,7 +23,7 @@ typedef struct {
     int active;
     scl_threadpool_task_t *head;
     scl_threadpool_task_t *tail;
-    scl_pthread_t *thread_handles;
+    scl_thread_t *thread_handles;
     scl_mutex_t lock;
     scl_cond_t cond;
     unsigned int working;

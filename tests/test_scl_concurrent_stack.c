@@ -2,6 +2,7 @@
 #include "scl_concurrent_stack.h"
 #include "scl_pthread.h"
 #include "scl_atomic.h"
+#include <sched.h>
 
 #define NTHREADS 4
 #define OPS_PER_THREAD 1000
@@ -73,7 +74,7 @@ static void *push_thread(void *arg) {
     for (int i = 0; i < OPS_PER_THREAD; i++) {
         int v = i;
         while (scl_cstack_push(alloc, s, &v) != SCL_OK)
-            ;
+            sched_yield();
         atomic_fetch_add(&push_count, 1);
     }
     return NULL;
@@ -87,6 +88,8 @@ static void *pop_thread(void *arg) {
         int out;
         if (scl_cstack_pop(alloc, s, &out) == SCL_OK)
             atomic_fetch_add(&pop_count, 1);
+        else
+            sched_yield();
     }
     return NULL;
 }

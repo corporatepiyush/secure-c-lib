@@ -2,6 +2,7 @@
 #include "scl_concurrent_slist.h"
 #include "scl_pthread.h"
 #include "scl_atomic.h"
+#include <sched.h>
 
 #define NTHREADS 4
 #define OPS_PER_THREAD 1000
@@ -71,7 +72,7 @@ static void *cslist_push_thread(void *arg) {
     scl_allocator_t *alloc = scl_allocator_default();
     for (int i = 0; i < OPS_PER_THREAD; i++) {
         while (scl_cslist_push_front(alloc, l, &i) != SCL_OK)
-            ;
+            sched_yield();
         atomic_fetch_add(&cslist_push_count, 1);
     }
     return NULL;
@@ -85,6 +86,8 @@ static void *cslist_pop_thread(void *arg) {
         int out;
         if (scl_cslist_pop_front(alloc, l, &out) == SCL_OK)
             atomic_fetch_add(&cslist_pop_count, 1);
+        else
+            sched_yield();
     }
     return NULL;
 }

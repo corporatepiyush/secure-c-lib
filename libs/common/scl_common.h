@@ -76,7 +76,8 @@ typedef enum {
     SCL_ERR_IO,                /* I/O error */
     SCL_ERR_ALIGNMENT,         /* alignment error */
     SCL_ERR_LOCK,              /* lock acquisition failed */
-    SCL_ERR_TIMEOUT            /* operation timed out */
+    SCL_ERR_TIMEOUT,           /* operation timed out */
+    SCL_ERR_DEADLOCK           /* mutex deadlock detected (self-deadlock) */
 } scl_error_t;
 
 /* ── Error string map ───────────────────────────────────────── */
@@ -101,6 +102,7 @@ static inline const char *scl_error_string(scl_error_t err) {
     case SCL_ERR_ALIGNMENT:    return "alignment error";
     case SCL_ERR_LOCK:         return "lock failed";
     case SCL_ERR_TIMEOUT:      return "timeout";
+    case SCL_ERR_DEADLOCK:     return "deadlock";
     default:                   return "unknown error";
     }
 }

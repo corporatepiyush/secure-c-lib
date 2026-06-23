@@ -42,11 +42,11 @@ static void *scl_threadpool_worker(void *arg) {
 }
 
 static scl_error_t scl_threadpool_create_threads(scl_threadpool_t *pool) {
-    pool->thread_handles = (scl_pthread_t *)scl_calloc(pool->alloc, pool->thread_count, sizeof(scl_pthread_t), _Alignof(max_align_t));
+    pool->thread_handles = (scl_thread_t *)scl_calloc(pool->alloc, pool->thread_count, sizeof(scl_thread_t), _Alignof(max_align_t));
     if (!pool->thread_handles) return SCL_ERR_OUT_OF_MEMORY;
 
     for (unsigned int i = 0; i < pool->thread_count; i++) {
-        scl_error_t err = scl_pthread_create(&pool->thread_handles[i], NULL, scl_threadpool_worker, pool);
+        scl_error_t err = scl_thread_create(&pool->thread_handles[i], scl_threadpool_worker, pool);
         if (err != SCL_OK) return err;
     }
     return SCL_OK;
@@ -63,10 +63,10 @@ scl_error_t scl_threadpool_init(scl_allocator_t *alloc, scl_threadpool_t *pool, 
 
     scl_error_t err;
 
-    err = scl_mutex_init(&pool->lock, NULL);
+    err = scl_mutex_init(&pool->lock);
     if (err != SCL_OK) return err;
 
-    err = scl_cond_init(&pool->cond, NULL);
+    err = scl_cond_init(&pool->cond);
     if (err != SCL_OK) {
         scl_mutex_destroy(&pool->lock);
         return err;
@@ -129,7 +129,7 @@ scl_error_t scl_threadpool_destroy(scl_threadpool_t *pool) {
     scl_mutex_unlock(&pool->lock);
 
     for (unsigned int i = 0; i < pool->thread_count; i++)
-        scl_pthread_join(pool->thread_handles[i], NULL);
+        scl_thread_join(pool->thread_handles[i], NULL);
 
     scl_free(pool->alloc, pool->thread_handles);
     pool->thread_handles = NULL;

@@ -1,3 +1,4 @@
+MAKEFLAGS += -j$(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
 CC       = gcc
 CFLAGS   = -std=c17 -Wall -Wextra -Wpedantic -Werror -O2
 LDFLAGS  = -lm -lpthread

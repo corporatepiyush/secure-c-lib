@@ -2,6 +2,7 @@
 #include "scl_concurrent_ringbuf.h"
 #include "scl_pthread.h"
 #include "scl_atomic.h"
+#include <sched.h>
 
 #define CAPACITY 256
 #define N_ITEMS  512
@@ -109,7 +110,7 @@ static void *rb_producer(void *arg) {
     scl_concurrent_ringbuf_t *rb = ((ringbuf_arg_t *)arg)->rb;
     for (int i = 0; i < N_ITEMS; i++) {
         while (scl_cringbuf_push(rb, &i) != SCL_OK)
-            ;
+            sched_yield();
     }
     return NULL;
 }
@@ -120,6 +121,8 @@ static void *rb_consumer(void *arg) {
     while (atomic_load(&rb_consumed) < N_ITEMS) {
         if (scl_cringbuf_pop(rb, &out) == SCL_OK)
             atomic_fetch_add(&rb_consumed, 1);
+        else
+            sched_yield();
     }
     return NULL;
 }

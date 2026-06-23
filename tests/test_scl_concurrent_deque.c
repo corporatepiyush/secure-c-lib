@@ -2,6 +2,7 @@
 #include "scl_concurrent_deque.h"
 #include "scl_pthread.h"
 #include "scl_atomic.h"
+#include <sched.h>
 
 #define NTHREADS 4
 #define OPS_PER_THREAD 500
@@ -89,7 +90,7 @@ static void *cdeque_push_thread(void *arg) {
     for (int i = 0; i < OPS_PER_THREAD; i++) {
         int v = a->base + i;
         while (scl_cdeque_push_back(alloc, a->d, &v) != SCL_OK)
-            ;
+            sched_yield();
     }
     return NULL;
 }
@@ -101,6 +102,8 @@ static void *cdeque_pop_thread(void *arg) {
         int out;
         if (scl_cdeque_pop_front(d, &out) == SCL_OK)
             atomic_fetch_add(&cdeque_consumed, 1);
+        else
+            sched_yield();
     }
     return NULL;
 }

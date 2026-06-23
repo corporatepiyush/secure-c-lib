@@ -2,6 +2,7 @@
 #include "scl_concurrent_queue.h"
 #include "scl_pthread.h"
 #include "scl_atomic.h"
+#include <sched.h>
 
 #define NTHREADS 4
 #define OPS_PER_THREAD 1000
@@ -75,7 +76,7 @@ static void *producer_thread(void *arg) {
     for (int i = 0; i < OPS_PER_THREAD; i++) {
         int v = a->base + i;
         while (scl_cqueue_enqueue(alloc, a->q, &v) != SCL_OK)
-            ;
+            sched_yield();
     }
     return NULL;
 }
@@ -90,6 +91,8 @@ static void *consumer_thread(void *arg) {
         int out;
         if (scl_cqueue_dequeue(alloc, q, &out) == SCL_OK)
             atomic_fetch_add(&consumed_count, 1);
+        else
+            sched_yield();
     }
     return NULL;
 }
