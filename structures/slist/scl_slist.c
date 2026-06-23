@@ -33,8 +33,10 @@ void scl_slist_destroy(scl_allocator_t *alloc, scl_slist_t *list)
 static scl_error_t scl_slist_create_node(scl_allocator_t *alloc, scl_slist_node_t **out,
                                           const void *data, size_t element_size)
 {
-    scl_slist_node_t *node = scl_alloc(alloc, sizeof(scl_slist_node_t) + element_size,
-                                        alignof(max_align_t));
+    size_t node_sz;
+    if (scl_add_overflow(sizeof(scl_slist_node_t), element_size, &node_sz))
+        return SCL_ERR_SIZE_OVERFLOW;
+    scl_slist_node_t *node = scl_alloc(alloc, node_sz, alignof(max_align_t));
     if (!node) return SCL_ERR_OUT_OF_MEMORY;
     memcpy(node->data, data, element_size);
     node->next = NULL;

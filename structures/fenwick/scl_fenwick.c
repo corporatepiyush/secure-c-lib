@@ -8,6 +8,7 @@ scl_error_t scl_fenwick_init(scl_allocator_t *alloc, scl_fenwick_t *fw,
 {
     if (!fw || !add || !sub || !data) return SCL_ERR_NULL_PTR;
     if (n == 0 || element_size == 0) return SCL_ERR_INVALID_ARG;
+    if (n == SIZE_MAX) return SCL_ERR_SIZE_OVERFLOW;
 
     fw->tree = scl_calloc(alloc, n + 1, element_size, alignof(max_align_t));
     fw->scratch = scl_alloc(alloc, element_size, alignof(max_align_t));

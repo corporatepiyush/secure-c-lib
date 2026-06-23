@@ -19,9 +19,16 @@ scl_error_t scl_sparse_init(scl_allocator_t *alloc, scl_sparse_t *st,
         return SCL_ERR_OUT_OF_MEMORY;
     }
 
+    size_t level_sz;
+    if (scl_mul_overflow(n, element_size, &level_sz)) {
+        scl_free(alloc, st->levels);
+        scl_free(alloc, st->scratch);
+        return SCL_ERR_SIZE_OVERFLOW;
+    }
+
     size_t ok = 1;
     for (size_t k = 0; k < levels_count; k++) {
-        st->levels[k] = scl_alloc(alloc, n * element_size, alignof(max_align_t));
+        st->levels[k] = scl_alloc(alloc, level_sz, alignof(max_align_t));
         if (!st->levels[k]) { ok = 0; break; }
     }
 

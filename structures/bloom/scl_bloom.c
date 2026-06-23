@@ -37,14 +37,18 @@ scl_error_t scl_bloom_init(scl_allocator_t *alloc, scl_bloom_t *bf, size_t expec
 
     double ln2 = 0.6931471805599453;
     double ln2sq = ln2 * ln2;
-    size_t bits = (size_t)(-((double)expected_items * log(false_positive_rate)) / ln2sq);
+    double bits_d = -((double)expected_items * log(false_positive_rate)) / ln2sq;
+    if (bits_d <= 0.0 || bits_d >= (double)SIZE_MAX) return SCL_ERR_INVALID_ARG;
+    size_t bits = (size_t)bits_d;
     if (bits == 0) bits = 1;
 
     size_t num_hashes = (size_t)(((double)bits / (double)expected_items) * ln2);
     if (num_hashes < 1) num_hashes = 1;
     if (num_hashes > 64) num_hashes = 64;
 
-    size_t bytes = (bits + 7) / 8;
+    size_t bits_padded;
+    if (scl_add_overflow(bits, 7, &bits_padded)) return SCL_ERR_SIZE_OVERFLOW;
+    size_t bytes = bits_padded / 8;
     bf->bits = scl_calloc(alloc, bytes, 1, alignof(max_align_t));
     if (!bf->bits) return SCL_ERR_OUT_OF_MEMORY;
 

@@ -96,7 +96,12 @@ scl_error_t scl_graph_dfs(scl_allocator_t *alloc, const scl_graph_t *g, size_t s
     bool *visited = scl_calloc(alloc, g->vertex_count, sizeof(bool), alignof(max_align_t));
     if (!visited) return SCL_ERR_OUT_OF_MEMORY;
 
-    size_t *stack = scl_alloc(alloc, g->vertex_count * sizeof(size_t), alignof(max_align_t));
+    size_t stack_sz;
+    if (scl_mul_overflow(g->vertex_count, sizeof(size_t), &stack_sz)) {
+        scl_free(alloc, visited);
+        return SCL_ERR_SIZE_OVERFLOW;
+    }
+    size_t *stack = scl_alloc(alloc, stack_sz, alignof(max_align_t));
     if (!stack) { scl_free(alloc, visited); return SCL_ERR_OUT_OF_MEMORY; }
 
     size_t sp = 0;
@@ -129,7 +134,12 @@ scl_error_t scl_graph_bfs(scl_allocator_t *alloc, const scl_graph_t *g, size_t s
     bool *visited = scl_calloc(alloc, g->vertex_count, sizeof(bool), alignof(max_align_t));
     if (!visited) return SCL_ERR_OUT_OF_MEMORY;
 
-    size_t *queue = scl_alloc(alloc, g->vertex_count * sizeof(size_t), alignof(max_align_t));
+    size_t queue_sz;
+    if (scl_mul_overflow(g->vertex_count, sizeof(size_t), &queue_sz)) {
+        scl_free(alloc, visited);
+        return SCL_ERR_SIZE_OVERFLOW;
+    }
+    size_t *queue = scl_alloc(alloc, queue_sz, alignof(max_align_t));
     if (!queue) { scl_free(alloc, visited); return SCL_ERR_OUT_OF_MEMORY; }
 
     size_t qh = 0, qt = 0;

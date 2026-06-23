@@ -29,6 +29,7 @@ scl_error_t scl_lru_init(scl_allocator_t *alloc, scl_lru_t *cache, size_t key_si
     cache->key_cmp = NULL;
     cache->key_hash = scl_lru_default_hash;
 
+    if (capacity > SIZE_MAX / 2) return SCL_ERR_SIZE_OVERFLOW;
     cache->index_capacity = capacity * 2;
     cache->index = scl_calloc(alloc, cache->index_capacity, sizeof(scl_lru_node_t *), alignof(max_align_t));
     if (!cache->index) return SCL_ERR_OUT_OF_MEMORY;
@@ -42,6 +43,8 @@ void scl_lru_destroy(scl_allocator_t *alloc, scl_lru_t *cache)
     scl_lru_node_t *cur = cache->head;
     while (cur) {
         scl_lru_node_t *next = cur->next;
+        scl_secure_zero(cur->key,   cache->key_size);
+        scl_secure_zero(cur->value, cache->value_size);
         scl_free(alloc, cur->key);
         scl_free(alloc, cur->value);
         scl_free(alloc, cur);
@@ -90,6 +93,8 @@ static void scl_lru_evict(scl_allocator_t *alloc, scl_lru_t *cache)
     if (!cache->tail) return;
     scl_lru_node_t *old = cache->tail;
     scl_lru_detach(cache, old);
+    scl_secure_zero(old->key,   cache->key_size);
+    scl_secure_zero(old->value, cache->value_size);
     scl_free(alloc, old->key);
     scl_free(alloc, old->value);
     scl_free(alloc, old);

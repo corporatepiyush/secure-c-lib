@@ -9,7 +9,11 @@ scl_error_t scl_segtree_init(scl_allocator_t *alloc, scl_segtree_t *tree,
     if (n == 0 || element_size == 0) return SCL_ERR_INVALID_ARG;
 
     size_t size = 1;
-    while (size < n) size <<= 1;
+    while (size < n) {
+        if (size > SIZE_MAX / 2) return SCL_ERR_SIZE_OVERFLOW;
+        size <<= 1;
+    }
+    if (size > SIZE_MAX / 2) return SCL_ERR_SIZE_OVERFLOW;
 
     tree->data = scl_calloc(alloc, 2 * size, element_size, alignof(max_align_t));
     if (!tree->data) return SCL_ERR_OUT_OF_MEMORY;

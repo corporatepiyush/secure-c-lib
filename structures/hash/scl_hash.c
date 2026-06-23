@@ -21,22 +21,28 @@ bool scl_hash_eq_mem(const void *a, const void *b, size_t key_size)
 
 static SCL_COLD_PATH scl_error_t scl_hash_grow(scl_allocator_t *alloc, scl_hash_t *ht)
 {
+    if (ht->capacity > SIZE_MAX / 2) return SCL_ERR_SIZE_OVERFLOW;
     size_t new_cap = ht->capacity == 0 ? 16 : ht->capacity * 2;
     size_t new_mask = new_cap - 1;
 
     size_t ksz = ht->key_size;
     size_t vsz = ht->value_size;
+    size_t ksz_total, vsz_total, ssz_total;
+    if (scl_mul_overflow(new_cap, ksz, &ksz_total) ||
+        scl_mul_overflow(new_cap, vsz, &vsz_total) ||
+        scl_mul_overflow(new_cap, sizeof(scl_hash_slot_state_t), &ssz_total))
+        return SCL_ERR_SIZE_OVERFLOW;
 
-    unsigned char *new_keys = scl_alloc(alloc, new_cap * ksz, alignof(max_align_t));
-    unsigned char *new_vals = scl_alloc(alloc, new_cap * vsz, alignof(max_align_t));
-    scl_hash_slot_state_t *new_states = scl_alloc(alloc, new_cap * sizeof(scl_hash_slot_state_t), alignof(max_align_t));
+    unsigned char *new_keys = scl_alloc(alloc, ksz_total, alignof(max_align_t));
+    unsigned char *new_vals = scl_alloc(alloc, vsz_total, alignof(max_align_t));
+    scl_hash_slot_state_t *new_states = scl_alloc(alloc, ssz_total, alignof(max_align_t));
     if (!new_keys || !new_vals || !new_states) {
         scl_free(alloc, new_keys);
         scl_free(alloc, new_vals);
         scl_free(alloc, new_states);
         return SCL_ERR_OUT_OF_MEMORY;
     }
-    memset(new_states, 0, new_cap * sizeof(scl_hash_slot_state_t));
+    memset(new_states, 0, ssz_total);
 
     /* Rehash all occupied entries into new table */
     scl_hash_func_t hf = ht->hash_func;
@@ -51,6 +57,9 @@ static SCL_COLD_PATH scl_error_t scl_hash_grow(scl_allocator_t *alloc, scl_hash_
         }
     }
 
+    size_t old_cap = ht->capacity;
+    scl_secure_zero(ht->keys, old_cap * ksz);
+    scl_secure_zero(ht->values, old_cap * vsz);
     scl_free(alloc, ht->keys);
     scl_free(alloc, ht->values);
     scl_free(alloc, ht->states);
@@ -97,6 +106,8 @@ scl_error_t scl_hash_init(scl_allocator_t *alloc, scl_hash_t *ht, size_t key_siz
 void scl_hash_destroy(scl_allocator_t *alloc, scl_hash_t *ht)
 {
     if (!ht) return;
+    if (ht->keys)   scl_secure_zero(ht->keys,   ht->capacity * ht->key_size);
+    if (ht->values) scl_secure_zero(ht->values, ht->capacity * ht->value_size);
     scl_free(alloc, ht->keys);
     scl_free(alloc, ht->values);
     scl_free(alloc, ht->states);
