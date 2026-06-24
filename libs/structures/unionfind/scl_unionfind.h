@@ -15,13 +15,13 @@ typedef struct {
     size_t sets;
 } scl_unionfind_t;
 
-scl_error_t scl_unionfind_init(scl_allocator_t *alloc, scl_unionfind_t *uf, size_t count) SCL_WARN_UNUSED;
-void        scl_unionfind_destroy(scl_allocator_t *alloc, scl_unionfind_t *uf);
-size_t      scl_unionfind_find(scl_unionfind_t *uf, size_t x);
-scl_error_t scl_unionfind_union(scl_unionfind_t *uf, size_t x, size_t y) SCL_WARN_UNUSED;
-bool        scl_unionfind_connected(const scl_unionfind_t *uf, size_t x, size_t y);
-size_t      scl_unionfind_count(const scl_unionfind_t *uf);
-size_t      scl_unionfind_sets(const scl_unionfind_t *uf);
+scl_error_t scl_unionfind_init(scl_allocator_t *SCL_RESTRICT alloc, scl_unionfind_t *SCL_RESTRICT uf, size_t count) SCL_WARN_UNUSED;
+void        scl_unionfind_destroy(scl_allocator_t *SCL_RESTRICT alloc, scl_unionfind_t *SCL_RESTRICT uf);
+size_t      scl_unionfind_find(scl_unionfind_t *SCL_RESTRICT uf, size_t x);
+scl_error_t scl_unionfind_union(scl_unionfind_t *SCL_RESTRICT uf, size_t x, size_t y) SCL_WARN_UNUSED;
+bool        scl_unionfind_connected(const scl_unionfind_t *SCL_RESTRICT uf, size_t x, size_t y);
+SCL_PURE size_t      scl_unionfind_count(const scl_unionfind_t *SCL_RESTRICT uf);
+size_t      scl_unionfind_sets(const scl_unionfind_t *SCL_RESTRICT uf);
 
 #ifdef __GNUC__
 #pragma GCC diagnostic pop

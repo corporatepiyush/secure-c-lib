@@ -7,10 +7,10 @@
 
 scl_error_t scl_cgraph_init(scl_allocator_t *alloc, scl_concurrent_graph_t *g, size_t vertex_count)
 {
-    if (!g) return SCL_ERR_NULL_PTR;
-    if (vertex_count == 0) return SCL_ERR_INVALID_ARG;
+    if (scl_unlikely(!g)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(vertex_count == 0)) return SCL_ERR_INVALID_ARG;
     g->adj = scl_calloc(alloc, vertex_count, sizeof(scl_concurrent_adj_node_t *), alignof(max_align_t));
-    if (!g->adj) return SCL_ERR_OUT_OF_MEMORY;
+    if (scl_unlikely(!g->adj)) return SCL_ERR_OUT_OF_MEMORY;
     g->vertex_count = vertex_count;
     atomic_init(&g->edge_count, 0);
     scl_spinlock_init(&g->lock);
@@ -19,11 +19,11 @@ scl_error_t scl_cgraph_init(scl_allocator_t *alloc, scl_concurrent_graph_t *g, s
 
 void scl_cgraph_destroy(scl_allocator_t *alloc, scl_concurrent_graph_t *g)
 {
-    if (!g) return;
+    if (scl_unlikely(!g)) return;
     scl_spinlock_lock(&g->lock);
     for (size_t i = 0; i < g->vertex_count; i++) {
         scl_concurrent_adj_node_t *cur = g->adj[i];
-        while (cur) {
+        while (scl_likely(cur)) {
             scl_concurrent_adj_node_t *next = cur->next;
             scl_free(alloc, cur);
             cur = next;
@@ -38,10 +38,10 @@ void scl_cgraph_destroy(scl_allocator_t *alloc, scl_concurrent_graph_t *g)
 
 scl_error_t scl_cgraph_add_edge(scl_allocator_t *alloc, scl_concurrent_graph_t *g, size_t from, size_t to, int weight)
 {
-    if (!g) return SCL_ERR_NULL_PTR;
-    if (from >= g->vertex_count || to >= g->vertex_count) return SCL_ERR_INVALID_INDEX;
+    if (scl_unlikely(!g)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(from >= g->vertex_count || to >= g->vertex_count)) return SCL_ERR_INVALID_INDEX;
     scl_concurrent_adj_node_t *node = scl_alloc(alloc, sizeof(scl_concurrent_adj_node_t), alignof(max_align_t));
-    if (!node) return SCL_ERR_OUT_OF_MEMORY;
+    if (scl_unlikely(!node)) return SCL_ERR_OUT_OF_MEMORY;
     node->to = to;
     node->weight = weight;
     scl_spinlock_lock(&g->lock);
@@ -54,12 +54,12 @@ scl_error_t scl_cgraph_add_edge(scl_allocator_t *alloc, scl_concurrent_graph_t *
 
 scl_error_t scl_cgraph_remove_edge(scl_allocator_t *alloc, scl_concurrent_graph_t *g, size_t from, size_t to)
 {
-    if (!g) return SCL_ERR_NULL_PTR;
-    if (from >= g->vertex_count) return SCL_ERR_INVALID_INDEX;
+    if (scl_unlikely(!g)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(from >= g->vertex_count)) return SCL_ERR_INVALID_INDEX;
     scl_spinlock_lock(&g->lock);
     scl_concurrent_adj_node_t **prev = &g->adj[from];
     scl_concurrent_adj_node_t *cur = g->adj[from];
-    while (cur) {
+    while (scl_likely(cur)) {
         if (cur->to == to) {
             *prev = cur->next;
             scl_free(alloc, cur);
@@ -76,10 +76,10 @@ scl_error_t scl_cgraph_remove_edge(scl_allocator_t *alloc, scl_concurrent_graph_
 
 bool scl_cgraph_has_edge(const scl_concurrent_graph_t *g, size_t from, size_t to)
 {
-    if (!g || from >= g->vertex_count) return false;
+    if (scl_unlikely(!g || from >= g->vertex_count)) return false;
     scl_spinlock_lock((scl_spinlock_t *)&g->lock);
     scl_concurrent_adj_node_t *cur = g->adj[from];
-    while (cur) {
+    while (scl_likely(cur)) {
         if (cur->to == to) { scl_spinlock_unlock((scl_spinlock_t *)&g->lock); return true; }
         cur = cur->next;
     }

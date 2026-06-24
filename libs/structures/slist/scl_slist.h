@@ -20,15 +20,15 @@ typedef struct {
     size_t count;
 } scl_slist_t;
 
-scl_error_t scl_slist_init(scl_slist_t *list, size_t element_size) SCL_WARN_UNUSED;
-void        scl_slist_destroy(scl_allocator_t *alloc, scl_slist_t *list);
-scl_error_t scl_slist_push_front(scl_allocator_t *alloc, scl_slist_t *list, const void *element) SCL_WARN_UNUSED;
-scl_error_t scl_slist_push_back(scl_allocator_t *alloc, scl_slist_t *list, const void *element) SCL_WARN_UNUSED;
-scl_error_t scl_slist_pop_front(scl_allocator_t *alloc, scl_slist_t *list, void *out) SCL_WARN_UNUSED;
-scl_error_t scl_slist_front(const scl_slist_t *list, void *out) SCL_WARN_UNUSED;
-scl_error_t scl_slist_back(const scl_slist_t *list, void *out) SCL_WARN_UNUSED;
-size_t      scl_slist_count(const scl_slist_t *list);
-bool        scl_slist_empty(const scl_slist_t *list);
+scl_error_t scl_slist_init(scl_slist_t *SCL_RESTRICT list, size_t element_size) SCL_WARN_UNUSED;
+void        scl_slist_destroy(scl_allocator_t *SCL_RESTRICT alloc, scl_slist_t *SCL_RESTRICT list);
+scl_error_t scl_slist_push_front(scl_allocator_t *SCL_RESTRICT alloc, scl_slist_t *SCL_RESTRICT list, const void *SCL_RESTRICT element) SCL_WARN_UNUSED;
+scl_error_t scl_slist_push_back(scl_allocator_t *SCL_RESTRICT alloc, scl_slist_t *SCL_RESTRICT list, const void *SCL_RESTRICT element) SCL_WARN_UNUSED;
+scl_error_t scl_slist_pop_front(scl_allocator_t *SCL_RESTRICT alloc, scl_slist_t *SCL_RESTRICT list, void *SCL_RESTRICT out) SCL_WARN_UNUSED;
+scl_error_t scl_slist_front(const scl_slist_t *SCL_RESTRICT list, void *SCL_RESTRICT out) SCL_WARN_UNUSED;
+scl_error_t scl_slist_back(const scl_slist_t *SCL_RESTRICT list, void *SCL_RESTRICT out) SCL_WARN_UNUSED;
+SCL_PURE size_t      scl_slist_count(const scl_slist_t *SCL_RESTRICT list);
+SCL_PURE bool        scl_slist_empty(const scl_slist_t *SCL_RESTRICT list);
 scl_error_t scl_slist_remove(scl_allocator_t *alloc, scl_slist_t *list, const void *element,
                              int (*cmp)(const void *, const void *)) SCL_WARN_UNUSED;
 scl_error_t scl_slist_search(const scl_slist_t *list, const void *key,

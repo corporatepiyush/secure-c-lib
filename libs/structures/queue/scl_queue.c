@@ -7,8 +7,8 @@
 
 scl_error_t scl_queue_init(scl_allocator_t *alloc, scl_queue_t *queue, size_t element_size, size_t initial_capacity)
 {
-    if (!queue) return SCL_ERR_NULL_PTR;
-    if (element_size == 0) return SCL_ERR_INVALID_ARG;
+    if (scl_unlikely(!queue)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(element_size == 0)) return SCL_ERR_INVALID_ARG;
 
     queue->data = NULL;
     queue->element_size = element_size;
@@ -24,7 +24,7 @@ scl_error_t scl_queue_init(scl_allocator_t *alloc, scl_queue_t *queue, size_t el
         if (scl_mul_overflow(cap, element_size, &bytes))
             return SCL_ERR_SIZE_OVERFLOW;
         queue->data = scl_alloc(alloc, bytes, alignof(max_align_t));
-        if (!queue->data) return SCL_ERR_OUT_OF_MEMORY;
+        if (scl_unlikely(!queue->data)) return SCL_ERR_OUT_OF_MEMORY;
         queue->capacity = cap;
         queue->mask = cap - 1;
     }
@@ -43,9 +43,9 @@ void scl_queue_destroy(scl_allocator_t *alloc, scl_queue_t *queue)
     }
 }
 
-scl_error_t scl_queue_enqueue(scl_allocator_t *alloc, scl_queue_t *queue, const void *element)
+scl_error_t scl_queue_enqueue(scl_allocator_t *alloc, scl_queue_t *queue, const void  *SCL_RESTRICT element)
 {
-    if (!queue || !element) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!queue || !element)) return SCL_ERR_NULL_PTR;
 
     size_t cnt = queue->count;
     size_t cap = queue->capacity;
@@ -59,7 +59,7 @@ scl_error_t scl_queue_enqueue(scl_allocator_t *alloc, scl_queue_t *queue, const 
             return SCL_ERR_SIZE_OVERFLOW;
 
         unsigned char *tmp = scl_alloc(alloc, new_bytes, alignof(max_align_t));
-        if (!tmp) return SCL_ERR_OUT_OF_MEMORY;
+        if (scl_unlikely(!tmp)) return SCL_ERR_OUT_OF_MEMORY;
 
         size_t head = queue->head;
         size_t mask = queue->mask;
@@ -85,7 +85,7 @@ scl_error_t scl_queue_enqueue(scl_allocator_t *alloc, scl_queue_t *queue, const 
 
 scl_error_t scl_queue_dequeue(scl_queue_t *queue, void *out)
 {
-    if (!queue || !out) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!queue || !out)) return SCL_ERR_NULL_PTR;
     if (scl_unlikely(queue->count == 0)) return SCL_ERR_EMPTY;
 
     size_t es = queue->element_size;
@@ -97,7 +97,7 @@ scl_error_t scl_queue_dequeue(scl_queue_t *queue, void *out)
 
 scl_error_t scl_queue_peek(const scl_queue_t *queue, void *out)
 {
-    if (!queue || !out) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!queue || !out)) return SCL_ERR_NULL_PTR;
     if (scl_unlikely(queue->count == 0)) return SCL_ERR_EMPTY;
 
     scl_memcpy(out, queue->data + queue->head * queue->element_size, queue->element_size);

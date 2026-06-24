@@ -9,7 +9,7 @@
 #include "scl_common.h"
 #include <stdint.h>
 
-scl_error_t scl_search_bellman_ford(const scl_graph_t *graph, int start, int64_t *restrict dist, int *restrict prev) SCL_WARN_UNUSED;
+scl_error_t scl_search_bellman_ford(const scl_graph_t * graph, int start, int64_t * dist, int * prev) SCL_WARN_UNUSED;
 
 #ifdef __GNUC__
 #pragma GCC diagnostic pop

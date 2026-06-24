@@ -21,7 +21,7 @@ static scl_btree_node_t *scl_btree_create_node(scl_allocator_t *alloc, bool leaf
 
 void scl_btree_destroy(scl_allocator_t *alloc, scl_btree_t *tree)
 {
-    if (!tree || !tree->root) return;
+    if (scl_unlikely(!tree || !tree->root)) return;
 
     scl_btree_node_t *stack[256];
     int sp = 0;
@@ -46,12 +46,12 @@ void scl_btree_destroy(scl_allocator_t *alloc, scl_btree_t *tree)
 scl_error_t scl_btree_init(scl_allocator_t *alloc, scl_btree_t *tree, size_t key_size, size_t value_size,
                            int degree, scl_cmp_func_t cmp)
 {
-    if (!tree || !cmp) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!tree || !cmp)) return SCL_ERR_NULL_PTR;
     if (key_size == 0 || value_size == 0 || degree < 2)
         return SCL_ERR_INVALID_ARG;
 
     tree->root = scl_btree_create_node(alloc, true, degree, key_size, value_size);
-    if (!tree->root) return SCL_ERR_OUT_OF_MEMORY;
+    if (scl_unlikely(!tree->root)) return SCL_ERR_OUT_OF_MEMORY;
 
     tree->key_size = key_size;
     tree->value_size = value_size;
@@ -68,7 +68,7 @@ static void scl_btree_split_child(scl_allocator_t *alloc, scl_btree_node_t *pare
     scl_btree_node_t **pch = scl_btree_node_children(parent, ksz, vsz, maxk);
     scl_btree_node_t *child = pch[i];
     scl_btree_node_t *new_child = scl_btree_create_node(alloc, child->leaf, t, ksz, vsz);
-    if (!new_child) return;
+    if (scl_unlikely(!new_child)) return;
 
     unsigned char *ck = scl_btree_node_keys(child);
     unsigned char *cv = scl_btree_node_vals(child, ksz, maxk);
@@ -105,9 +105,9 @@ static void scl_btree_split_child(scl_allocator_t *alloc, scl_btree_node_t *pare
     parent->count++;
 }
 
-scl_error_t scl_btree_insert(scl_allocator_t *alloc, scl_btree_t *tree, const void *key, const void *value)
+scl_error_t scl_btree_insert(scl_allocator_t *alloc, scl_btree_t *tree, const void  *SCL_RESTRICT key, const void *value)
 {
-    if (!tree || !key || !value) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!tree || !key || !value)) return SCL_ERR_NULL_PTR;
 
     int t = tree->t;
     size_t ksz = tree->key_size;
@@ -117,7 +117,7 @@ scl_error_t scl_btree_insert(scl_allocator_t *alloc, scl_btree_t *tree, const vo
 
     if (tree->root->count == maxk) {
         scl_btree_node_t *new_root = scl_btree_create_node(alloc, false, t, ksz, vsz);
-        if (!new_root) return SCL_ERR_OUT_OF_MEMORY;
+        if (scl_unlikely(!new_root)) return SCL_ERR_OUT_OF_MEMORY;
         scl_btree_node_t **nrch = scl_btree_node_children(new_root, ksz, vsz, maxk);
         nrch[0] = tree->root;
         tree->root = new_root;
@@ -169,9 +169,9 @@ scl_error_t scl_btree_insert(scl_allocator_t *alloc, scl_btree_t *tree, const vo
     return SCL_OK;
 }
 
-scl_error_t scl_btree_get(const scl_btree_t *tree, const void *key, void *out_value)
+scl_error_t scl_btree_get(const scl_btree_t *tree, const void *key, void  *SCL_RESTRICT out_value)
 {
-    if (!tree || !key || !out_value) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!tree || !key || !out_value)) return SCL_ERR_NULL_PTR;
 
     int t = tree->t;
     size_t ksz = tree->key_size;
@@ -180,7 +180,7 @@ scl_error_t scl_btree_get(const scl_btree_t *tree, const void *key, void *out_va
     scl_cmp_func_t cmp = tree->cmp;
 
     scl_btree_node_t *node = tree->root;
-    while (node) {
+    while (scl_likely(node)) {
         unsigned char *nk = scl_btree_node_keys(node);
         unsigned char *nv = scl_btree_node_vals(node, ksz, maxk);
 
@@ -204,7 +204,7 @@ scl_error_t scl_btree_get(const scl_btree_t *tree, const void *key, void *out_va
 
 bool scl_btree_contains(const scl_btree_t *tree, const void *key)
 {
-    if (!tree || !key) return false;
+    if (scl_unlikely(!tree || !key)) return false;
 
     int t = tree->t;
     size_t ksz = tree->key_size;
@@ -212,7 +212,7 @@ bool scl_btree_contains(const scl_btree_t *tree, const void *key)
     scl_cmp_func_t cmp = tree->cmp;
 
     scl_btree_node_t *node = tree->root;
-    while (node) {
+    while (scl_likely(node)) {
         unsigned char *nk = scl_btree_node_keys(node);
 
         size_t lo = 0, hi = node->count;
@@ -230,7 +230,7 @@ bool scl_btree_contains(const scl_btree_t *tree, const void *key)
     return false;
 }
 
-scl_error_t scl_btree_remove(scl_allocator_t *alloc, scl_btree_t *tree, const void *key)
+scl_error_t scl_btree_remove(scl_allocator_t *alloc, scl_btree_t *tree, const void  *SCL_RESTRICT key)
 {
     (void)alloc;
     (void)tree;

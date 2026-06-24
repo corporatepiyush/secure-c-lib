@@ -15,19 +15,19 @@ typedef struct {
     size_t count;
 } scl_array_t;
 
-scl_error_t scl_array_init(scl_allocator_t *alloc, scl_array_t *arr, size_t element_size, size_t initial_capacity) SCL_WARN_UNUSED;
-void        scl_array_destroy(scl_allocator_t *alloc, scl_array_t *arr);
-scl_error_t scl_array_push(scl_allocator_t *alloc, scl_array_t *arr, const void *element) SCL_WARN_UNUSED;
-scl_error_t scl_array_pop(scl_array_t *arr, void *out) SCL_WARN_UNUSED;
-scl_error_t scl_array_get(const scl_array_t *arr, size_t index, void *out) SCL_WARN_UNUSED;
-scl_error_t scl_array_set(scl_array_t *arr, size_t index, const void *element) SCL_WARN_UNUSED;
-scl_error_t scl_array_insert(scl_allocator_t *alloc, scl_array_t *arr, size_t index, const void *element) SCL_WARN_UNUSED;
-scl_error_t scl_array_remove(scl_array_t *arr, size_t index, void *out) SCL_WARN_UNUSED;
-scl_error_t scl_array_reserve(scl_allocator_t *alloc, scl_array_t *arr, size_t new_capacity) SCL_WARN_UNUSED;
-scl_error_t scl_array_shrink(scl_allocator_t *alloc, scl_array_t *arr) SCL_WARN_UNUSED;
-size_t      scl_array_count(const scl_array_t *arr);
-size_t      scl_array_capacity(const scl_array_t *arr);
-bool        scl_array_empty(const scl_array_t *arr);
+scl_error_t scl_array_init(scl_allocator_t *SCL_RESTRICT alloc, scl_array_t *SCL_RESTRICT arr, size_t element_size, size_t initial_capacity) SCL_WARN_UNUSED;
+void        scl_array_destroy(scl_allocator_t *SCL_RESTRICT alloc, scl_array_t *SCL_RESTRICT arr);
+scl_error_t scl_array_push(scl_allocator_t *SCL_RESTRICT alloc, scl_array_t *SCL_RESTRICT arr, const void *SCL_RESTRICT element) SCL_WARN_UNUSED;
+scl_error_t scl_array_pop(scl_array_t *SCL_RESTRICT arr, void *SCL_RESTRICT out) SCL_WARN_UNUSED;
+scl_error_t scl_array_get(const scl_array_t *SCL_RESTRICT arr, size_t index, void *SCL_RESTRICT out) SCL_WARN_UNUSED;
+scl_error_t scl_array_set(scl_array_t *SCL_RESTRICT arr, size_t index, const void *SCL_RESTRICT element) SCL_WARN_UNUSED;
+scl_error_t scl_array_insert(scl_allocator_t *SCL_RESTRICT alloc, scl_array_t *SCL_RESTRICT arr, size_t index, const void *SCL_RESTRICT element) SCL_WARN_UNUSED;
+scl_error_t scl_array_remove(scl_array_t *SCL_RESTRICT arr, size_t index, void *SCL_RESTRICT out) SCL_WARN_UNUSED;
+scl_error_t scl_array_reserve(scl_allocator_t *SCL_RESTRICT alloc, scl_array_t *SCL_RESTRICT arr, size_t new_capacity) SCL_WARN_UNUSED;
+scl_error_t scl_array_shrink(scl_allocator_t *SCL_RESTRICT alloc, scl_array_t *SCL_RESTRICT arr) SCL_WARN_UNUSED;
+SCL_PURE size_t      scl_array_count(const scl_array_t *SCL_RESTRICT arr);
+SCL_PURE size_t      scl_array_capacity(const scl_array_t *SCL_RESTRICT arr);
+SCL_PURE bool        scl_array_empty(const scl_array_t *SCL_RESTRICT arr);
 
 scl_error_t scl_array_linear_search(const scl_array_t *arr, const void *key,
                                     int (*cmp)(const void *, const void *),

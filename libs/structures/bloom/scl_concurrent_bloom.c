@@ -19,7 +19,7 @@ scl_error_t scl_cbloom_init(scl_allocator_t *alloc, scl_concurrent_bloom_t *bf, 
                            double false_positive_rate,
                            scl_bloom_hash_t hash_func)
 {
-    if (!bf) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!bf)) return SCL_ERR_NULL_PTR;
     if (expected_items == 0 || false_positive_rate <= 0.0 || false_positive_rate >= 1.0)
         return SCL_ERR_INVALID_ARG;
     double ln2 = 0.6931471805599453;
@@ -31,7 +31,7 @@ scl_error_t scl_cbloom_init(scl_allocator_t *alloc, scl_concurrent_bloom_t *bf, 
     if (num_hashes < 1) num_hashes = 1;
     if (num_hashes > 64) num_hashes = 64;
     bf->bits = scl_calloc(alloc, bytes, sizeof(atomic_uchar), alignof(max_align_t));
-    if (!bf->bits) return SCL_ERR_OUT_OF_MEMORY;
+    if (scl_unlikely(!bf->bits)) return SCL_ERR_OUT_OF_MEMORY;
     bf->bit_count = bits;
     bf->byte_count = bytes;
     bf->num_hashes = num_hashes;
@@ -42,7 +42,7 @@ scl_error_t scl_cbloom_init(scl_allocator_t *alloc, scl_concurrent_bloom_t *bf, 
 
 void scl_cbloom_destroy(scl_allocator_t *alloc, scl_concurrent_bloom_t *bf)
 {
-    if (!bf) return;
+    if (scl_unlikely(!bf)) return;
     scl_free(alloc, bf->bits);
     bf->bits = NULL;
     bf->bit_count = 0;
@@ -52,7 +52,7 @@ void scl_cbloom_destroy(scl_allocator_t *alloc, scl_concurrent_bloom_t *bf)
 
 scl_error_t scl_cbloom_insert(scl_concurrent_bloom_t *bf, const void *data, size_t len)
 {
-    if (!bf || !data) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!bf || !data)) return SCL_ERR_NULL_PTR;
     for (size_t i = 0; i < bf->num_hashes; i++) {
         size_t h = bf->hash_func(data, len, i) % bf->bit_count;
         size_t byte_idx = h / 8;
@@ -65,7 +65,7 @@ scl_error_t scl_cbloom_insert(scl_concurrent_bloom_t *bf, const void *data, size
 
 bool scl_cbloom_maybe_contains(const scl_concurrent_bloom_t *bf, const void *data, size_t len)
 {
-    if (!bf || !data) return false;
+    if (scl_unlikely(!bf || !data)) return false;
     for (size_t i = 0; i < bf->num_hashes; i++) {
         size_t h = bf->hash_func(data, len, i) % bf->bit_count;
         size_t byte_idx = h / 8;
@@ -78,7 +78,7 @@ bool scl_cbloom_maybe_contains(const scl_concurrent_bloom_t *bf, const void *dat
 
 void scl_cbloom_clear(scl_concurrent_bloom_t *bf)
 {
-    if (!bf) return;
+    if (scl_unlikely(!bf)) return;
     for (size_t i = 0; i < bf->byte_count; i++)
         atomic_store_explicit(&bf->bits[i], 0, memory_order_relaxed);
     atomic_store_explicit(&bf->inserted, 0, memory_order_relaxed);

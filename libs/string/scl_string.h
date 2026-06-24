@@ -3,38 +3,54 @@
 
 #include "scl_common.h"
 
-/* ── String length ───────────────────────────────────────────── */
-size_t scl_strlen(const char *s);
+/*
+ * scl_string.h — safe replacements for <string.h> and <ctype.h>.
+ *
+ * Every function that accepts a pointer NULL-guards it: passing NULL
+ * either returns 0 / NULL or is explicitly documented as UB (the way
+ * the C standard defines it).  The character-classification helpers
+ * promote to unsigned char to avoid the undefined behaviour that
+ * raw <ctype.h> has for negative values other than EOF.
+ *
+ * Memory-operation wrappers (memcpy, memmove, memset, …) exist solely
+ * so that callers never need to include the libc header directly;
+ * they delegate to the builtin/compiler intrinsic where possible.
+ *
+ * ── String length ───────────────────────────────────────────── */
+SCL_PURE size_t scl_strlen(const char * s);
+SCL_PURE size_t scl_strnlen(const char * s, size_t maxlen);
 
 /* ── Copy / concat ───────────────────────────────────────────── */
-char *scl_strncpy(char *restrict dest, const char *restrict src, size_t n);
-char *scl_strncat(char *restrict dest, const char *restrict src, size_t n);
+char *scl_strncpy(char * dest, const char * src, size_t n);
+char *scl_strncat(char * dest, const char * src, size_t n);
+char *scl_stpncpy(char * dest, const char * src, size_t n);
 
 /* ── Compare ─────────────────────────────────────────────────── */
-int   scl_strcmp(const char *s1, const char *s2);
-int   scl_strncmp(const char *s1, const char *s2, size_t n);
+SCL_PURE int   scl_strcmp(const char * s1, const char * s2);
+SCL_PURE int   scl_strncmp(const char * s1, const char * s2, size_t n);
 
 /* ── Search ──────────────────────────────────────────────────── */
-char *scl_strchr(const char *s, int c);
-char *scl_strrchr(const char *s, int c);
-char *scl_strstr(const char *haystack, const char *needle);
-char *scl_strpbrk(const char *s, const char *accept);
-size_t scl_strspn(const char *s, const char *accept);
-size_t scl_strcspn(const char *s, const char *reject);
+SCL_PURE char *scl_strchr(const char * s, int c);
+SCL_PURE char *scl_strrchr(const char * s, int c);
+SCL_PURE char *scl_strstr(const char * haystack, const char * needle);
+SCL_PURE char *scl_strpbrk(const char * s, const char * accept);
+SCL_PURE size_t scl_strspn(const char * s, const char * accept);
+SCL_PURE size_t scl_strcspn(const char * s, const char * reject);
 
 /* ── Tokenise (reentrant) ────────────────────────────────────── */
-char *scl_strtok_r(char *restrict str, const char *restrict delim, char **restrict saveptr);
+char *scl_strtok_r(char * str, const char * delim, char **SCL_RESTRICT saveptr);
 
 /* ── Duplicate (allocator-based) ─────────────────────────────── */
 char *scl_strdup(scl_allocator_t *alloc, const char *src);
 char *scl_strndup(scl_allocator_t *alloc, const char *src, size_t maxlen);
 
 /* ── Memory operations ───────────────────────────────────────── */
-void *scl_memset(void *s, int c, size_t n);
-void *scl_memcpy(void *restrict dest, const void *restrict src, size_t n);
-void *scl_memmove(void *dest, const void *src, size_t n);
-int   scl_memcmp(const void *s1, const void *s2, size_t n);
-void *scl_memchr(const void *s, int c, size_t n);
+void *scl_memset(void * s, int c, size_t n);
+void  scl_memzero(void * s, size_t n);
+void *scl_memcpy(void * dest, const void * src, size_t n);
+void *scl_memmove(void * dest, const void * src, size_t n);
+int   scl_memcmp(const void * s1, const void * s2, size_t n);
+void *scl_memchr(const void * s, int c, size_t n);
 
 /* ── Character classification ────────────────────────────────── */
 int scl_isalpha(unsigned char c);

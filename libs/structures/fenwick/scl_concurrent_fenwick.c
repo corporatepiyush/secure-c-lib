@@ -3,15 +3,15 @@
 
 scl_error_t scl_cfenwick_init(scl_allocator_t *alloc, scl_concurrent_fenwick_t *fw,
                               size_t n, size_t element_size, const void *data,
-                              void (*add)(void *out, const void *a, const void *b),
-                              void (*sub)(void *out, const void *a, const void *b))
+                              void (*add)(void *out, const void *a, const void  *SCL_RESTRICT b),
+                              void (*sub)(void *out, const void *a, const void  *SCL_RESTRICT b))
 {
-    if (!fw || !add || !sub || !data) return SCL_ERR_NULL_PTR;
-    if (n == 0 || element_size == 0) return SCL_ERR_INVALID_ARG;
+    if (scl_unlikely(!fw || !add || !sub || !data)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(n == 0 || element_size == 0)) return SCL_ERR_INVALID_ARG;
 
     fw->tree = scl_calloc(alloc, n + 1, element_size, alignof(max_align_t));
     fw->scratch = scl_alloc(alloc, element_size, alignof(max_align_t));
-    if (!fw->tree || !fw->scratch) {
+    if (scl_unlikely(!fw->tree || !fw->scratch)) {
         scl_free(alloc, fw->tree);
         scl_free(alloc, fw->scratch);
         return SCL_ERR_OUT_OF_MEMORY;
@@ -39,7 +39,7 @@ scl_error_t scl_cfenwick_init(scl_allocator_t *alloc, scl_concurrent_fenwick_t *
 
 void scl_cfenwick_destroy(scl_allocator_t *alloc, scl_concurrent_fenwick_t *fw)
 {
-    if (!fw) return;
+    if (scl_unlikely(!fw)) return;
     scl_free(alloc, fw->tree);
     scl_free(alloc, fw->scratch);
     fw->tree = NULL;
@@ -51,8 +51,8 @@ scl_error_t scl_cfenwick_update(scl_allocator_t *alloc, scl_concurrent_fenwick_t
                                 size_t idx, const void *delta)
 {
     (void)alloc;
-    if (!fw || !delta) return SCL_ERR_NULL_PTR;
-    if (idx >= fw->n) return SCL_ERR_INVALID_INDEX;
+    if (scl_unlikely(!fw || !delta)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(idx >= fw->n)) return SCL_ERR_INVALID_INDEX;
 
     scl_spinlock_lock(&fw->lock);
 
@@ -87,10 +87,10 @@ static scl_error_t prefix_unlocked(const scl_concurrent_fenwick_t *fw, size_t id
     return first ? SCL_ERR_EMPTY : SCL_OK;
 }
 
-scl_error_t scl_cfenwick_prefix(const scl_concurrent_fenwick_t *fw, size_t idx, void *out)
+scl_error_t scl_cfenwick_prefix(const scl_concurrent_fenwick_t *fw, size_t idx, void  *SCL_RESTRICT out)
 {
-    if (!fw || !out) return SCL_ERR_NULL_PTR;
-    if (idx >= fw->n) return SCL_ERR_INVALID_INDEX;
+    if (scl_unlikely(!fw || !out)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(idx >= fw->n)) return SCL_ERR_INVALID_INDEX;
 
     scl_spinlock_lock((scl_spinlock_t *)&fw->lock);
     scl_error_t err = prefix_unlocked(fw, idx, out);
@@ -98,10 +98,10 @@ scl_error_t scl_cfenwick_prefix(const scl_concurrent_fenwick_t *fw, size_t idx, 
     return err;
 }
 
-scl_error_t scl_cfenwick_range_query(const scl_concurrent_fenwick_t *fw, size_t l, size_t r, void *out)
+scl_error_t scl_cfenwick_range_query(const scl_concurrent_fenwick_t *fw, size_t l, size_t r, void  *SCL_RESTRICT out)
 {
-    if (!fw || !out) return SCL_ERR_NULL_PTR;
-    if (l > r || r >= fw->n) return SCL_ERR_INVALID_ARG;
+    if (scl_unlikely(!fw || !out)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(l > r || r >= fw->n)) return SCL_ERR_INVALID_ARG;
 
     scl_spinlock_lock((scl_spinlock_t *)&fw->lock);
 

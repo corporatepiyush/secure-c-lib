@@ -18,12 +18,12 @@ size_t scl_bloom_hash_murmur(const void *data, size_t len, size_t seed)
     return h;
 }
 
-static inline void scl_bloom_set_bit(unsigned char *bits, size_t idx)
+static SCL_ALWAYS_INLINE void scl_bloom_set_bit(unsigned char *bits, size_t idx)
 {
     bits[idx / 8] |= (1 << (idx % 8));
 }
 
-static inline bool scl_bloom_test_bit(const unsigned char *bits, size_t idx)
+static SCL_ALWAYS_INLINE bool scl_bloom_test_bit(const unsigned char *bits, size_t idx)
 {
     return (bits[idx / 8] >> (idx % 8)) & 1;
 }
@@ -31,14 +31,14 @@ static inline bool scl_bloom_test_bit(const unsigned char *bits, size_t idx)
 scl_error_t scl_bloom_init(scl_allocator_t *alloc, scl_bloom_t *bf, size_t expected_items, double false_positive_rate,
                            scl_bloom_hash_t hash_func)
 {
-    if (!bf) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!bf)) return SCL_ERR_NULL_PTR;
     if (expected_items == 0 || false_positive_rate <= 0.0 || false_positive_rate >= 1.0 || !hash_func)
         return SCL_ERR_INVALID_ARG;
 
     double ln2 = 0.6931471805599453;
     double ln2sq = ln2 * ln2;
     double bits_d = -((double)expected_items * scl_log(false_positive_rate)) / ln2sq;
-    if (bits_d <= 0.0 || bits_d >= (double)SIZE_MAX) return SCL_ERR_INVALID_ARG;
+    if (scl_unlikely(bits_d <= 0.0 || bits_d >= (double)SIZE_MAX)) return SCL_ERR_INVALID_ARG;
     size_t bits = (size_t)bits_d;
     if (bits == 0) bits = 1;
 
@@ -47,10 +47,10 @@ scl_error_t scl_bloom_init(scl_allocator_t *alloc, scl_bloom_t *bf, size_t expec
     if (num_hashes > 64) num_hashes = 64;
 
     size_t bits_padded;
-    if (scl_add_overflow(bits, 7, &bits_padded)) return SCL_ERR_SIZE_OVERFLOW;
+    if (scl_unlikely(scl_add_overflow(bits, 7, &bits_padded))) return SCL_ERR_SIZE_OVERFLOW;
     size_t bytes = bits_padded / 8;
     bf->bits = scl_calloc(alloc, bytes, 1, alignof(max_align_t));
-    if (!bf->bits) return SCL_ERR_OUT_OF_MEMORY;
+    if (scl_unlikely(!bf->bits)) return SCL_ERR_OUT_OF_MEMORY;
 
     bf->bit_count = bits;
     bf->byte_count = bytes;
@@ -73,7 +73,7 @@ void scl_bloom_destroy(scl_allocator_t *alloc, scl_bloom_t *bf)
 
 scl_error_t scl_bloom_insert(scl_bloom_t *bf, const void *data, size_t len)
 {
-    if (!bf || !data) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!bf || !data)) return SCL_ERR_NULL_PTR;
 
     for (size_t i = 0; i < bf->num_hashes; i++) {
         size_t h = bf->hash_func(data, len, i);
@@ -85,7 +85,7 @@ scl_error_t scl_bloom_insert(scl_bloom_t *bf, const void *data, size_t len)
 
 bool scl_bloom_maybe_contains(const scl_bloom_t *bf, const void *data, size_t len)
 {
-    if (!bf || !data) return false;
+    if (scl_unlikely(!bf || !data)) return false;
 
     for (size_t i = 0; i < bf->num_hashes; i++) {
         size_t h = bf->hash_func(data, len, i);

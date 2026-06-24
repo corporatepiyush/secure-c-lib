@@ -22,7 +22,7 @@ bool scl_hash_eq_mem(const void *a, const void *b, size_t key_size)
 
 static SCL_COLD_PATH scl_error_t scl_hash_grow(scl_allocator_t *alloc, scl_hash_t *ht)
 {
-    if (ht->capacity > SIZE_MAX / 2) return SCL_ERR_SIZE_OVERFLOW;
+    if (scl_unlikely(ht->capacity > SIZE_MAX / 2)) return SCL_ERR_SIZE_OVERFLOW;
     size_t new_cap = ht->capacity == 0 ? 16 : ht->capacity * 2;
     size_t new_mask = new_cap - 1;
 
@@ -37,7 +37,7 @@ static SCL_COLD_PATH scl_error_t scl_hash_grow(scl_allocator_t *alloc, scl_hash_
     unsigned char *new_keys = scl_alloc(alloc, ksz_total, alignof(max_align_t));
     unsigned char *new_vals = scl_alloc(alloc, vsz_total, alignof(max_align_t));
     scl_hash_slot_state_t *new_states = scl_alloc(alloc, ssz_total, alignof(max_align_t));
-    if (!new_keys || !new_vals || !new_states) {
+    if (scl_unlikely(!new_keys || !new_vals || !new_states)) {
         scl_free(alloc, new_keys);
         scl_free(alloc, new_vals);
         scl_free(alloc, new_states);
@@ -78,7 +78,7 @@ scl_error_t scl_hash_init(scl_allocator_t *alloc, scl_hash_t *ht, size_t key_siz
                           size_t initial_buckets, scl_hash_func_t hf,
                           scl_hash_eq_func_t eq)
 {
-    if (!ht) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!ht)) return SCL_ERR_NULL_PTR;
     if (key_size == 0 || value_size == 0 || initial_buckets == 0 || !hf)
         return SCL_ERR_INVALID_ARG;
 
@@ -88,7 +88,7 @@ scl_error_t scl_hash_init(scl_allocator_t *alloc, scl_hash_t *ht, size_t key_siz
     ht->keys = scl_calloc(alloc, cap, ksz, alignof(max_align_t));
     ht->values = scl_calloc(alloc, cap, vsz, alignof(max_align_t));
     ht->states = scl_calloc(alloc, cap, sizeof(scl_hash_slot_state_t), alignof(max_align_t));
-    if (!ht->keys || !ht->values || !ht->states) {
+    if (scl_unlikely(!ht->keys || !ht->values || !ht->states)) {
         scl_free(alloc, ht->keys);
         scl_free(alloc, ht->values);
         scl_free(alloc, ht->states);
@@ -108,7 +108,7 @@ scl_error_t scl_hash_init(scl_allocator_t *alloc, scl_hash_t *ht, size_t key_siz
 
 void scl_hash_destroy(scl_allocator_t *alloc, scl_hash_t *ht)
 {
-    if (!ht) return;
+    if (scl_unlikely(!ht)) return;
     if (ht->keys)   scl_secure_zero(ht->keys,   ht->capacity * ht->key_size);
     if (ht->values) scl_secure_zero(ht->values, ht->capacity * ht->value_size);
     scl_free(alloc, ht->keys);
@@ -121,9 +121,9 @@ void scl_hash_destroy(scl_allocator_t *alloc, scl_hash_t *ht)
     ht->count = 0;
 }
 
-scl_error_t scl_hash_insert(scl_allocator_t *alloc, scl_hash_t *ht, const void *key, const void *value)
+scl_error_t scl_hash_insert(scl_allocator_t *alloc, scl_hash_t *ht, const void  *SCL_RESTRICT key, const void *value)
 {
-    if (!ht || !key || !value) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!ht || !key || !value)) return SCL_ERR_NULL_PTR;
 
     size_t cap = ht->capacity;
     size_t mask = ht->mask;
@@ -164,9 +164,9 @@ scl_error_t scl_hash_insert(scl_allocator_t *alloc, scl_hash_t *ht, const void *
     return SCL_ERR_FULL;
 }
 
-scl_error_t scl_hash_get(const scl_hash_t *ht, const void *key, void *out_value)
+scl_error_t scl_hash_get(const scl_hash_t *ht, const void *key, void  *SCL_RESTRICT out_value)
 {
-    if (!ht || !key || !out_value) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!ht || !key || !out_value)) return SCL_ERR_NULL_PTR;
 
     size_t mask = ht->mask;
     size_t ksz = ht->key_size;
@@ -189,10 +189,10 @@ scl_error_t scl_hash_get(const scl_hash_t *ht, const void *key, void *out_value)
     return SCL_ERR_NOT_FOUND;
 }
 
-scl_error_t scl_hash_remove(scl_allocator_t *alloc, scl_hash_t *ht, const void *key)
+scl_error_t scl_hash_remove(scl_allocator_t *alloc, scl_hash_t *ht, const void  *SCL_RESTRICT key)
 {
     (void)alloc;
-    if (!ht || !key) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!ht || !key)) return SCL_ERR_NULL_PTR;
 
     size_t mask = ht->mask;
     size_t ksz = ht->key_size;
@@ -218,7 +218,7 @@ scl_error_t scl_hash_remove(scl_allocator_t *alloc, scl_hash_t *ht, const void *
 
 bool scl_hash_contains(const scl_hash_t *ht, const void *key)
 {
-    if (!ht || !key) return false;
+    if (scl_unlikely(!ht || !key)) return false;
 
     size_t mask = ht->mask;
     size_t ksz = ht->key_size;

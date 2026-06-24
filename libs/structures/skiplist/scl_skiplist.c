@@ -16,15 +16,15 @@ static size_t scl_skiplist_random_level(void)
 
 scl_error_t scl_skiplist_init(scl_allocator_t *alloc, scl_skiplist_t *sl, size_t element_size, scl_cmp_func_t cmp)
 {
-    if (!sl || !cmp) return SCL_ERR_NULL_PTR;
-    if (element_size == 0) return SCL_ERR_INVALID_ARG;
+    if (scl_unlikely(!sl || !cmp)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(element_size == 0)) return SCL_ERR_INVALID_ARG;
 
     sl->head = scl_alloc(alloc, sizeof(scl_skiplist_node_t), alignof(max_align_t));
-    if (!sl->head) return SCL_ERR_OUT_OF_MEMORY;
+    if (scl_unlikely(!sl->head)) return SCL_ERR_OUT_OF_MEMORY;
 
     sl->head->data = NULL;
     sl->head->forward = scl_calloc(alloc, SCL_SKIPLIST_MAX_LEVEL, sizeof(scl_skiplist_node_t *), alignof(max_align_t));
-    if (!sl->head->forward) {
+    if (scl_unlikely(!sl->head->forward)) {
         scl_free(alloc, sl->head);
         return SCL_ERR_OUT_OF_MEMORY;
     }
@@ -39,9 +39,9 @@ scl_error_t scl_skiplist_init(scl_allocator_t *alloc, scl_skiplist_t *sl, size_t
 
 void scl_skiplist_destroy(scl_allocator_t *alloc, scl_skiplist_t *sl)
 {
-    if (!sl) return;
+    if (scl_unlikely(!sl)) return;
     scl_skiplist_node_t *cur = sl->head;
-    while (cur) {
+    while (scl_likely(cur)) {
         scl_skiplist_node_t *next = cur->forward[0];
         scl_free(alloc, cur->data);
         scl_free(alloc, cur->forward);
@@ -52,9 +52,9 @@ void scl_skiplist_destroy(scl_allocator_t *alloc, scl_skiplist_t *sl)
     sl->count = 0;
 }
 
-scl_error_t scl_skiplist_insert(scl_allocator_t *alloc, scl_skiplist_t *sl, const void *element)
+scl_error_t scl_skiplist_insert(scl_allocator_t *alloc, scl_skiplist_t *sl, const void  *SCL_RESTRICT element)
 {
-    if (!sl || !element) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!sl || !element)) return SCL_ERR_NULL_PTR;
 
     scl_skiplist_node_t *update[SCL_SKIPLIST_MAX_LEVEL];
     scl_skiplist_node_t *cur = sl->head;
@@ -79,7 +79,7 @@ scl_error_t scl_skiplist_insert(scl_allocator_t *alloc, scl_skiplist_t *sl, cons
     }
 
     scl_skiplist_node_t *node = scl_alloc(alloc, sizeof(scl_skiplist_node_t), alignof(max_align_t));
-    if (!node) return SCL_ERR_OUT_OF_MEMORY;
+    if (scl_unlikely(!node)) return SCL_ERR_OUT_OF_MEMORY;
     node->data = scl_alloc(alloc, sl->element_size, alignof(max_align_t));
     if (!node->data) { scl_free(alloc, node); return SCL_ERR_OUT_OF_MEMORY; }
     scl_memcpy(node->data, element, sl->element_size);
@@ -95,9 +95,9 @@ scl_error_t scl_skiplist_insert(scl_allocator_t *alloc, scl_skiplist_t *sl, cons
     return SCL_OK;
 }
 
-scl_error_t scl_skiplist_remove(scl_allocator_t *alloc, scl_skiplist_t *sl, const void *key)
+scl_error_t scl_skiplist_remove(scl_allocator_t *alloc, scl_skiplist_t *sl, const void  *SCL_RESTRICT key)
 {
-    if (!sl || !key) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!sl || !key)) return SCL_ERR_NULL_PTR;
 
     scl_skiplist_node_t *update[SCL_SKIPLIST_MAX_LEVEL];
     scl_skiplist_node_t *cur = sl->head;
@@ -129,7 +129,7 @@ scl_error_t scl_skiplist_remove(scl_allocator_t *alloc, scl_skiplist_t *sl, cons
 
 bool scl_skiplist_contains(const scl_skiplist_t *sl, const void *key)
 {
-    if (!sl || !key) return false;
+    if (scl_unlikely(!sl || !key)) return false;
     scl_skiplist_node_t *cur = sl->head;
     for (int i = (int)sl->level - 1; i >= 0; i--) {
         while (cur->forward[i] && sl->cmp(cur->forward[i]->data, key) < 0)
@@ -139,16 +139,16 @@ bool scl_skiplist_contains(const scl_skiplist_t *sl, const void *key)
     return cur && sl->cmp(cur->data, key) == 0;
 }
 
-scl_error_t scl_skiplist_find(const scl_skiplist_t *sl, const void *key, void *out)
+scl_error_t scl_skiplist_find(const scl_skiplist_t *sl, const void *key, void  *SCL_RESTRICT out)
 {
-    if (!sl || !key || !out) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!sl || !key || !out)) return SCL_ERR_NULL_PTR;
     scl_skiplist_node_t *cur = sl->head;
     for (int i = (int)sl->level - 1; i >= 0; i--) {
         while (cur->forward[i] && sl->cmp(cur->forward[i]->data, key) < 0)
             cur = cur->forward[i];
     }
     cur = cur->forward[0];
-    if (!cur || sl->cmp(cur->data, key) != 0) return SCL_ERR_NOT_FOUND;
+    if (scl_unlikely(!cur || sl->cmp(cur->data, key) != 0)) return SCL_ERR_NOT_FOUND;
     scl_memcpy(out, cur->data, sl->element_size);
     return SCL_OK;
 }

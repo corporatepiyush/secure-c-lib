@@ -12,11 +12,11 @@ typedef struct {
     uint8_t bytes[16];
 } scl_rand_uuid_t;
 
-scl_error_t scl_rand_uuid_generate(scl_rand_uuid_t *uuid) SCL_WARN_UNUSED;
-scl_error_t scl_rand_uuid_to_string(const scl_rand_uuid_t *uuid, char out[37]) SCL_WARN_UNUSED;
-scl_error_t scl_rand_uuid_from_string(const char str[36], scl_rand_uuid_t *uuid) SCL_WARN_UNUSED;
-int scl_rand_uuid_compare(const scl_rand_uuid_t *a, const scl_rand_uuid_t *b);
-bool scl_rand_uuid_is_nil(const scl_rand_uuid_t *uuid);
+scl_error_t scl_rand_uuid_generate(scl_rand_uuid_t * uuid) SCL_WARN_UNUSED;
+scl_error_t scl_rand_uuid_to_string(const scl_rand_uuid_t * uuid, char * out) SCL_WARN_UNUSED;
+scl_error_t scl_rand_uuid_from_string(const char * str, scl_rand_uuid_t * uuid) SCL_WARN_UNUSED;
+SCL_PURE int scl_rand_uuid_compare(const scl_rand_uuid_t *a, const scl_rand_uuid_t *b);
+SCL_PURE bool scl_rand_uuid_is_nil(const scl_rand_uuid_t *uuid);
 
 #ifdef __GNUC__
 #pragma GCC diagnostic pop

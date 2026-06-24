@@ -15,11 +15,11 @@ static bool node_has_children(const scl_search_trie_node_t *node)
     return false;
 }
 
-scl_error_t scl_search_trie_init(scl_allocator_t *alloc, scl_search_trie_t **trie)
+scl_error_t scl_search_trie_init(scl_allocator_t * alloc, scl_search_trie_t **SCL_RESTRICT trie)
 {
-    if (__builtin_expect(trie == NULL, 0)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(trie == NULL)) return SCL_ERR_NULL_PTR;
     scl_search_trie_t *t = (scl_search_trie_t *)scl_alloc(alloc, sizeof(scl_search_trie_t), alignof(max_align_t));
-    if (__builtin_expect(t == NULL, 0)) return SCL_ERR_OUT_OF_MEMORY;
+    if (scl_unlikely(t == NULL)) return SCL_ERR_OUT_OF_MEMORY;
     t->root = node_create(alloc);
     if (!t->root) { scl_free(alloc, t); return SCL_ERR_OUT_OF_MEMORY; }
     t->alloc = alloc;
@@ -27,10 +27,10 @@ scl_error_t scl_search_trie_init(scl_allocator_t *alloc, scl_search_trie_t **tri
     return SCL_OK;
 }
 
-scl_error_t scl_search_trie_insert(scl_search_trie_t *trie, const char *word)
+scl_error_t scl_search_trie_insert(scl_search_trie_t * trie, const char * word)
 {
-    if (__builtin_expect(trie == NULL, 0)) return SCL_ERR_NULL_PTR;
-    if (__builtin_expect(word == NULL, 0)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(trie == NULL)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(word == NULL)) return SCL_ERR_NULL_PTR;
     scl_search_trie_node_t *node = trie->root;
     while (*word) {
         unsigned char c = (unsigned char)*word;
@@ -76,10 +76,10 @@ typedef struct {
     const char *word;
 } trie_del_frame_t;
 
-scl_error_t scl_search_trie_delete(scl_search_trie_t *trie, const char *word)
+scl_error_t scl_search_trie_delete(scl_search_trie_t * trie, const char * word)
 {
-    if (__builtin_expect(trie == NULL, 0)) return SCL_ERR_NULL_PTR;
-    if (__builtin_expect(word == NULL, 0)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(trie == NULL)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(word == NULL)) return SCL_ERR_NULL_PTR;
     if (!trie->root) return SCL_ERR_NOT_FOUND;
     if (!scl_search_trie_search(trie, word)) return SCL_ERR_NOT_FOUND;
 

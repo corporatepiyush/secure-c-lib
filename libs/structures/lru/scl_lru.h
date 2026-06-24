@@ -30,13 +30,13 @@ typedef struct {
 
 scl_error_t scl_lru_init(scl_allocator_t *alloc, scl_lru_t *cache, size_t key_size, size_t value_size,
                          size_t capacity) SCL_WARN_UNUSED;
-void        scl_lru_destroy(scl_allocator_t *alloc, scl_lru_t *cache);
-scl_error_t scl_lru_put(scl_allocator_t *alloc, scl_lru_t *cache, const void *key, const void *value) SCL_WARN_UNUSED;
-scl_error_t scl_lru_get(scl_lru_t *cache, const void *key, void *out_value) SCL_WARN_UNUSED;
-bool        scl_lru_contains(const scl_lru_t *cache, const void *key);
-scl_error_t scl_lru_remove(scl_allocator_t *alloc, scl_lru_t *cache, const void *key) SCL_WARN_UNUSED;
-void        scl_lru_clear(scl_allocator_t *alloc, scl_lru_t *cache);
-size_t      scl_lru_count(const scl_lru_t *cache);
+void        scl_lru_destroy(scl_allocator_t *SCL_RESTRICT alloc, scl_lru_t *SCL_RESTRICT cache);
+scl_error_t scl_lru_put(scl_allocator_t *SCL_RESTRICT alloc, scl_lru_t *SCL_RESTRICT cache, const void *SCL_RESTRICT key, const void *SCL_RESTRICT value) SCL_WARN_UNUSED;
+scl_error_t scl_lru_get(scl_lru_t *SCL_RESTRICT cache, const void *SCL_RESTRICT key, void *SCL_RESTRICT out_value) SCL_WARN_UNUSED;
+SCL_PURE bool        scl_lru_contains(const scl_lru_t *SCL_RESTRICT cache, const void *SCL_RESTRICT key);
+scl_error_t scl_lru_remove(scl_allocator_t *SCL_RESTRICT alloc, scl_lru_t *SCL_RESTRICT cache, const void *SCL_RESTRICT key) SCL_WARN_UNUSED;
+void        scl_lru_clear(scl_allocator_t *SCL_RESTRICT alloc, scl_lru_t *SCL_RESTRICT cache);
+SCL_PURE size_t      scl_lru_count(const scl_lru_t *SCL_RESTRICT cache);
 
 #ifdef __GNUC__
 #pragma GCC diagnostic pop

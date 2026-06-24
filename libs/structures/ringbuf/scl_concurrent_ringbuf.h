@@ -22,12 +22,12 @@ typedef struct {
 
 scl_error_t scl_cringbuf_init(scl_allocator_t *alloc, scl_concurrent_ringbuf_t *rb, size_t element_size,
                              size_t capacity) SCL_WARN_UNUSED;
-void        scl_cringbuf_destroy(scl_allocator_t *alloc, scl_concurrent_ringbuf_t *rb);
-scl_error_t scl_cringbuf_push(scl_concurrent_ringbuf_t *rb, const void *element) SCL_WARN_UNUSED;
-scl_error_t scl_cringbuf_pop(scl_concurrent_ringbuf_t *rb, void *out) SCL_WARN_UNUSED;
-scl_error_t scl_cringbuf_peek(const scl_concurrent_ringbuf_t *rb, size_t index, void *out) SCL_WARN_UNUSED;
-size_t      scl_cringbuf_count(const scl_concurrent_ringbuf_t *rb);
-bool        scl_cringbuf_empty(const scl_concurrent_ringbuf_t *rb);
+void        scl_cringbuf_destroy(scl_allocator_t *SCL_RESTRICT alloc, scl_concurrent_ringbuf_t *SCL_RESTRICT rb);
+scl_error_t scl_cringbuf_push(scl_concurrent_ringbuf_t *SCL_RESTRICT rb, const void *SCL_RESTRICT element) SCL_WARN_UNUSED;
+scl_error_t scl_cringbuf_pop(scl_concurrent_ringbuf_t *SCL_RESTRICT rb, void *SCL_RESTRICT out) SCL_WARN_UNUSED;
+scl_error_t scl_cringbuf_peek(const scl_concurrent_ringbuf_t *SCL_RESTRICT rb, size_t index, void *SCL_RESTRICT out) SCL_WARN_UNUSED;
+SCL_PURE size_t      scl_cringbuf_count(const scl_concurrent_ringbuf_t *SCL_RESTRICT rb);
+SCL_PURE bool        scl_cringbuf_empty(const scl_concurrent_ringbuf_t *SCL_RESTRICT rb);
 
 #ifdef __GNUC__
 #pragma GCC diagnostic pop

@@ -8,7 +8,7 @@
 static scl_error_t sift_up(scl_allocator_t *alloc, unsigned char *data, size_t element_size, scl_cmp_func_t cmp, size_t idx)
 {
     unsigned char *tmp = scl_alloc(alloc, element_size, alignof(max_align_t));
-    if (!tmp) return SCL_ERR_OUT_OF_MEMORY;
+    if (scl_unlikely(!tmp)) return SCL_ERR_OUT_OF_MEMORY;
     scl_memcpy(tmp, data + idx * element_size, element_size);
     while (idx > 0) {
         size_t parent = (idx - 1) / 2;
@@ -25,7 +25,7 @@ static scl_error_t sift_down(scl_allocator_t *alloc, unsigned char *data, size_t
                       size_t count, size_t idx)
 {
     unsigned char *tmp = scl_alloc(alloc, element_size, alignof(max_align_t));
-    if (!tmp) return SCL_ERR_OUT_OF_MEMORY;
+    if (scl_unlikely(!tmp)) return SCL_ERR_OUT_OF_MEMORY;
     scl_memcpy(tmp, data + idx * element_size, element_size);
     while (1) {
         size_t smallest = idx;
@@ -47,13 +47,13 @@ static scl_error_t sift_down(scl_allocator_t *alloc, unsigned char *data, size_t
 scl_error_t scl_cheap_init(scl_allocator_t *alloc, scl_concurrent_heap_t *heap, size_t element_size,
                           size_t capacity, scl_cmp_func_t cmp)
 {
-    if (!heap) return SCL_ERR_NULL_PTR;
-    if (element_size == 0 || capacity == 0 || !cmp) return SCL_ERR_INVALID_ARG;
+    if (scl_unlikely(!heap)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(element_size == 0 || capacity == 0 || !cmp)) return SCL_ERR_INVALID_ARG;
     size_t bytes;
     if (scl_mul_overflow(capacity, element_size, &bytes))
         return SCL_ERR_SIZE_OVERFLOW;
     heap->data = scl_alloc(alloc, bytes, alignof(max_align_t));
-    if (!heap->data) return SCL_ERR_OUT_OF_MEMORY;
+    if (scl_unlikely(!heap->data)) return SCL_ERR_OUT_OF_MEMORY;
     heap->element_size = element_size;
     heap->capacity = capacity;
     atomic_init(&heap->count, 0);
@@ -64,16 +64,16 @@ scl_error_t scl_cheap_init(scl_allocator_t *alloc, scl_concurrent_heap_t *heap, 
 
 void scl_cheap_destroy(scl_allocator_t *alloc, scl_concurrent_heap_t *heap)
 {
-    if (!heap) return;
+    if (scl_unlikely(!heap)) return;
     scl_free(alloc, heap->data);
     heap->data = NULL;
     heap->capacity = 0;
     atomic_store_explicit(&heap->count, 0, memory_order_relaxed);
 }
 
-scl_error_t scl_cheap_push(scl_allocator_t *alloc, scl_concurrent_heap_t *heap, const void *element)
+scl_error_t scl_cheap_push(scl_allocator_t *alloc, scl_concurrent_heap_t *heap, const void  *SCL_RESTRICT element)
 {
-    if (!heap || !element) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!heap || !element)) return SCL_ERR_NULL_PTR;
     scl_spinlock_lock(&heap->lock);
     size_t cnt = atomic_load_explicit(&heap->count, memory_order_relaxed);
     if (cnt == heap->capacity) {
@@ -88,9 +88,9 @@ scl_error_t scl_cheap_push(scl_allocator_t *alloc, scl_concurrent_heap_t *heap, 
     return SCL_OK;
 }
 
-scl_error_t scl_cheap_pop(scl_allocator_t *alloc, scl_concurrent_heap_t *heap, void *out)
+scl_error_t scl_cheap_pop(scl_allocator_t *alloc, scl_concurrent_heap_t *heap, void  *SCL_RESTRICT out)
 {
-    if (!heap || !out) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!heap || !out)) return SCL_ERR_NULL_PTR;
     scl_spinlock_lock(&heap->lock);
     size_t cnt = atomic_load_explicit(&heap->count, memory_order_relaxed);
     if (cnt == 0) {
@@ -111,7 +111,7 @@ scl_error_t scl_cheap_pop(scl_allocator_t *alloc, scl_concurrent_heap_t *heap, v
 
 scl_error_t scl_cheap_peek(scl_concurrent_heap_t *heap, void *out)
 {
-    if (!heap || !out) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!heap || !out)) return SCL_ERR_NULL_PTR;
     scl_spinlock_lock(&heap->lock);
     size_t cnt = atomic_load_explicit(&heap->count, memory_order_relaxed);
     if (cnt == 0) {

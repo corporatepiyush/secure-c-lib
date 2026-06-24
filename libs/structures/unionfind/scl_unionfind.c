@@ -7,12 +7,12 @@
 
 scl_error_t scl_unionfind_init(scl_allocator_t *alloc, scl_unionfind_t *uf, size_t count)
 {
-    if (!uf) return SCL_ERR_NULL_PTR;
-    if (count == 0) return SCL_ERR_INVALID_ARG;
+    if (scl_unlikely(!uf)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(count == 0)) return SCL_ERR_INVALID_ARG;
 
     uf->parent = scl_alloc(alloc, count * sizeof(size_t), alignof(max_align_t));
     uf->rank = scl_calloc(alloc, count, sizeof(size_t), alignof(max_align_t));
-    if (!uf->parent || !uf->rank) {
+    if (scl_unlikely(!uf->parent || !uf->rank)) {
         scl_free(alloc, uf->parent);
         scl_free(alloc, uf->rank);
         return SCL_ERR_OUT_OF_MEMORY;
@@ -51,8 +51,8 @@ size_t scl_unionfind_find(scl_unionfind_t *uf, size_t x)
 
 scl_error_t scl_unionfind_union(scl_unionfind_t *uf, size_t x, size_t y)
 {
-    if (!uf) return SCL_ERR_NULL_PTR;
-    if (x >= uf->count || y >= uf->count) return SCL_ERR_INVALID_INDEX;
+    if (scl_unlikely(!uf)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(x >= uf->count || y >= uf->count)) return SCL_ERR_INVALID_INDEX;
 
     size_t rx = scl_unionfind_find(uf, x);
     size_t ry = scl_unionfind_find(uf, y);

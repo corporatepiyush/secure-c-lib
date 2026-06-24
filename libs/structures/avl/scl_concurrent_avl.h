@@ -25,13 +25,13 @@ typedef struct {
 
 scl_error_t scl_cavl_init(scl_allocator_t *alloc, scl_concurrent_avl_t *tree, size_t element_size,
                          scl_cmp_func_t cmp) SCL_WARN_UNUSED;
-void        scl_cavl_destroy(scl_allocator_t *alloc, scl_concurrent_avl_t *tree);
-scl_error_t scl_cavl_insert(scl_allocator_t *alloc, scl_concurrent_avl_t *tree, const void *element) SCL_WARN_UNUSED;
-scl_error_t scl_cavl_remove(scl_allocator_t *alloc, scl_concurrent_avl_t *tree, const void *key) SCL_WARN_UNUSED;
-bool        scl_cavl_contains(scl_concurrent_avl_t *tree, const void *key);
-scl_error_t scl_cavl_find(scl_concurrent_avl_t *tree, const void *key, void *out) SCL_WARN_UNUSED;
-size_t      scl_cavl_count(const scl_concurrent_avl_t *tree);
-bool        scl_cavl_empty(const scl_concurrent_avl_t *tree);
+void        scl_cavl_destroy(scl_allocator_t *SCL_RESTRICT alloc, scl_concurrent_avl_t *SCL_RESTRICT tree);
+scl_error_t scl_cavl_insert(scl_allocator_t *SCL_RESTRICT alloc, scl_concurrent_avl_t *SCL_RESTRICT tree, const void *SCL_RESTRICT element) SCL_WARN_UNUSED;
+scl_error_t scl_cavl_remove(scl_allocator_t *SCL_RESTRICT alloc, scl_concurrent_avl_t *SCL_RESTRICT tree, const void *SCL_RESTRICT key) SCL_WARN_UNUSED;
+SCL_PURE bool        scl_cavl_contains(scl_concurrent_avl_t *SCL_RESTRICT tree, const void *SCL_RESTRICT key);
+scl_error_t scl_cavl_find(scl_concurrent_avl_t *SCL_RESTRICT tree, const void *SCL_RESTRICT key, void *SCL_RESTRICT out) SCL_WARN_UNUSED;
+SCL_PURE size_t      scl_cavl_count(const scl_concurrent_avl_t *SCL_RESTRICT tree);
+SCL_PURE bool        scl_cavl_empty(const scl_concurrent_avl_t *SCL_RESTRICT tree);
 
 #ifdef __GNUC__
 #pragma GCC diagnostic pop

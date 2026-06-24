@@ -4,17 +4,17 @@
 
 #include "scl_unbounded_binary.h"
 
-scl_error_t scl_search_unbounded_binary_search(scl_cmp_func_t cmp, const void *restrict key, size_t *restrict out_index, void *(*getter)(size_t index, void *ctx), void *ctx, size_t max_count)
+scl_error_t scl_search_unbounded_binary_search(scl_cmp_func_t cmp, const void * key, size_t * out_index, void *(*getter)(size_t index, void *ctx), void *ctx, size_t max_count)
 {
-    if (__builtin_expect(cmp == NULL, 0)) return SCL_ERR_NULL_PTR;
-    if (__builtin_expect(key == NULL, 0)) return SCL_ERR_NULL_PTR;
-    if (__builtin_expect(out_index == NULL, 0)) return SCL_ERR_NULL_PTR;
-    if (__builtin_expect(getter == NULL, 0)) return SCL_ERR_NULL_PTR;
-    if (__builtin_expect(max_count == 0, 0)) return SCL_ERR_EMPTY;
+    if (scl_unlikely(cmp == NULL)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(key == NULL)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(out_index == NULL)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(getter == NULL)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(max_count == 0)) return SCL_ERR_EMPTY;
 
     size_t lo = 0, hi = 1;
     void *elem = getter(0, ctx);
-    if (__builtin_expect(elem == NULL, 0)) return SCL_ERR_NOT_FOUND;
+    if (scl_unlikely(elem == NULL)) return SCL_ERR_NOT_FOUND;
     if (cmp(elem, key) == 0) {
         *out_index = 0;
         return SCL_OK;

@@ -1,17 +1,17 @@
 #include "scl_kmp.h"
 #include <string.h>
 
-scl_error_t scl_search_kmp(scl_allocator_t *alloc, const char *restrict text, size_t tlen, const char *restrict pat, size_t plen, size_t *restrict pos)
+scl_error_t scl_search_kmp(scl_allocator_t * alloc, const char * text, size_t tlen, const char * pat, size_t plen, size_t * pos)
 {
-    if (__builtin_expect(text == NULL, 0)) return SCL_ERR_NULL_PTR;
-    if (__builtin_expect(pat == NULL, 0)) return SCL_ERR_NULL_PTR;
-    if (__builtin_expect(pos == NULL, 0)) return SCL_ERR_NULL_PTR;
-    if (__builtin_expect(tlen == 0, 0)) return SCL_ERR_EMPTY;
-    if (__builtin_expect(plen == 0, 0)) return SCL_ERR_INVALID_ARG;
-    if (__builtin_expect(plen > tlen, 0)) return SCL_ERR_NOT_FOUND;
+    if (scl_unlikely(text == NULL)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(pat == NULL)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(pos == NULL)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(tlen == 0)) return SCL_ERR_EMPTY;
+    if (scl_unlikely(plen == 0)) return SCL_ERR_INVALID_ARG;
+    if (scl_unlikely(plen > tlen)) return SCL_ERR_NOT_FOUND;
 
     size_t *lps = (size_t *)scl_calloc(alloc, plen, sizeof(size_t), alignof(max_align_t));
-    if (__builtin_expect(lps == NULL, 0)) return SCL_ERR_OUT_OF_MEMORY;
+    if (scl_unlikely(lps == NULL)) return SCL_ERR_OUT_OF_MEMORY;
 
     size_t len = 0, i = 1;
     while (i < plen) {

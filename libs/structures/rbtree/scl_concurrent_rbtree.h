@@ -28,13 +28,13 @@ typedef struct {
 
 scl_error_t scl_crbtree_init(scl_allocator_t *alloc, scl_concurrent_rbtree_t *tree, size_t element_size,
                             scl_cmp_func_t cmp) SCL_WARN_UNUSED;
-void        scl_crbtree_destroy(scl_allocator_t *alloc, scl_concurrent_rbtree_t *tree);
-scl_error_t scl_crbtree_insert(scl_allocator_t *alloc, scl_concurrent_rbtree_t *tree, const void *element) SCL_WARN_UNUSED;
-scl_error_t scl_crbtree_remove(scl_allocator_t *alloc, scl_concurrent_rbtree_t *tree, const void *key) SCL_WARN_UNUSED;
-bool        scl_crbtree_contains(scl_concurrent_rbtree_t *tree, const void *key);
-scl_error_t scl_crbtree_find(scl_concurrent_rbtree_t *tree, const void *key, void *out) SCL_WARN_UNUSED;
-size_t      scl_crbtree_count(const scl_concurrent_rbtree_t *tree);
-bool        scl_crbtree_empty(const scl_concurrent_rbtree_t *tree);
+void        scl_crbtree_destroy(scl_allocator_t *SCL_RESTRICT alloc, scl_concurrent_rbtree_t *SCL_RESTRICT tree);
+scl_error_t scl_crbtree_insert(scl_allocator_t *SCL_RESTRICT alloc, scl_concurrent_rbtree_t *SCL_RESTRICT tree, const void *SCL_RESTRICT element) SCL_WARN_UNUSED;
+scl_error_t scl_crbtree_remove(scl_allocator_t *SCL_RESTRICT alloc, scl_concurrent_rbtree_t *SCL_RESTRICT tree, const void *SCL_RESTRICT key) SCL_WARN_UNUSED;
+SCL_PURE bool        scl_crbtree_contains(scl_concurrent_rbtree_t *SCL_RESTRICT tree, const void *SCL_RESTRICT key);
+scl_error_t scl_crbtree_find(scl_concurrent_rbtree_t *SCL_RESTRICT tree, const void *SCL_RESTRICT key, void *SCL_RESTRICT out) SCL_WARN_UNUSED;
+SCL_PURE size_t      scl_crbtree_count(const scl_concurrent_rbtree_t *SCL_RESTRICT tree);
+SCL_PURE bool        scl_crbtree_empty(const scl_concurrent_rbtree_t *SCL_RESTRICT tree);
 
 #ifdef __GNUC__
 #pragma GCC diagnostic pop

@@ -8,7 +8,7 @@
 
 #include "scl_common.h"
 
-scl_error_t scl_search_exponential_string(const char **restrict strs, size_t count, const char *restrict key, size_t *restrict idx) SCL_WARN_UNUSED;
+scl_error_t scl_search_exponential_string(const char **SCL_RESTRICT strs, size_t count, const char * key, size_t * idx) SCL_WARN_UNUSED;
 
 #ifdef __GNUC__
 #pragma GCC diagnostic pop

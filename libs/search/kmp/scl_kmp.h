@@ -8,7 +8,7 @@
 
 #include "scl_common.h"
 
-scl_error_t scl_search_kmp(scl_allocator_t *alloc, const char *restrict text, size_t tlen, const char *restrict pat, size_t plen, size_t *restrict pos) SCL_WARN_UNUSED;
+scl_error_t scl_search_kmp(scl_allocator_t * alloc, const char * text, size_t tlen, const char * pat, size_t plen, size_t * pos) SCL_WARN_UNUSED;
 
 #ifdef __GNUC__
 #pragma GCC diagnostic pop

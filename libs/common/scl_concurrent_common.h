@@ -16,17 +16,17 @@ static inline void scl_spinlock_init(scl_spinlock_t *lock) {
 }
 
 static inline void scl_spinlock_lock(scl_spinlock_t *lock) {
-    if (!atomic_flag_test_and_set_explicit(&lock->flag, memory_order_acquire))
+    if (scl_likely(!atomic_flag_test_and_set_explicit(&lock->flag, memory_order_acquire)))
         return;
     for (int backoff = 1; ; backoff++) {
         int pauses = backoff < 10 ? (1 << backoff) : 1024;
         for (int i = 0; i < pauses; i++)
             scl_cpu_pause();
-        if (!atomic_flag_test_and_set_explicit(&lock->flag, memory_order_acquire))
+        if (scl_likely(!atomic_flag_test_and_set_explicit(&lock->flag, memory_order_acquire)))
             return;
-        if (backoff > 12)
+        if (scl_unlikely(backoff > 12))
             (void)nanosleep(&(struct timespec){0, 1000000}, NULL);
-        else if (backoff > 8)
+        else if (scl_unlikely(backoff > 8))
             (void)sched_yield();
     }
 }

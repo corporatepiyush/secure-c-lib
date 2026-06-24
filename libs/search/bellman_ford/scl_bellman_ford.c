@@ -6,14 +6,14 @@
 #include <stdlib.h>
 #include <limits.h>
 
-scl_error_t scl_search_bellman_ford(const scl_graph_t *graph, int start, int64_t *restrict dist, int *restrict prev)
+scl_error_t scl_search_bellman_ford(const scl_graph_t * graph, int start, int64_t * dist, int * prev)
 {
-    if (__builtin_expect(graph == NULL, 0)) return SCL_ERR_NULL_PTR;
-    if (__builtin_expect(dist == NULL, 0)) return SCL_ERR_NULL_PTR;
-    if (__builtin_expect(prev == NULL, 0)) return SCL_ERR_NULL_PTR;
-    if (__builtin_expect(!graph->adj, 0)) return SCL_ERR_INVALID_ARG;
-    if (__builtin_expect(start < 0 || (size_t)start >= graph->vertex_count, 0)) return SCL_ERR_INVALID_INDEX;
-    if (__builtin_expect(graph->vertex_count == 0, 0)) return SCL_ERR_EMPTY;
+    if (scl_unlikely(graph == NULL)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(dist == NULL)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(prev == NULL)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!graph->adj)) return SCL_ERR_INVALID_ARG;
+    if (scl_unlikely(start < 0 || (size_t)start >= graph->vertex_count)) return SCL_ERR_INVALID_INDEX;
+    if (scl_unlikely(graph->vertex_count == 0)) return SCL_ERR_EMPTY;
 
     size_t n = graph->vertex_count;
     for (size_t i = 0; i < n; i++) {

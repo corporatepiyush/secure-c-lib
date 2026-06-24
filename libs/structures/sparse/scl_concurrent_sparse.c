@@ -3,17 +3,17 @@
 
 scl_error_t scl_csparse_init(scl_allocator_t *alloc, scl_concurrent_sparse_t *st,
                              size_t n, size_t element_size, const void *data,
-                             void (*combine)(void *out, const void *a, const void *b))
+                             void (*combine)(void *out, const void *a, const void  *SCL_RESTRICT b))
 {
-    if (!st || !combine || !data) return SCL_ERR_NULL_PTR;
-    if (n == 0 || element_size == 0) return SCL_ERR_INVALID_ARG;
+    if (scl_unlikely(!st || !combine || !data)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(n == 0 || element_size == 0)) return SCL_ERR_INVALID_ARG;
 
     size_t levels_count = 0;
     while ((1UL << levels_count) <= n) levels_count++;
 
     st->levels = scl_calloc(alloc, levels_count, sizeof(unsigned char *), alignof(max_align_t));
     st->scratch = scl_alloc(alloc, element_size, alignof(max_align_t));
-    if (!st->levels || !st->scratch) {
+    if (scl_unlikely(!st->levels || !st->scratch)) {
         scl_free(alloc, st->levels);
         scl_free(alloc, st->scratch);
         return SCL_ERR_OUT_OF_MEMORY;
@@ -25,7 +25,7 @@ scl_error_t scl_csparse_init(scl_allocator_t *alloc, scl_concurrent_sparse_t *st
         if (!st->levels[k]) { ok = 0; break; }
     }
 
-    if (!ok) {
+    if (scl_unlikely(!ok)) {
         for (size_t k = 0; k < levels_count; k++)
             scl_free(alloc, st->levels[k]);
         scl_free(alloc, st->levels);
@@ -56,7 +56,7 @@ scl_error_t scl_csparse_init(scl_allocator_t *alloc, scl_concurrent_sparse_t *st
 
 void scl_csparse_destroy(scl_allocator_t *alloc, scl_concurrent_sparse_t *st)
 {
-    if (!st) return;
+    if (scl_unlikely(!st)) return;
     for (size_t k = 0; k < st->levels_count; k++)
         scl_free(alloc, st->levels[k]);
     scl_free(alloc, st->levels);
@@ -67,10 +67,10 @@ void scl_csparse_destroy(scl_allocator_t *alloc, scl_concurrent_sparse_t *st)
     st->levels_count = 0;
 }
 
-scl_error_t scl_csparse_query(const scl_concurrent_sparse_t *st, size_t l, size_t r, void *out)
+scl_error_t scl_csparse_query(const scl_concurrent_sparse_t *st, size_t l, size_t r, void  *SCL_RESTRICT out)
 {
-    if (!st || !out) return SCL_ERR_NULL_PTR;
-    if (l > r || r >= st->n) return SCL_ERR_INVALID_ARG;
+    if (scl_unlikely(!st || !out)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(l > r || r >= st->n)) return SCL_ERR_INVALID_ARG;
 
     size_t len = r - l + 1;
     size_t k = 0;

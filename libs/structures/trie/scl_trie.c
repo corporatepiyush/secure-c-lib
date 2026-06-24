@@ -7,10 +7,10 @@
 
 scl_error_t scl_trie_init(scl_allocator_t *alloc, scl_trie_t *trie, size_t value_size)
 {
-    if (!trie) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!trie)) return SCL_ERR_NULL_PTR;
 
     trie->root = scl_calloc(alloc, 1, sizeof(scl_trie_node_t), alignof(max_align_t));
-    if (!trie->root) return SCL_ERR_OUT_OF_MEMORY;
+    if (scl_unlikely(!trie->root)) return SCL_ERR_OUT_OF_MEMORY;
 
     trie->value_size = value_size;
     trie->count = 0;
@@ -19,7 +19,7 @@ scl_error_t scl_trie_init(scl_allocator_t *alloc, scl_trie_t *trie, size_t value
 
 void scl_trie_destroy(scl_allocator_t *alloc, scl_trie_t *trie)
 {
-    if (!trie || !trie->root) return;
+    if (scl_unlikely(!trie || !trie->root)) return;
 
     scl_trie_node_t *stack1[4096];
     int sp1 = 0;
@@ -50,14 +50,14 @@ void scl_trie_destroy(scl_allocator_t *alloc, scl_trie_t *trie)
 scl_error_t scl_trie_insert(scl_allocator_t *alloc, scl_trie_t *trie, const unsigned char *key, size_t key_len,
                             const void *value)
 {
-    if (!trie || !key || !value) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!trie || !key || !value)) return SCL_ERR_NULL_PTR;
 
     scl_trie_node_t *node = trie->root;
     for (size_t i = 0; i < key_len; i++) {
         unsigned char c = key[i];
-        if (!node->children[c]) {
+        if (scl_unlikely(!node->children[c])) {
             node->children[c] = scl_calloc(alloc, 1, sizeof(scl_trie_node_t), alignof(max_align_t));
-            if (!node->children[c]) return SCL_ERR_OUT_OF_MEMORY;
+            if (scl_unlikely(!node->children[c])) return SCL_ERR_OUT_OF_MEMORY;
         }
         node = node->children[c];
     }
@@ -67,9 +67,9 @@ scl_error_t scl_trie_insert(scl_allocator_t *alloc, scl_trie_t *trie, const unsi
         trie->count++;
     }
 
-    if (!node->value) {
+    if (scl_unlikely(!node->value)) {
         node->value = scl_alloc(alloc, trie->value_size, alignof(max_align_t));
-        if (!node->value) return SCL_ERR_OUT_OF_MEMORY;
+        if (scl_unlikely(!node->value)) return SCL_ERR_OUT_OF_MEMORY;
     }
     scl_memcpy(node->value, value, trie->value_size);
     return SCL_OK;
@@ -78,27 +78,27 @@ scl_error_t scl_trie_insert(scl_allocator_t *alloc, scl_trie_t *trie, const unsi
 scl_error_t scl_trie_get(const scl_trie_t *trie, const unsigned char *key, size_t key_len,
                          void *out_value)
 {
-    if (!trie || !key || !out_value) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!trie || !key || !out_value)) return SCL_ERR_NULL_PTR;
 
     scl_trie_node_t *node = trie->root;
     for (size_t i = 0; i < key_len; i++) {
         unsigned char c = key[i];
-        if (!node->children[c]) return SCL_ERR_NOT_FOUND;
+        if (scl_unlikely(!node->children[c])) return SCL_ERR_NOT_FOUND;
         node = node->children[c];
     }
 
-    if (!node->terminal || !node->value) return SCL_ERR_NOT_FOUND;
+    if (scl_unlikely(!node->terminal || !node->value)) return SCL_ERR_NOT_FOUND;
     scl_memcpy(out_value, node->value, trie->value_size);
     return SCL_OK;
 }
 
 bool scl_trie_contains(const scl_trie_t *trie, const unsigned char *key, size_t key_len)
 {
-    if (!trie || !key) return false;
+    if (scl_unlikely(!trie || !key)) return false;
     scl_trie_node_t *node = trie->root;
     for (size_t i = 0; i < key_len; i++) {
         unsigned char c = key[i];
-        if (!node->children[c]) return false;
+        if (scl_unlikely(!node->children[c])) return false;
         node = node->children[c];
     }
     return node->terminal;
@@ -111,10 +111,10 @@ static bool scl_trie_has_children(const scl_trie_node_t *node)
     return false;
 }
 
-scl_error_t scl_trie_remove(scl_allocator_t *alloc, scl_trie_t *trie, const unsigned char *key, size_t key_len)
+scl_error_t scl_trie_remove(scl_allocator_t *alloc, scl_trie_t *trie, const unsigned char  *SCL_RESTRICT key, size_t key_len)
 {
-    if (!trie || !key) return SCL_ERR_NULL_PTR;
-    if (!scl_trie_contains(trie, key, key_len)) return SCL_ERR_NOT_FOUND;
+    if (scl_unlikely(!trie || !key)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!scl_trie_contains(trie, key, key_len))) return SCL_ERR_NOT_FOUND;
 
     scl_trie_node_t *path[1024];
     int path_len = 0;

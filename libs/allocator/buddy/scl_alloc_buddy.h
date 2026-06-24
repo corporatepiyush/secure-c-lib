@@ -8,7 +8,7 @@
 
 #include "scl_common.h"
 
-scl_allocator_t *scl_alloc_buddy_create(scl_allocator_t *backing, size_t total_size);
+scl_allocator_t *scl_alloc_buddy_create(scl_allocator_t *backing, size_t total_size) SCL_WARN_UNUSED;
 void scl_alloc_buddy_destroy(scl_allocator_t *alloc);
 
 #ifdef __GNUC__

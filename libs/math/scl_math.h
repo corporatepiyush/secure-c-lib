@@ -13,41 +13,41 @@
  */
 
 /* ── Exponential / logarithm ─────────────────────────────────── */
-double scl_exp(double x);
-double scl_log(double x);      /* natural log; returns -∞ if x <= 0 */
-double scl_log2(double x);
-double scl_log10(double x);
-double scl_pow(double base, double exp);
-double scl_sqrt(double x);     /* returns NaN for x < 0 */
-double scl_cbrt(double x);
+SCL_PURE double scl_exp(double x);
+SCL_PURE double scl_log(double x);      /* natural log; returns -∞ if x <= 0 */
+SCL_PURE double scl_log2(double x);
+SCL_PURE double scl_log10(double x);
+SCL_PURE double scl_pow(double base, double exp);
+SCL_PURE double scl_sqrt(double x);     /* returns NaN for x < 0 */
+SCL_PURE double scl_cbrt(double x);
 
 /* ── Rounding ────────────────────────────────────────────────── */
-double scl_floor(double x);
-double scl_ceil(double x);
-double scl_round(double x);
-double scl_trunc(double x);
-double scl_fmod(double x, double y);   /* returns NaN if y == 0 */
+SCL_PURE double scl_floor(double x);
+SCL_PURE double scl_ceil(double x);
+SCL_PURE double scl_round(double x);
+SCL_PURE double scl_trunc(double x);
+SCL_PURE double scl_fmod(double x, double y);   /* returns NaN if y == 0 */
 
 /* ── Trigonometry ────────────────────────────────────────────── */
-double scl_sin(double x);
-double scl_cos(double x);
-double scl_tan(double x);
-double scl_asin(double x);
-double scl_acos(double x);
-double scl_atan(double x);
-double scl_atan2(double y, double x);
+SCL_PURE double scl_sin(double x);
+SCL_PURE double scl_cos(double x);
+SCL_PURE double scl_tan(double x);
+SCL_PURE double scl_asin(double x);
+SCL_PURE double scl_acos(double x);
+SCL_PURE double scl_atan(double x);
+SCL_PURE double scl_atan2(double y, double x);
 
 /* ── Hyperbolic ──────────────────────────────────────────────── */
-double scl_sinh(double x);
-double scl_cosh(double x);
-double scl_tanh(double x);
+SCL_PURE double scl_sinh(double x);
+SCL_PURE double scl_cosh(double x);
+SCL_PURE double scl_tanh(double x);
 
 /* ── Utility ─────────────────────────────────────────────────── */
-double scl_fabs(double x);
-double scl_copysign(double mag, double sgn);
-int    scl_isnan(double x);
-int    scl_isinf(double x);
-int    scl_isfinite(double x);
+SCL_PURE double scl_fabs(double x);
+SCL_PURE double scl_copysign(double mag, double sgn);
+SCL_PURE int    scl_isnan(double x);
+SCL_PURE int    scl_isinf(double x);
+SCL_PURE int    scl_isfinite(double x);
 
 /* ── Integer helpers (no libc dependency) ───────────────────── */
 static inline int64_t  scl_min_i64(int64_t a, int64_t b)  { return a < b ? a : b; }

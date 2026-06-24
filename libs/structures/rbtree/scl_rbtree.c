@@ -5,7 +5,7 @@
 #pragma GCC optimize ("O3", "unroll-loops", "tree-vectorize", "inline")
 #endif
 
-static inline bool scl_rb_is_red(const scl_rbtree_node_t *n)
+static SCL_ALWAYS_INLINE bool scl_rb_is_red(const scl_rbtree_node_t *n)
 {
     return n && n->color == SCL_RB_RED;
 }
@@ -13,8 +13,8 @@ static inline bool scl_rb_is_red(const scl_rbtree_node_t *n)
 scl_error_t scl_rbtree_init(scl_allocator_t *alloc, scl_rbtree_t *tree, size_t element_size, scl_cmp_func_t cmp)
 {
     (void)alloc;
-    if (!tree || !cmp) return SCL_ERR_NULL_PTR;
-    if (element_size == 0) return SCL_ERR_INVALID_ARG;
+    if (scl_unlikely(!tree || !cmp)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(element_size == 0)) return SCL_ERR_INVALID_ARG;
     tree->root = NULL;
     tree->element_size = element_size;
     tree->count = 0;
@@ -24,15 +24,15 @@ scl_error_t scl_rbtree_init(scl_allocator_t *alloc, scl_rbtree_t *tree, size_t e
 
 void scl_rbtree_destroy(scl_allocator_t *alloc, scl_rbtree_t *tree)
 {
-    if (!tree || !tree->root) return;
+    if (scl_unlikely(!tree || !tree->root)) return;
     size_t cap = 64;
     scl_rbtree_node_t **stack = scl_alloc(alloc, cap * sizeof(stack[0]), alignof(max_align_t));
-    if (!stack) return;
+    if (scl_unlikely(!stack)) return;
     int sp = -1;
     scl_rbtree_node_t *cur = tree->root;
     scl_rbtree_node_t *last = NULL;
     while (cur || sp >= 0) {
-        while (cur) {
+        while (scl_likely(cur)) {
             if ((size_t)(sp + 1) >= cap) {
                 size_t new_cap = cap * 2;
                 scl_rbtree_node_t **ns = scl_realloc(alloc, stack, cap * sizeof(stack[0]), new_cap * sizeof(stack[0]), alignof(max_align_t));
@@ -144,17 +144,17 @@ static void scl_rbtree_insert_fixup(scl_rbtree_t *tree, scl_rbtree_node_t *z)
     tree->root->color = SCL_RB_BLACK;
 }
 
-scl_error_t scl_rbtree_insert(scl_allocator_t *alloc, scl_rbtree_t *tree, const void *element)
+scl_error_t scl_rbtree_insert(scl_allocator_t *alloc, scl_rbtree_t *tree, const void  *SCL_RESTRICT element)
 {
-    if (!tree || !element) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!tree || !element)) return SCL_ERR_NULL_PTR;
 
     scl_rbtree_node_t *z = scl_rbtree_create_node(alloc, element, tree->element_size);
-    if (!z) return SCL_ERR_OUT_OF_MEMORY;
+    if (scl_unlikely(!z)) return SCL_ERR_OUT_OF_MEMORY;
 
     scl_rbtree_node_t *y = NULL;
     scl_rbtree_node_t *x = tree->root;
 
-    while (x) {
+    while (scl_likely(x)) {
         y = x;
         int c = tree->cmp(z->data, x->data);
         if (c < 0)
@@ -182,7 +182,7 @@ scl_error_t scl_rbtree_insert(scl_allocator_t *alloc, scl_rbtree_t *tree, const 
     return SCL_OK;
 }
 
-static inline bool scl_rb_is_black_or_null(const scl_rbtree_node_t *n) {
+static SCL_ALWAYS_INLINE bool scl_rb_is_black_or_null(const scl_rbtree_node_t *n) {
     return !n || n->color == SCL_RB_BLACK;
 }
 
@@ -243,18 +243,18 @@ static void scl_rbtree_remove_fixup(scl_rbtree_t *tree,
     if (x) x->color = SCL_RB_BLACK;
 }
 
-scl_error_t scl_rbtree_remove(scl_allocator_t *alloc, scl_rbtree_t *tree, const void *key)
+scl_error_t scl_rbtree_remove(scl_allocator_t *alloc, scl_rbtree_t *tree, const void  *SCL_RESTRICT key)
 {
-    if (!tree || !key) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!tree || !key)) return SCL_ERR_NULL_PTR;
 
     scl_rbtree_node_t *z = tree->root;
-    while (z) {
+    while (scl_likely(z)) {
         int c = tree->cmp(key, z->data);
         if (c < 0) z = z->left;
         else if (c > 0) z = z->right;
         else break;
     }
-    if (!z) return SCL_ERR_NOT_FOUND;
+    if (scl_unlikely(!z)) return SCL_ERR_NOT_FOUND;
 
     scl_rbtree_node_t *x, *y = z, *x_parent = NULL;
     scl_rb_color_t y_original_color = y->color;
@@ -324,9 +324,9 @@ scl_error_t scl_rbtree_remove(scl_allocator_t *alloc, scl_rbtree_t *tree, const 
 
 bool scl_rbtree_contains(const scl_rbtree_t *tree, const void *key)
 {
-    if (!tree || !key) return false;
+    if (scl_unlikely(!tree || !key)) return false;
     scl_rbtree_node_t *cur = tree->root;
-    while (cur) {
+    while (scl_likely(cur)) {
         int c = tree->cmp(key, cur->data);
         if (c < 0) cur = cur->left;
         else if (c > 0) cur = cur->right;
@@ -335,11 +335,11 @@ bool scl_rbtree_contains(const scl_rbtree_t *tree, const void *key)
     return false;
 }
 
-scl_error_t scl_rbtree_find(const scl_rbtree_t *tree, const void *key, void *out)
+scl_error_t scl_rbtree_find(const scl_rbtree_t *tree, const void *key, void  *SCL_RESTRICT out)
 {
-    if (!tree || !key || !out) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!tree || !key || !out)) return SCL_ERR_NULL_PTR;
     scl_rbtree_node_t *cur = tree->root;
-    while (cur) {
+    while (scl_likely(cur)) {
         int c = tree->cmp(key, cur->data);
         if (c < 0) cur = cur->left;
         else if (c > 0) cur = cur->right;
@@ -350,8 +350,8 @@ scl_error_t scl_rbtree_find(const scl_rbtree_t *tree, const void *key, void *out
 
 scl_error_t scl_rbtree_min(const scl_rbtree_t *tree, void *out)
 {
-    if (!tree || !out) return SCL_ERR_NULL_PTR;
-    if (!tree->root) return SCL_ERR_EMPTY;
+    if (scl_unlikely(!tree || !out)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!tree->root)) return SCL_ERR_EMPTY;
     scl_rbtree_node_t *cur = tree->root;
     while (cur->left) cur = cur->left;
     scl_memcpy(out, cur->data, tree->element_size);
@@ -360,8 +360,8 @@ scl_error_t scl_rbtree_min(const scl_rbtree_t *tree, void *out)
 
 scl_error_t scl_rbtree_max(const scl_rbtree_t *tree, void *out)
 {
-    if (!tree || !out) return SCL_ERR_NULL_PTR;
-    if (!tree->root) return SCL_ERR_EMPTY;
+    if (scl_unlikely(!tree || !out)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!tree->root)) return SCL_ERR_EMPTY;
     scl_rbtree_node_t *cur = tree->root;
     while (cur->right) cur = cur->right;
     scl_memcpy(out, cur->data, tree->element_size);
@@ -371,15 +371,15 @@ scl_error_t scl_rbtree_max(const scl_rbtree_t *tree, void *out)
 size_t scl_rbtree_count(const scl_rbtree_t *tree) { return tree ? tree->count : 0; }
 bool scl_rbtree_empty(const scl_rbtree_t *tree) { return tree ? tree->count == 0 : true; }
 
-scl_error_t scl_rbtree_inorder(const scl_rbtree_t *tree, scl_visit_func_t visit, void *ctx)
+scl_error_t scl_rbtree_inorder(const scl_rbtree_t *tree, scl_visit_func_t visit, void  *SCL_RESTRICT ctx)
 {
-    if (!tree || !visit) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!tree || !visit)) return SCL_ERR_NULL_PTR;
     scl_rbtree_node_t *stack[256];
     int sp = -1;
     scl_rbtree_node_t *cur = tree->root;
     while (cur || sp >= 0) {
-        while (cur) {
-            if (sp >= 255) return SCL_ERR_INVALID_STATE;
+        while (scl_likely(cur)) {
+            if (scl_unlikely(sp >= 255)) return SCL_ERR_INVALID_STATE;
             stack[++sp] = cur;
             cur = cur->left;
         }

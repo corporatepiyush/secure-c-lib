@@ -15,14 +15,14 @@ typedef struct {
     atomic_size_t count;
 } scl_concurrent_array_t;
 
-scl_error_t scl_carray_init(scl_allocator_t *alloc, scl_concurrent_array_t *arr, size_t element_size, size_t capacity) SCL_WARN_UNUSED;
-void        scl_carray_destroy(scl_allocator_t *alloc, scl_concurrent_array_t *arr);
-scl_error_t scl_carray_push(scl_allocator_t *alloc, scl_concurrent_array_t *arr, const void *element) SCL_WARN_UNUSED;
-scl_error_t scl_carray_pop(scl_concurrent_array_t *arr, void *out) SCL_WARN_UNUSED;
-scl_error_t scl_carray_get(const scl_concurrent_array_t *arr, size_t index, void *out) SCL_WARN_UNUSED;
-scl_error_t scl_carray_set(scl_concurrent_array_t *arr, size_t index, const void *element) SCL_WARN_UNUSED;
-size_t      scl_carray_count(const scl_concurrent_array_t *arr);
-bool        scl_carray_empty(const scl_concurrent_array_t *arr);
+scl_error_t scl_carray_init(scl_allocator_t *SCL_RESTRICT alloc, scl_concurrent_array_t *SCL_RESTRICT arr, size_t element_size, size_t capacity) SCL_WARN_UNUSED;
+void        scl_carray_destroy(scl_allocator_t *SCL_RESTRICT alloc, scl_concurrent_array_t *SCL_RESTRICT arr);
+scl_error_t scl_carray_push(scl_allocator_t *SCL_RESTRICT alloc, scl_concurrent_array_t *SCL_RESTRICT arr, const void *SCL_RESTRICT element) SCL_WARN_UNUSED;
+scl_error_t scl_carray_pop(scl_concurrent_array_t *SCL_RESTRICT arr, void *SCL_RESTRICT out) SCL_WARN_UNUSED;
+scl_error_t scl_carray_get(const scl_concurrent_array_t *SCL_RESTRICT arr, size_t index, void *SCL_RESTRICT out) SCL_WARN_UNUSED;
+scl_error_t scl_carray_set(scl_concurrent_array_t *SCL_RESTRICT arr, size_t index, const void *SCL_RESTRICT element) SCL_WARN_UNUSED;
+SCL_PURE size_t      scl_carray_count(const scl_concurrent_array_t *SCL_RESTRICT arr);
+SCL_PURE bool        scl_carray_empty(const scl_concurrent_array_t *SCL_RESTRICT arr);
 
 #ifdef __GNUC__
 #pragma GCC diagnostic pop

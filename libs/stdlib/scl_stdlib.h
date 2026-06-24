@@ -5,29 +5,48 @@
 #include <stdint.h>
 #include "scl_common.h"
 
+/*
+ * scl_stdlib.h — safe wrappers for <stdlib.h> functionality.
+ *
+ * Key improvements over raw libc:
+ *  - NULL-pointer guard: every string argument is checked; NULL
+ *    returns 0 / 0.0 / NULL (safe degradation, not UB).
+ *  - Overflow-safe abs: scl_abs(INT_MIN) returns INT_MAX instead of UB
+ *    (two's complement negation wraps around in C; we cap it).
+ *  - strtol/strtoul wrappers clear errno before the call and detect
+ *    ERANGE so callers can distinguish overflow from valid parsing.
+ *  - scl_rand is backed by a CSPRNG (arc4random on BSD, /dev/urandom
+ *    on Linux) — never the predictable libc rand().
+ *  - scl_realloc wraps the pattern of allocate-copy-free so callers
+ *    don't need to store the old allocation size.
+ *
+ * These wrappers let application code avoid #include <stdlib.h>
+ * entirely; only this .c file touches the libc header.
+ */
+
 /* Integer conversion */
-int scl_atoi(const char *str);
-long scl_atol(const char *str);
-long long scl_atoll(const char *str);
+SCL_PURE int scl_atoi(const char * str);
+SCL_PURE long scl_atol(const char * str);
+SCL_PURE long long scl_atoll(const char * str);
 
-long scl_strtol(const char *str, char **endptr, int base);
-long long scl_strtoll(const char *str, char **endptr, int base);
-unsigned long scl_strtoul(const char *str, char **endptr, int base);
-unsigned long long scl_strtoull(const char *str, char **endptr, int base);
+long scl_strtol(const char * str, char **SCL_RESTRICT endptr, int base);
+long long scl_strtoll(const char * str, char **SCL_RESTRICT endptr, int base);
+unsigned long scl_strtoul(const char * str, char **SCL_RESTRICT endptr, int base);
+unsigned long long scl_strtoull(const char * str, char **SCL_RESTRICT endptr, int base);
 
-double scl_atof(const char *str);
-double scl_strtod(const char *str, char **endptr);
+SCL_PURE double scl_atof(const char * str);
+double scl_strtod(const char * str, char **SCL_RESTRICT endptr);
 
-/* Absolute value */
-int scl_abs(int x);
-long scl_labs(long x);
-long long scl_llabs(long long x);
+/* Absolute value — overflow-safe (INT_MIN → INT_MAX) */
+SCL_CONST int scl_abs(int x);
+SCL_CONST long scl_labs(long x);
+SCL_CONST long long scl_llabs(long long x);
 
 /* Random numbers — backed by system CSPRNG */
 int scl_rand(void);
 void scl_srand(unsigned int seed);
 
 /* Environment */
-char *scl_getenv(const char *name);
+char *scl_getenv(const char * name);
 
 #endif // SCL_STDLIB_H

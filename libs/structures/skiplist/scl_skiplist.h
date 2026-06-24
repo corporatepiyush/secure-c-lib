@@ -26,13 +26,13 @@ typedef struct {
 
 scl_error_t scl_skiplist_init(scl_allocator_t *alloc, scl_skiplist_t *sl, size_t element_size,
                               scl_cmp_func_t cmp) SCL_WARN_UNUSED;
-void        scl_skiplist_destroy(scl_allocator_t *alloc, scl_skiplist_t *sl);
-scl_error_t scl_skiplist_insert(scl_allocator_t *alloc, scl_skiplist_t *sl, const void *element) SCL_WARN_UNUSED;
-scl_error_t scl_skiplist_remove(scl_allocator_t *alloc, scl_skiplist_t *sl, const void *key) SCL_WARN_UNUSED;
-bool        scl_skiplist_contains(const scl_skiplist_t *sl, const void *key);
-scl_error_t scl_skiplist_find(const scl_skiplist_t *sl, const void *key, void *out) SCL_WARN_UNUSED;
-size_t      scl_skiplist_count(const scl_skiplist_t *sl);
-bool        scl_skiplist_empty(const scl_skiplist_t *sl);
+void        scl_skiplist_destroy(scl_allocator_t *SCL_RESTRICT alloc, scl_skiplist_t *SCL_RESTRICT sl);
+scl_error_t scl_skiplist_insert(scl_allocator_t *SCL_RESTRICT alloc, scl_skiplist_t *SCL_RESTRICT sl, const void *SCL_RESTRICT element) SCL_WARN_UNUSED;
+scl_error_t scl_skiplist_remove(scl_allocator_t *SCL_RESTRICT alloc, scl_skiplist_t *SCL_RESTRICT sl, const void *SCL_RESTRICT key) SCL_WARN_UNUSED;
+SCL_PURE bool        scl_skiplist_contains(const scl_skiplist_t *SCL_RESTRICT sl, const void *SCL_RESTRICT key);
+scl_error_t scl_skiplist_find(const scl_skiplist_t *SCL_RESTRICT sl, const void *SCL_RESTRICT key, void *SCL_RESTRICT out) SCL_WARN_UNUSED;
+SCL_PURE size_t      scl_skiplist_count(const scl_skiplist_t *SCL_RESTRICT sl);
+SCL_PURE bool        scl_skiplist_empty(const scl_skiplist_t *SCL_RESTRICT sl);
 
 #ifdef __GNUC__
 #pragma GCC diagnostic pop

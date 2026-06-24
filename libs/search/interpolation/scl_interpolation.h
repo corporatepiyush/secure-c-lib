@@ -9,7 +9,7 @@
 #include "scl_common.h"
 #include <stdint.h>
 
-scl_error_t scl_search_interpolation_search(const int64_t *restrict arr, size_t count, int64_t key, size_t *restrict out_index) SCL_WARN_UNUSED;
+scl_error_t scl_search_interpolation_search(const int64_t * arr, size_t count, int64_t key, size_t * out_index) SCL_WARN_UNUSED;
 
 #ifdef __GNUC__
 #pragma GCC diagnostic pop

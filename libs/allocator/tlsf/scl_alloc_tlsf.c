@@ -28,29 +28,29 @@ typedef struct {
     tlsf_block_hdr_t *block_sentinel;
 } tlsf_state_t;
 
-static int tlsf_fls_size(size_t v) {
+static SCL_ALWAYS_INLINE SCL_PURE int tlsf_fls_size(size_t v) {
     if (v == 0) return 0;
     return (int)scl_log2_sz(v);
 }
 
-static int tlsf_ctz(unsigned int v) {
+static SCL_ALWAYS_INLINE SCL_PURE int tlsf_ctz(unsigned int v) {
     return v ? (int)__builtin_ctz(v) : 0;
 }
 
-static void tlsf_mapping(size_t size, int *fl, int *sl) {
-    if (size < TLSF_SMALL_BLOCK) {
+static SCL_ALWAYS_INLINE void tlsf_mapping(size_t size, int *fl, int *sl) {
+    if (scl_likely(size < TLSF_SMALL_BLOCK)) {
         *fl = 0;
         *sl = (int)(size / (TLSF_SMALL_BLOCK / TLSF_SL_COUNT));
     } else {
         int s = tlsf_fls_size(size);
         *fl = s - (TLSF_SL_LOG2 - 1);
         *sl = (int)((size >> (s - TLSF_SL_LOG2)) ^ (1 << TLSF_SL_LOG2));
-        if (*sl >= TLSF_SL_COUNT) *sl = TLSF_SL_COUNT - 1;
+        if (scl_unlikely(*sl >= TLSF_SL_COUNT)) *sl = TLSF_SL_COUNT - 1;
     }
 }
 
-static void tlsf_mapping_insert(size_t size, int *fl, int *sl) {
-    if (size < TLSF_SMALL_BLOCK) {
+static SCL_ALWAYS_INLINE void tlsf_mapping_insert(size_t size, int *fl, int *sl) {
+    if (scl_likely(size < TLSF_SMALL_BLOCK)) {
         *fl = 0;
         *sl = (int)(size / (TLSF_SMALL_BLOCK / TLSF_SL_COUNT));
     } else {
@@ -69,9 +69,9 @@ static void tlsf_remove_free(tlsf_state_t *tlsf, tlsf_block_hdr_t *block) {
 
     if (tlsf->bins[fl][sl] == block) {
         tlsf->bins[fl][sl] = block->next_free;
-        if (!tlsf->bins[fl][sl]) {
+        if (scl_unlikely(!tlsf->bins[fl][sl])) {
             tlsf->sl_bitmap[fl] &= ~(1U << sl);
-            if (!tlsf->sl_bitmap[fl])
+            if (scl_unlikely(!tlsf->sl_bitmap[fl]))
                 tlsf->fl_bitmap &= ~(1U << fl);
         }
     }
@@ -89,7 +89,7 @@ static void tlsf_insert_free(tlsf_state_t *tlsf, tlsf_block_hdr_t *block) {
 
     block->next_free = tlsf->bins[fl][sl];
     block->prev_free = NULL;
-    if (tlsf->bins[fl][sl])
+    if (scl_likely(tlsf->bins[fl][sl]))
         tlsf->bins[fl][sl]->prev_free = block;
     tlsf->bins[fl][sl] = block;
 
@@ -103,7 +103,7 @@ static int tlsf_search_and_remove(tlsf_state_t *tlsf, size_t size, tlsf_block_hd
 
     unsigned int sl_bitmap = tlsf->sl_bitmap[fl];
     unsigned int sl_mask = sl_bitmap >> sl;
-    if (sl_mask) {
+    if (scl_likely(sl_mask)) {
         sl += tlsf_ctz(sl_mask);
     } else {
         unsigned int fl_mask = tlsf->fl_bitmap >> (fl + 1);
@@ -115,7 +115,7 @@ static int tlsf_search_and_remove(tlsf_state_t *tlsf, size_t size, tlsf_block_hd
                 fl = (int)scl_log2_u32(fl_mask);
             } else {
                 unsigned int all_above = tlsf->fl_bitmap & ~((1U << (fl + 1)) - 1);
-                if (!all_above) return 0;
+                if (scl_unlikely(!all_above)) return 0;
                 fl = tlsf_ctz(all_above);
             }
         }
@@ -123,14 +123,14 @@ static int tlsf_search_and_remove(tlsf_state_t *tlsf, size_t size, tlsf_block_hd
     }
 
     tlsf_block_hdr_t *block = tlsf->bins[fl][sl];
-    if (!block) return 0;
+    if (scl_unlikely(!block)) return 0;
 
     tlsf_remove_free(tlsf, block);
 
     size_t block_size = block->size & ~3UL;
     size_t remaining = block_size - size;
 
-    if (remaining >= TLSF_MIN_BLOCK_SIZE) {
+    if (scl_likely(remaining >= TLSF_MIN_BLOCK_SIZE)) {
         tlsf_block_hdr_t *new_block = (tlsf_block_hdr_t *)((unsigned char *)block + size);
         new_block->prev_phys = block;
         new_block->size = remaining | 1;
@@ -162,7 +162,7 @@ static int tlsf_search_and_remove(tlsf_state_t *tlsf, size_t size, tlsf_block_hd
 
 static void *tlsf_malloc_fn(void *state, size_t size, size_t alignment) {
     tlsf_state_t *t = (tlsf_state_t *)state;
-    if (!t || size == 0) return NULL;
+    if (scl_unlikely(!t || size == 0)) return NULL;
     (void)alignment;
 
     size_t aligned = size;
@@ -174,24 +174,24 @@ static void *tlsf_malloc_fn(void *state, size_t size, size_t alignment) {
     if (req < TLSF_MIN_BLOCK_SIZE) req = TLSF_MIN_BLOCK_SIZE;
 
     tlsf_block_hdr_t *block;
-    if (!tlsf_search_and_remove(t, req, &block)) return NULL;
+    if (scl_unlikely(!tlsf_search_and_remove(t, req, &block))) return NULL;
 
     return (void *)((unsigned char *)block + TLSF_BLOCK_HDR_SZ);
 }
 
 static void *tlsf_calloc_fn(void *state, size_t count, size_t size, size_t alignment) {
     size_t total;
-    if (scl_mul_overflow(count, size, &total)) return NULL;
+    if (scl_unlikely(scl_mul_overflow(count, size, &total))) return NULL;
     void *ptr = tlsf_malloc_fn(state, total, alignment);
-    if (ptr) memset(ptr, 0, total);
+    if (scl_likely(ptr)) memset(ptr, 0, total);
     return ptr;
 }
 
 static void *tlsf_realloc_fn(void *state, void *ptr, size_t old_size, size_t new_size, size_t alignment) {
-    if (!ptr) return tlsf_malloc_fn(state, new_size, alignment);
-    if (new_size == 0) { tlsf_free_fn(state, ptr); return NULL; }
+    if (scl_unlikely(!ptr)) return tlsf_malloc_fn(state, new_size, alignment);
+    if (scl_unlikely(new_size == 0)) { tlsf_free_fn(state, ptr); return NULL; }
     void *new_ptr = tlsf_malloc_fn(state, new_size, alignment);
-    if (new_ptr) {
+    if (scl_likely(new_ptr)) {
         size_t copy = old_size < new_size ? old_size : new_size;
         memcpy(new_ptr, ptr, copy);
         tlsf_free_fn(state, ptr);
@@ -201,13 +201,13 @@ static void *tlsf_realloc_fn(void *state, void *ptr, size_t old_size, size_t new
 
 static void tlsf_free_fn(void *state, void *ptr) {
     tlsf_state_t *t = (tlsf_state_t *)state;
-    if (!t || !ptr) return;
+    if (scl_unlikely(!t || !ptr)) return;
 
     tlsf_block_hdr_t *block = (tlsf_block_hdr_t *)((unsigned char *)ptr - TLSF_BLOCK_HDR_SZ);
     size_t block_size = block->size & ~3UL;
 
     int prev_free = (block->size & 2);
-    if (prev_free && block->prev_phys) {
+    if (scl_likely(prev_free && block->prev_phys)) {
         tlsf_block_hdr_t *prev = block->prev_phys;
         size_t prev_size = prev->size & ~3UL;
         tlsf_remove_free(t, prev);
@@ -217,8 +217,8 @@ static void tlsf_free_fn(void *state, void *ptr) {
     }
 
     tlsf_block_hdr_t *next = (tlsf_block_hdr_t *)((unsigned char *)block + block_size);
-    if ((unsigned char *)next < (unsigned char *)t->block_sentinel &&
-        (next->size & 1)) {
+    if (scl_likely((unsigned char *)next < (unsigned char *)t->block_sentinel &&
+        (next->size & 1))) {
         size_t next_size = next->size & ~3UL;
         tlsf_remove_free(t, next);
         block->size = (block_size + next_size) | 1;
@@ -239,10 +239,10 @@ static void tlsf_free_fn(void *state, void *ptr) {
 }
 
 scl_allocator_t *scl_alloc_tlsf_create(scl_allocator_t *backing, size_t memory_size) {
-    if (!backing || memory_size < 4096) return NULL;
+    if (scl_unlikely(!backing || memory_size < 4096)) return NULL;
 
     tlsf_state_t *state = (tlsf_state_t *)backing->malloc_fn(backing->state, sizeof(tlsf_state_t), alignof(max_align_t));
-    if (!state) return NULL;
+    if (scl_unlikely(!state)) return NULL;
 
     memset(state, 0, sizeof(tlsf_state_t));
     state->backing = backing;
@@ -253,7 +253,7 @@ scl_allocator_t *scl_alloc_tlsf_create(scl_allocator_t *backing, size_t memory_s
     if (mod != 0) actual += align - mod;
 
     state->pool = backing->malloc_fn(backing->state, actual, alignof(max_align_t));
-    if (!state->pool) {
+    if (scl_unlikely(!state->pool)) {
         backing->free_fn(backing->state, state);
         return NULL;
     }
@@ -275,7 +275,7 @@ scl_allocator_t *scl_alloc_tlsf_create(scl_allocator_t *backing, size_t memory_s
     tlsf_insert_free(state, start);
 
     scl_allocator_t *alloc = (scl_allocator_t *)backing->malloc_fn(backing->state, sizeof(scl_allocator_t), alignof(max_align_t));
-    if (!alloc) {
+    if (scl_unlikely(!alloc)) {
         backing->free_fn(backing->state, state->pool);
         backing->free_fn(backing->state, state);
         return NULL;
@@ -290,7 +290,7 @@ scl_allocator_t *scl_alloc_tlsf_create(scl_allocator_t *backing, size_t memory_s
 }
 
 void scl_alloc_tlsf_destroy(scl_allocator_t *alloc) {
-    if (!alloc) return;
+    if (scl_unlikely(!alloc)) return;
     tlsf_state_t *s = (tlsf_state_t *)alloc->state;
     scl_allocator_t *backing = s->backing;
     if (s->pool) backing->free_fn(backing->state, s->pool);

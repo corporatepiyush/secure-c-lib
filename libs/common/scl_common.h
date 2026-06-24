@@ -28,6 +28,10 @@
 #define SCL_RESTRICT       __restrict
 #define scl_likely(x)      __builtin_expect(!!(x), 1)
 #define scl_unlikely(x)    __builtin_expect(!!(x), 0)
+#define SCL_CONST          __attribute__((const))
+#define SCL_PURE           __attribute__((pure))
+#define SCL_UNREACHABLE    __builtin_unreachable()
+#define SCL_PRINTF(f,i)    __attribute__((format(printf, f, i)))
 #else
 #define SCL_WARN_UNUSED
 #define SCL_NONNULL(...)
@@ -38,6 +42,10 @@
 #define SCL_RESTRICT
 #define scl_likely(x)      (x)
 #define scl_unlikely(x)    (x)
+#define SCL_CONST
+#define SCL_PURE
+#define SCL_UNREACHABLE
+#define SCL_PRINTF(f,i)
 #endif
 
 /* ── OS platform detection ──────────────────────────────────── */
@@ -191,6 +199,22 @@ static inline void scl_prefetch_w(const void *ptr) {
 #define SCL_COLD_PATH __attribute__((cold, noinline))
 #else
 #define SCL_COLD_PATH
+#endif
+
+/* ── Power-of-two checks (zero-allocation hot paths) ────────── */
+static inline bool scl_is_pow2_sz(size_t v) {
+    return v != 0 && (v & (v - 1)) == 0;
+}
+
+static inline bool scl_is_aligned_sz(size_t v, size_t align) {
+    return (v & (align - 1)) == 0;
+}
+
+/* ── Alignment assumptions (lets compiler use aligned loads) ── */
+#ifdef __GNUC__
+#define SCL_ASSUME_ALIGNED(p, align) __builtin_assume_aligned((p), (align))
+#else
+#define SCL_ASSUME_ALIGNED(p, align) (p)
 #endif
 
 /* ── Alignment helpers ──────────────────────────────────────── */

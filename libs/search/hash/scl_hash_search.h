@@ -22,11 +22,11 @@ typedef struct {
     scl_allocator_t *alloc;
 } scl_search_ht_t;
 
-scl_error_t scl_search_ht_init(scl_allocator_t *alloc, scl_search_ht_t **ht, size_t capacity) SCL_WARN_UNUSED;
-scl_error_t scl_search_ht_insert(scl_search_ht_t *ht, const char *key, void *value) SCL_WARN_UNUSED;
-scl_error_t scl_search_ht_search(const scl_search_ht_t *ht, const char *key, void **out_value) SCL_WARN_UNUSED;
-scl_error_t scl_search_ht_delete(scl_search_ht_t *ht, const char *key);
-void scl_search_ht_destroy(scl_search_ht_t *ht);
+scl_error_t scl_search_ht_init(scl_allocator_t * alloc, scl_search_ht_t **SCL_RESTRICT ht, size_t capacity) SCL_WARN_UNUSED;
+scl_error_t scl_search_ht_insert(scl_search_ht_t * ht, const char * key, void * value) SCL_WARN_UNUSED;
+scl_error_t scl_search_ht_search(const scl_search_ht_t * ht, const char * key, void **SCL_RESTRICT out_value) SCL_WARN_UNUSED;
+scl_error_t scl_search_ht_delete(scl_search_ht_t * ht, const char * key) SCL_WARN_UNUSED;
+void scl_search_ht_destroy(scl_search_ht_t * ht);
 
 #ifdef __GNUC__
 #pragma GCC diagnostic pop

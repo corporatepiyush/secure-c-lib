@@ -20,7 +20,7 @@ typedef struct {
     scl_buddy_node_t *free_lists[BUDDY_MAX_ORDER + 1];
 } buddy_state_t;
 
-static unsigned int buddy_order_for_size(size_t size) {
+static SCL_ALWAYS_INLINE SCL_PURE unsigned int buddy_order_for_size(size_t size) {
     unsigned int order = 0;
     size_t s = 1;
     while (s < size) { s <<= 1; order++; }
@@ -32,18 +32,18 @@ static void buddy_free_fn(void *state, void *ptr);
 static void *buddy_malloc_fn(void *state, size_t size, size_t alignment) {
     (void)alignment;
     buddy_state_t *b = (buddy_state_t *)state;
-    if (!b || size == 0) return NULL;
+    if (scl_unlikely(!b || size == 0)) return NULL;
 
     size_t actual = size + BUDDY_HDR_SZ;
     unsigned int order = buddy_order_for_size(actual);
-    if (order > b->max_order) return NULL;
+    if (scl_unlikely(order > b->max_order)) return NULL;
     if (order < 4) order = 4;
 
     unsigned int current = order;
     while (current <= b->max_order && !b->free_lists[current])
         current++;
 
-    if (current > b->max_order) return NULL;
+    if (scl_unlikely(current > b->max_order)) return NULL;
 
     while (current > order) {
         current--;
@@ -74,17 +74,17 @@ static void *buddy_malloc_fn(void *state, size_t size, size_t alignment) {
 
 static void *buddy_calloc_fn(void *state, size_t count, size_t size, size_t alignment) {
     size_t total;
-    if (scl_mul_overflow(count, size, &total)) return NULL;
+    if (scl_unlikely(scl_mul_overflow(count, size, &total))) return NULL;
     void *ptr = buddy_malloc_fn(state, total, alignment);
-    if (ptr) memset(ptr, 0, total);
+    if (scl_likely(ptr)) memset(ptr, 0, total);
     return ptr;
 }
 
 static void *buddy_realloc_fn(void *state, void *ptr, size_t old_size, size_t new_size, size_t alignment) {
-    if (!ptr) return buddy_malloc_fn(state, new_size, alignment);
-    if (new_size == 0) { buddy_free_fn(state, ptr); return NULL; }
+    if (scl_unlikely(!ptr)) return buddy_malloc_fn(state, new_size, alignment);
+    if (scl_unlikely(new_size == 0)) { buddy_free_fn(state, ptr); return NULL; }
     void *new_ptr = buddy_malloc_fn(state, new_size, alignment);
-    if (new_ptr) {
+    if (scl_likely(new_ptr)) {
         size_t copy = old_size < new_size ? old_size : new_size;
         memcpy(new_ptr, ptr, copy);
         buddy_free_fn(state, ptr);
@@ -94,7 +94,7 @@ static void *buddy_realloc_fn(void *state, void *ptr, size_t old_size, size_t ne
 
 static void buddy_free_fn(void *state, void *ptr) {
     buddy_state_t *b = (buddy_state_t *)state;
-    if (!b || !ptr) return;
+    if (scl_unlikely(!b || !ptr)) return;
 
     scl_buddy_node_t *node = (scl_buddy_node_t *)((unsigned char *)ptr - BUDDY_HDR_SZ);
     unsigned int order = node->order;
@@ -137,23 +137,23 @@ static void buddy_free_fn(void *state, void *ptr) {
 }
 
 scl_allocator_t *scl_alloc_buddy_create(scl_allocator_t *backing, size_t total_size) {
-    if (!backing || total_size == 0) return NULL;
+    if (scl_unlikely(!backing || total_size == 0)) return NULL;
 
     size_t pool_sz = scl_bit_ceil_sz(total_size);
     if (pool_sz < BUDDY_MIN_BLOCK) pool_sz = BUDDY_MIN_BLOCK;
 
     unsigned int max_order = (unsigned int)scl_log2_sz(pool_sz);
-    if (max_order > BUDDY_MAX_ORDER) return NULL;
+    if (scl_unlikely(max_order > BUDDY_MAX_ORDER)) return NULL;
 
     buddy_state_t *state = (buddy_state_t *)backing->malloc_fn(backing->state, sizeof(buddy_state_t), alignof(max_align_t));
-    if (!state) return NULL;
+    if (scl_unlikely(!state)) return NULL;
 
     memset(state, 0, sizeof(buddy_state_t));
     state->backing = backing;
     state->max_order = max_order;
 
     state->pool = (unsigned char *)backing->malloc_fn(backing->state, pool_sz, alignof(max_align_t));
-    if (!state->pool) {
+    if (scl_unlikely(!state->pool)) {
         backing->free_fn(backing->state, state);
         return NULL;
     }
@@ -165,7 +165,7 @@ scl_allocator_t *scl_alloc_buddy_create(scl_allocator_t *backing, size_t total_s
     state->free_lists[max_order] = node;
 
     scl_allocator_t *alloc = (scl_allocator_t *)backing->malloc_fn(backing->state, sizeof(scl_allocator_t), alignof(max_align_t));
-    if (!alloc) {
+    if (scl_unlikely(!alloc)) {
         backing->free_fn(backing->state, state->pool);
         backing->free_fn(backing->state, state);
         return NULL;
@@ -180,7 +180,7 @@ scl_allocator_t *scl_alloc_buddy_create(scl_allocator_t *backing, size_t total_s
 }
 
 void scl_alloc_buddy_destroy(scl_allocator_t *alloc) {
-    if (!alloc) return;
+    if (scl_unlikely(!alloc)) return;
     buddy_state_t *b = (buddy_state_t *)alloc->state;
     scl_allocator_t *backing = b->backing;
     if (b->pool) backing->free_fn(backing->state, b->pool);

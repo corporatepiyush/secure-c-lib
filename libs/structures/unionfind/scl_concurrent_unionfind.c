@@ -7,12 +7,12 @@
 
 scl_error_t scl_cunionfind_init(scl_allocator_t *alloc, scl_concurrent_unionfind_t *uf, size_t count)
 {
-    if (!uf) return SCL_ERR_NULL_PTR;
-    if (count == 0) return SCL_ERR_INVALID_ARG;
+    if (scl_unlikely(!uf)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(count == 0)) return SCL_ERR_INVALID_ARG;
     uf->parent = scl_alloc(alloc, count * sizeof(atomic_uint), alignof(max_align_t));
-    if (!uf->parent) return SCL_ERR_OUT_OF_MEMORY;
+    if (scl_unlikely(!uf->parent)) return SCL_ERR_OUT_OF_MEMORY;
     uf->rank = scl_alloc(alloc, count * sizeof(atomic_uint), alignof(max_align_t));
-    if (!uf->rank) {
+    if (scl_unlikely(!uf->rank)) {
         scl_free(alloc, uf->parent);
         return SCL_ERR_OUT_OF_MEMORY;
     }
@@ -27,7 +27,7 @@ scl_error_t scl_cunionfind_init(scl_allocator_t *alloc, scl_concurrent_unionfind
 
 void scl_cunionfind_destroy(scl_allocator_t *alloc, scl_concurrent_unionfind_t *uf)
 {
-    if (!uf) return;
+    if (scl_unlikely(!uf)) return;
     scl_free(alloc, uf->parent);
     scl_free(alloc, uf->rank);
     uf->parent = NULL;
@@ -51,8 +51,8 @@ size_t scl_cunionfind_find(scl_concurrent_unionfind_t *uf, size_t x)
 
 scl_error_t scl_cunionfind_union(scl_concurrent_unionfind_t *uf, size_t x, size_t y)
 {
-    if (!uf) return SCL_ERR_NULL_PTR;
-    if (x >= uf->count || y >= uf->count) return SCL_ERR_INVALID_INDEX;
+    if (scl_unlikely(!uf)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(x >= uf->count || y >= uf->count)) return SCL_ERR_INVALID_INDEX;
     while (1) {
         size_t rx = scl_cunionfind_find(uf, x);
         size_t ry = scl_cunionfind_find(uf, y);
@@ -84,7 +84,7 @@ scl_error_t scl_cunionfind_union(scl_concurrent_unionfind_t *uf, size_t x, size_
 
 bool scl_cunionfind_connected(scl_concurrent_unionfind_t *uf, size_t x, size_t y)
 {
-    if (!uf || x >= uf->count || y >= uf->count) return false;
+    if (scl_unlikely(!uf || x >= uf->count || y >= uf->count)) return false;
     return scl_cunionfind_find(uf, x) == scl_cunionfind_find(uf, y);
 }
 

@@ -32,12 +32,12 @@ typedef struct {
 
 scl_error_t scl_chash_init(scl_allocator_t *alloc, scl_concurrent_hash_t *ht, size_t key_size, size_t value_size,
                           size_t bucket_count, scl_hash_func_t hf) SCL_WARN_UNUSED;
-void        scl_chash_destroy(scl_allocator_t *alloc, scl_concurrent_hash_t *ht);
-scl_error_t scl_chash_insert(scl_allocator_t *alloc, scl_concurrent_hash_t *ht, const void *key, const void *value) SCL_WARN_UNUSED;
-scl_error_t scl_chash_get(const scl_concurrent_hash_t *ht, const void *key, void *out_value) SCL_WARN_UNUSED;
-scl_error_t scl_chash_remove(scl_allocator_t *alloc, scl_concurrent_hash_t *ht, const void *key) SCL_WARN_UNUSED;
-bool        scl_chash_contains(const scl_concurrent_hash_t *ht, const void *key);
-size_t      scl_chash_count(const scl_concurrent_hash_t *ht);
+void        scl_chash_destroy(scl_allocator_t *SCL_RESTRICT alloc, scl_concurrent_hash_t *SCL_RESTRICT ht);
+scl_error_t scl_chash_insert(scl_allocator_t *SCL_RESTRICT alloc, scl_concurrent_hash_t *SCL_RESTRICT ht, const void *SCL_RESTRICT key, const void *SCL_RESTRICT value) SCL_WARN_UNUSED;
+scl_error_t scl_chash_get(const scl_concurrent_hash_t *SCL_RESTRICT ht, const void *SCL_RESTRICT key, void *SCL_RESTRICT out_value) SCL_WARN_UNUSED;
+scl_error_t scl_chash_remove(scl_allocator_t *SCL_RESTRICT alloc, scl_concurrent_hash_t *SCL_RESTRICT ht, const void *SCL_RESTRICT key) SCL_WARN_UNUSED;
+SCL_PURE bool        scl_chash_contains(const scl_concurrent_hash_t *SCL_RESTRICT ht, const void *SCL_RESTRICT key);
+SCL_PURE size_t      scl_chash_count(const scl_concurrent_hash_t *SCL_RESTRICT ht);
 
 #ifdef __GNUC__
 #pragma GCC diagnostic pop

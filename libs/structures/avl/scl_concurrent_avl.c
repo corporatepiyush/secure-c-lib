@@ -47,7 +47,7 @@ static scl_concurrent_avl_node_t *create_node(scl_allocator_t *alloc, const void
 
 void scl_cavl_destroy(scl_allocator_t *alloc, scl_concurrent_avl_t *tree)
 {
-    if (!tree) return;
+    if (scl_unlikely(!tree)) return;
     scl_spinlock_lock(&tree->lock);
     if (tree->root) {
         size_t cap = 64;
@@ -57,7 +57,7 @@ void scl_cavl_destroy(scl_allocator_t *alloc, scl_concurrent_avl_t *tree)
         scl_concurrent_avl_node_t *cur = tree->root;
         scl_concurrent_avl_node_t *last = NULL;
         while (cur || sp >= 0) {
-            while (cur) {
+            while (scl_likely(cur)) {
                 if ((size_t)(sp + 1) >= cap) {
                     size_t new_cap = cap * 2;
                     scl_concurrent_avl_node_t **ns = scl_realloc(alloc, stack, cap * sizeof(stack[0]), new_cap * sizeof(stack[0]), alignof(max_align_t));
@@ -89,8 +89,8 @@ scl_error_t scl_cavl_init(scl_allocator_t *alloc, scl_concurrent_avl_t *tree, si
                          scl_cmp_func_t cmp)
 {
     (void)alloc;
-    if (!tree) return SCL_ERR_NULL_PTR;
-    if (element_size == 0 || !cmp) return SCL_ERR_INVALID_ARG;
+    if (scl_unlikely(!tree)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(element_size == 0 || !cmp)) return SCL_ERR_INVALID_ARG;
     tree->root = NULL;
     tree->element_size = element_size;
     atomic_init(&tree->count, 0);
@@ -99,9 +99,9 @@ scl_error_t scl_cavl_init(scl_allocator_t *alloc, scl_concurrent_avl_t *tree, si
     return SCL_OK;
 }
 
-scl_error_t scl_cavl_insert(scl_allocator_t *alloc, scl_concurrent_avl_t *tree, const void *element)
+scl_error_t scl_cavl_insert(scl_allocator_t *alloc, scl_concurrent_avl_t *tree, const void  *SCL_RESTRICT element)
 {
-    if (!tree || !element) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!tree || !element)) return SCL_ERR_NULL_PTR;
     scl_spinlock_lock(&tree->lock);
 
     scl_concurrent_avl_node_t *node = create_node(alloc, element, tree->element_size);
@@ -173,9 +173,9 @@ scl_error_t scl_cavl_insert(scl_allocator_t *alloc, scl_concurrent_avl_t *tree, 
     return SCL_OK;
 }
 
-scl_error_t scl_cavl_remove(scl_allocator_t *alloc, scl_concurrent_avl_t *tree, const void *key)
+scl_error_t scl_cavl_remove(scl_allocator_t *alloc, scl_concurrent_avl_t *tree, const void  *SCL_RESTRICT key)
 {
-    if (!tree || !key) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!tree || !key)) return SCL_ERR_NULL_PTR;
     scl_spinlock_lock(&tree->lock);
 
     if (!tree->root) { scl_spinlock_unlock(&tree->lock); return SCL_ERR_NOT_FOUND; }
@@ -185,7 +185,7 @@ scl_error_t scl_cavl_remove(scl_allocator_t *alloc, scl_concurrent_avl_t *tree, 
     scl_concurrent_avl_node_t *cur = tree->root;
     bool found = false;
 
-    while (cur) {
+    while (scl_likely(cur)) {
         path[path_len++] = cur;
         int c = tree->cmp(key, cur->data);
         if (c < 0) cur = cur->left;
@@ -211,7 +211,7 @@ scl_error_t scl_cavl_remove(scl_allocator_t *alloc, scl_concurrent_avl_t *tree, 
     } else {
         scl_concurrent_avl_node_t *succ = node->right;
         int succ_idx = path_len;
-        while (succ->left) {
+        while (scl_likely(succ->left)) {
             if (succ_idx == path_len) path[succ_idx] = node;
             path[succ_idx++] = succ;
             succ = succ->left;
@@ -273,10 +273,10 @@ scl_error_t scl_cavl_remove(scl_allocator_t *alloc, scl_concurrent_avl_t *tree, 
 
 bool scl_cavl_contains(scl_concurrent_avl_t *tree, const void *key)
 {
-    if (!tree || !key) return false;
+    if (scl_unlikely(!tree || !key)) return false;
     scl_spinlock_lock(&tree->lock);
     scl_concurrent_avl_node_t *cur = tree->root;
-    while (cur) {
+    while (scl_likely(cur)) {
         int c = tree->cmp(key, cur->data);
         if (c == 0) { scl_spinlock_unlock(&tree->lock); return true; }
         cur = (c < 0) ? cur->left : cur->right;
@@ -285,12 +285,12 @@ bool scl_cavl_contains(scl_concurrent_avl_t *tree, const void *key)
     return false;
 }
 
-scl_error_t scl_cavl_find(scl_concurrent_avl_t *tree, const void *key, void *out)
+scl_error_t scl_cavl_find(scl_concurrent_avl_t *tree, const void *key, void  *SCL_RESTRICT out)
 {
-    if (!tree || !key || !out) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!tree || !key || !out)) return SCL_ERR_NULL_PTR;
     scl_spinlock_lock(&tree->lock);
     scl_concurrent_avl_node_t *cur = tree->root;
-    while (cur) {
+    while (scl_likely(cur)) {
         int c = tree->cmp(key, cur->data);
         if (c == 0) { scl_memcpy(out, cur->data, tree->element_size); scl_spinlock_unlock(&tree->lock); return SCL_OK; }
         cur = (c < 0) ? cur->left : cur->right;

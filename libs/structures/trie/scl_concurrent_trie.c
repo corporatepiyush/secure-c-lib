@@ -17,7 +17,7 @@ static scl_concurrent_trie_node_t *create_node(scl_allocator_t *alloc)
 
 void scl_ctrie_destroy(scl_allocator_t *alloc, scl_concurrent_trie_t *trie)
 {
-    if (!trie || !trie->root) return;
+    if (scl_unlikely(!trie || !trie->root)) return;
 
     scl_concurrent_trie_node_t *stack1[4096];
     int sp1 = 0;
@@ -47,10 +47,10 @@ void scl_ctrie_destroy(scl_allocator_t *alloc, scl_concurrent_trie_t *trie)
 
 scl_error_t scl_ctrie_init(scl_allocator_t *alloc, scl_concurrent_trie_t *trie, size_t value_size)
 {
-    if (!trie) return SCL_ERR_NULL_PTR;
-    if (value_size == 0) return SCL_ERR_INVALID_ARG;
+    if (scl_unlikely(!trie)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(value_size == 0)) return SCL_ERR_INVALID_ARG;
     trie->root = create_node(alloc);
-    if (!trie->root) return SCL_ERR_OUT_OF_MEMORY;
+    if (scl_unlikely(!trie->root)) return SCL_ERR_OUT_OF_MEMORY;
     trie->value_size = value_size;
     atomic_init(&trie->count, 0);
     return SCL_OK;
@@ -59,12 +59,12 @@ scl_error_t scl_ctrie_init(scl_allocator_t *alloc, scl_concurrent_trie_t *trie, 
 scl_error_t scl_ctrie_insert(scl_allocator_t *alloc, scl_concurrent_trie_t *trie, const unsigned char *key,
                             size_t key_len, const void *value)
 {
-    if (!trie || !key || !value) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!trie || !key || !value)) return SCL_ERR_NULL_PTR;
     scl_concurrent_trie_node_t *cur = trie->root;
     for (size_t i = 0; i < key_len; i++) {
         unsigned char c = key[i];
         scl_spinlock_lock(&cur->lock);
-        if (!cur->children[c]) {
+        if (scl_unlikely(!cur->children[c])) {
             scl_concurrent_trie_node_t *n = create_node(alloc);
             if (!n) { scl_spinlock_unlock(&cur->lock); return SCL_ERR_OUT_OF_MEMORY; }
             cur->children[c] = n;
@@ -77,7 +77,7 @@ scl_error_t scl_ctrie_insert(scl_allocator_t *alloc, scl_concurrent_trie_t *trie
             scl_concurrent_trie_node_t *next = cur->children[c];
             scl_spinlock_lock(&next->lock);
             bool was_terminal = next->terminal;
-            if (!next->value) {
+            if (scl_unlikely(!next->value)) {
                 next->value = scl_alloc(alloc, trie->value_size, alignof(max_align_t));
                 if (!next->value) { scl_spinlock_unlock(&next->lock); scl_spinlock_unlock(&cur->lock); return SCL_ERR_OUT_OF_MEMORY; }
             }
@@ -90,7 +90,7 @@ scl_error_t scl_ctrie_insert(scl_allocator_t *alloc, scl_concurrent_trie_t *trie
         }
     }
     scl_spinlock_lock(&cur->lock);
-    if (!cur->terminal) {
+    if (scl_unlikely(!cur->terminal)) {
         if (!cur->value) {
             cur->value = scl_alloc(alloc, trie->value_size, alignof(max_align_t));
             if (!cur->value) { scl_spinlock_unlock(&cur->lock); return SCL_ERR_OUT_OF_MEMORY; }
@@ -108,7 +108,7 @@ scl_error_t scl_ctrie_insert(scl_allocator_t *alloc, scl_concurrent_trie_t *trie
 scl_error_t scl_ctrie_get(const scl_concurrent_trie_t *trie, const unsigned char *key,
                          size_t key_len, void *out_value)
 {
-    if (!trie || !key || !out_value) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!trie || !key || !out_value)) return SCL_ERR_NULL_PTR;
     scl_concurrent_trie_node_t *cur = trie->root;
     scl_spinlock_lock(&cur->lock);
     scl_concurrent_trie_node_t *prev = NULL;
@@ -134,7 +134,7 @@ scl_error_t scl_ctrie_get(const scl_concurrent_trie_t *trie, const unsigned char
 bool scl_ctrie_contains(const scl_concurrent_trie_t *trie, const unsigned char *key,
                        size_t key_len)
 {
-    if (!trie || !key) return false;
+    if (scl_unlikely(!trie || !key)) return false;
     scl_concurrent_trie_node_t *cur = trie->root;
     scl_spinlock_lock(&cur->lock);
     scl_concurrent_trie_node_t *prev = NULL;
@@ -156,8 +156,8 @@ bool scl_ctrie_contains(const scl_concurrent_trie_t *trie, const unsigned char *
 scl_error_t scl_ctrie_remove(scl_allocator_t *alloc, scl_concurrent_trie_t *trie, const unsigned char *key,
                             size_t key_len)
 {
-    if (!trie || !key) return SCL_ERR_NULL_PTR;
-    if (key_len == 0) return SCL_ERR_INVALID_ARG;
+    if (scl_unlikely(!trie || !key)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(key_len == 0)) return SCL_ERR_INVALID_ARG;
 
     scl_concurrent_trie_node_t *path[1024];
     int path_len = 0;

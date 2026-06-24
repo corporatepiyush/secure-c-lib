@@ -17,13 +17,13 @@ static scl_error_t binary_search_range(const void *base, size_t lo, size_t hi, s
     return SCL_ERR_NOT_FOUND;
 }
 
-scl_error_t scl_search_exponential_search(const void *restrict base, size_t count, size_t elem_size, const void *restrict key, scl_cmp_func_t cmp, size_t *restrict out_index)
+scl_error_t scl_search_exponential_search(const void * base, size_t count, size_t elem_size, const void * key, scl_cmp_func_t cmp, size_t * out_index)
 {
-    if (__builtin_expect(base == NULL, 0)) return SCL_ERR_NULL_PTR;
-    if (__builtin_expect(key == NULL, 0)) return SCL_ERR_NULL_PTR;
-    if (__builtin_expect(cmp == NULL, 0)) return SCL_ERR_NULL_PTR;
-    if (__builtin_expect(out_index == NULL, 0)) return SCL_ERR_NULL_PTR;
-    if (__builtin_expect(count == 0, 0)) return SCL_ERR_EMPTY;
+    if (scl_unlikely(base == NULL)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(key == NULL)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(cmp == NULL)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(out_index == NULL)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(count == 0)) return SCL_ERR_EMPTY;
 
     if (cmp(base, key) == 0) {
         *out_index = 0;

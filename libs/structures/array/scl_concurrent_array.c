@@ -7,13 +7,13 @@
 
 scl_error_t scl_carray_init(scl_allocator_t *alloc, scl_concurrent_array_t *arr, size_t element_size, size_t capacity)
 {
-    if (!arr) return SCL_ERR_NULL_PTR;
-    if (element_size == 0 || capacity == 0) return SCL_ERR_INVALID_ARG;
+    if (scl_unlikely(!arr)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(element_size == 0 || capacity == 0)) return SCL_ERR_INVALID_ARG;
     size_t bytes;
     if (scl_mul_overflow(capacity, element_size, &bytes))
         return SCL_ERR_SIZE_OVERFLOW;
     arr->data = scl_alloc(alloc, bytes, alignof(max_align_t));
-    if (!arr->data) return SCL_ERR_OUT_OF_MEMORY;
+    if (scl_unlikely(!arr->data)) return SCL_ERR_OUT_OF_MEMORY;
     arr->element_size = element_size;
     arr->capacity = capacity;
     atomic_init(&arr->count, 0);
@@ -30,13 +30,13 @@ void scl_carray_destroy(scl_allocator_t *alloc, scl_concurrent_array_t *arr)
     }
 }
 
-scl_error_t scl_carray_push(scl_allocator_t *alloc, scl_concurrent_array_t *arr, const void *element)
+scl_error_t scl_carray_push(scl_allocator_t *alloc, scl_concurrent_array_t *arr, const void  *SCL_RESTRICT element)
 {
     (void)alloc;
-    if (!arr || !element) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!arr || !element)) return SCL_ERR_NULL_PTR;
     size_t old = atomic_load_explicit(&arr->count, memory_order_relaxed);
     while (1) {
-        if (old >= arr->capacity) return SCL_ERR_FULL;
+        if (scl_unlikely(old >= arr->capacity)) return SCL_ERR_FULL;
         if (atomic_compare_exchange_weak_explicit(&arr->count, &old, old + 1,
                 memory_order_acquire, memory_order_relaxed))
             break;
@@ -51,7 +51,7 @@ scl_error_t scl_carray_push(scl_allocator_t *alloc, scl_concurrent_array_t *arr,
 
 scl_error_t scl_carray_pop(scl_concurrent_array_t *arr, void *out)
 {
-    if (!arr || !out) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!arr || !out)) return SCL_ERR_NULL_PTR;
     size_t old = atomic_load_explicit(&arr->count, memory_order_relaxed);
     while (1) {
         if (old == 0) return SCL_ERR_EMPTY;
@@ -66,11 +66,11 @@ scl_error_t scl_carray_pop(scl_concurrent_array_t *arr, void *out)
     return SCL_OK;
 }
 
-scl_error_t scl_carray_get(const scl_concurrent_array_t *arr, size_t index, void *out)
+scl_error_t scl_carray_get(const scl_concurrent_array_t *arr, size_t index, void  *SCL_RESTRICT out)
 {
-    if (!arr || !out) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!arr || !out)) return SCL_ERR_NULL_PTR;
     size_t cnt = atomic_load_explicit(&arr->count, memory_order_acquire);
-    if (index >= cnt) return SCL_ERR_INVALID_INDEX;
+    if (scl_unlikely(index >= cnt)) return SCL_ERR_INVALID_INDEX;
     size_t offset;
     if (scl_mul_overflow(index, arr->element_size, &offset))
         return SCL_ERR_SIZE_OVERFLOW;
@@ -78,11 +78,11 @@ scl_error_t scl_carray_get(const scl_concurrent_array_t *arr, size_t index, void
     return SCL_OK;
 }
 
-scl_error_t scl_carray_set(scl_concurrent_array_t *arr, size_t index, const void *element)
+scl_error_t scl_carray_set(scl_concurrent_array_t *arr, size_t index, const void  *SCL_RESTRICT element)
 {
-    if (!arr || !element) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!arr || !element)) return SCL_ERR_NULL_PTR;
     size_t cnt = atomic_load_explicit(&arr->count, memory_order_acquire);
-    if (index >= cnt) return SCL_ERR_INVALID_INDEX;
+    if (scl_unlikely(index >= cnt)) return SCL_ERR_INVALID_INDEX;
     size_t offset;
     if (scl_mul_overflow(index, arr->element_size, &offset))
         return SCL_ERR_SIZE_OVERFLOW;

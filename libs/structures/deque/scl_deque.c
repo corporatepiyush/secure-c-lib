@@ -7,8 +7,8 @@
 
 scl_error_t scl_deque_init(scl_allocator_t *alloc, scl_deque_t *deque, size_t element_size, size_t initial_capacity)
 {
-    if (!deque) return SCL_ERR_NULL_PTR;
-    if (element_size == 0) return SCL_ERR_INVALID_ARG;
+    if (scl_unlikely(!deque)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(element_size == 0)) return SCL_ERR_INVALID_ARG;
 
     deque->data = NULL;
     deque->element_size = element_size;
@@ -21,7 +21,7 @@ scl_error_t scl_deque_init(scl_allocator_t *alloc, scl_deque_t *deque, size_t el
         if (scl_mul_overflow(initial_capacity, element_size, &bytes))
             return SCL_ERR_SIZE_OVERFLOW;
         deque->data = scl_alloc(alloc, bytes, alignof(max_align_t));
-        if (!deque->data) return SCL_ERR_OUT_OF_MEMORY;
+        if (scl_unlikely(!deque->data)) return SCL_ERR_OUT_OF_MEMORY;
         deque->capacity = initial_capacity;
     }
     return SCL_OK;
@@ -46,7 +46,7 @@ static scl_error_t scl_deque_grow(scl_allocator_t *alloc, scl_deque_t *deque)
         return SCL_ERR_SIZE_OVERFLOW;
 
     unsigned char *tmp = scl_alloc(alloc, new_bytes, alignof(max_align_t));
-    if (!tmp) return SCL_ERR_OUT_OF_MEMORY;
+    if (scl_unlikely(!tmp)) return SCL_ERR_OUT_OF_MEMORY;
 
     for (size_t i = 0; i < deque->count; i++) {
         size_t src_idx = (deque->head + i) % deque->capacity;
@@ -62,9 +62,9 @@ static scl_error_t scl_deque_grow(scl_allocator_t *alloc, scl_deque_t *deque)
     return SCL_OK;
 }
 
-scl_error_t scl_deque_push_front(scl_allocator_t *alloc, scl_deque_t *deque, const void *element)
+scl_error_t scl_deque_push_front(scl_allocator_t *alloc, scl_deque_t *deque, const void  *SCL_RESTRICT element)
 {
-    if (!deque || !element) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!deque || !element)) return SCL_ERR_NULL_PTR;
 
     if (deque->count == deque->capacity) {
         scl_error_t err = scl_deque_grow(alloc, deque);
@@ -81,9 +81,9 @@ scl_error_t scl_deque_push_front(scl_allocator_t *alloc, scl_deque_t *deque, con
     return SCL_OK;
 }
 
-scl_error_t scl_deque_push_back(scl_allocator_t *alloc, scl_deque_t *deque, const void *element)
+scl_error_t scl_deque_push_back(scl_allocator_t *alloc, scl_deque_t *deque, const void  *SCL_RESTRICT element)
 {
-    if (!deque || !element) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!deque || !element)) return SCL_ERR_NULL_PTR;
 
     if (deque->count == deque->capacity) {
         scl_error_t err = scl_deque_grow(alloc, deque);
@@ -102,7 +102,7 @@ scl_error_t scl_deque_push_back(scl_allocator_t *alloc, scl_deque_t *deque, cons
 
 scl_error_t scl_deque_pop_front(scl_deque_t *deque, void *out)
 {
-    if (!deque || !out) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!deque || !out)) return SCL_ERR_NULL_PTR;
     if (deque->count == 0) return SCL_ERR_EMPTY;
 
     size_t offset;
@@ -117,7 +117,7 @@ scl_error_t scl_deque_pop_front(scl_deque_t *deque, void *out)
 
 scl_error_t scl_deque_pop_back(scl_deque_t *deque, void *out)
 {
-    if (!deque || !out) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!deque || !out)) return SCL_ERR_NULL_PTR;
     if (deque->count == 0) return SCL_ERR_EMPTY;
 
     size_t tail = (deque->head + deque->count - 1) % deque->capacity;
@@ -132,7 +132,7 @@ scl_error_t scl_deque_pop_back(scl_deque_t *deque, void *out)
 
 scl_error_t scl_deque_peek_front(const scl_deque_t *deque, void *out)
 {
-    if (!deque || !out) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!deque || !out)) return SCL_ERR_NULL_PTR;
     if (deque->count == 0) return SCL_ERR_EMPTY;
 
     size_t offset;
@@ -145,7 +145,7 @@ scl_error_t scl_deque_peek_front(const scl_deque_t *deque, void *out)
 
 scl_error_t scl_deque_peek_back(const scl_deque_t *deque, void *out)
 {
-    if (!deque || !out) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!deque || !out)) return SCL_ERR_NULL_PTR;
     if (deque->count == 0) return SCL_ERR_EMPTY;
 
     size_t tail = (deque->head + deque->count - 1) % deque->capacity;
@@ -171,7 +171,7 @@ scl_error_t scl_deque_search(const scl_deque_t *restrict deque, const void *rest
                              int (*cmp)(const void *, const void *),
                              size_t *restrict out_index)
 {
-    if (__builtin_expect(!deque || !key || !cmp || !out_index, 0))
+    if (scl_unlikely(!deque || !key || !cmp || !out_index))
         return SCL_ERR_NULL_PTR;
 
     for (size_t i = 0; i < deque->count; i++) {

@@ -23,7 +23,7 @@ typedef struct {
     slab_pool_t *pools;
 } slab_state_t;
 
-static size_t slab_block_count(size_t block_size) {
+static SCL_ALWAYS_INLINE SCL_PURE size_t slab_block_count(size_t block_size) {
     if (block_size <= 32) return 1024;
     if (block_size <= 128) return 512;
     if (block_size <= 512) return 256;
@@ -31,7 +31,7 @@ static size_t slab_block_count(size_t block_size) {
     return 64;
 }
 
-static size_t slab_pool_index(const slab_state_t *s, size_t size) {
+static SCL_ALWAYS_INLINE SCL_PURE size_t slab_pool_index(const slab_state_t *s, size_t size) {
     for (size_t i = 0; i < s->num_buckets; i++) {
         if (size <= s->bucket_sizes[i])
             return i;
@@ -48,11 +48,11 @@ static int slab_pool_init(slab_state_t *s, slab_pool_t *p, size_t block_size) {
         aligned = sizeof(void *);
 
     size_t total;
-    if (scl_mul_overflow(aligned, blocks, &total))
+    if (scl_unlikely(scl_mul_overflow(aligned, blocks, &total)))
         return 0;
 
     p->chunk = s->backing->malloc_fn(s->backing->state, total, alignof(max_align_t));
-    if (!p->chunk) return 0;
+    if (scl_unlikely(!p->chunk)) return 0;
 
     unsigned char *ptr = (unsigned char *)p->chunk;
     void *prev = NULL;
@@ -72,13 +72,13 @@ static int slab_pool_init(slab_state_t *s, slab_pool_t *p, size_t block_size) {
 static void *slab_malloc_fn(void *state, size_t size, size_t alignment) {
     (void)alignment;
     slab_state_t *s = (slab_state_t *)state;
-    if (!s || size == 0) return NULL;
+    if (scl_unlikely(!s || size == 0)) return NULL;
 
     size_t idx = slab_pool_index(s, size);
-    if (idx >= s->num_buckets) return NULL;
+    if (scl_unlikely(idx >= s->num_buckets)) return NULL;
 
     slab_pool_t *p = &s->pools[idx];
-    if (!p->free_list) return NULL;
+    if (scl_unlikely(!p->free_list)) return NULL;
 
     void *block = p->free_list;
     p->free_list = *(void **)block;
@@ -88,17 +88,17 @@ static void *slab_malloc_fn(void *state, size_t size, size_t alignment) {
 
 static void *slab_calloc_fn(void *state, size_t count, size_t size, size_t alignment) {
     size_t total;
-    if (scl_mul_overflow(count, size, &total)) return NULL;
+    if (scl_unlikely(scl_mul_overflow(count, size, &total))) return NULL;
     void *ptr = slab_malloc_fn(state, total, alignment);
-    if (ptr) memset(ptr, 0, total);
+    if (scl_likely(ptr)) memset(ptr, 0, total);
     return ptr;
 }
 
 static void *slab_realloc_fn(void *state, void *ptr, size_t old_size, size_t new_size, size_t alignment) {
-    if (!ptr) return slab_malloc_fn(state, new_size, alignment);
-    if (new_size == 0) { slab_free_fn(state, ptr); return NULL; }
+    if (scl_unlikely(!ptr)) return slab_malloc_fn(state, new_size, alignment);
+    if (scl_unlikely(new_size == 0)) { slab_free_fn(state, ptr); return NULL; }
     void *new_ptr = slab_malloc_fn(state, new_size, alignment);
-    if (new_ptr) {
+    if (scl_likely(new_ptr)) {
         size_t copy = old_size < new_size ? old_size : new_size;
         memcpy(new_ptr, ptr, copy);
         slab_free_fn(state, ptr);
@@ -108,7 +108,7 @@ static void *slab_realloc_fn(void *state, void *ptr, size_t old_size, size_t new
 
 static void slab_free_fn(void *state, void *ptr) {
     slab_state_t *s = (slab_state_t *)state;
-    if (!s || !ptr) return;
+    if (scl_unlikely(!s || !ptr)) return;
 
     for (size_t i = 0; i < s->num_buckets; i++) {
         slab_pool_t *p = &s->pools[i];
@@ -125,21 +125,21 @@ static void slab_free_fn(void *state, void *ptr) {
 }
 
 scl_allocator_t *scl_alloc_slab_create(scl_allocator_t *backing, const size_t *bucket_sizes, size_t num_buckets) {
-    if (!backing) return NULL;
+    if (scl_unlikely(!backing)) return NULL;
 
-    if (!bucket_sizes || num_buckets == 0) {
+    if (scl_unlikely(!bucket_sizes || num_buckets == 0)) {
         bucket_sizes = scl_slab_default_sizes;
         num_buckets = SCL_SLAB_DEFAULT_NUM;
     }
 
     slab_state_t *state = (slab_state_t *)backing->malloc_fn(backing->state, sizeof(slab_state_t), alignof(max_align_t));
-    if (!state) return NULL;
+    if (scl_unlikely(!state)) return NULL;
 
     state->backing = backing;
     state->num_buckets = num_buckets;
 
     state->bucket_sizes = (size_t *)backing->malloc_fn(backing->state, num_buckets * sizeof(size_t), alignof(max_align_t));
-    if (!state->bucket_sizes) {
+    if (scl_unlikely(!state->bucket_sizes)) {
         backing->free_fn(backing->state, state);
         return NULL;
     }
@@ -147,7 +147,7 @@ scl_allocator_t *scl_alloc_slab_create(scl_allocator_t *backing, const size_t *b
         state->bucket_sizes[i] = bucket_sizes[i];
 
     state->pools = (slab_pool_t *)backing->malloc_fn(backing->state, num_buckets * sizeof(slab_pool_t), alignof(max_align_t));
-    if (!state->pools) {
+    if (scl_unlikely(!state->pools)) {
         backing->free_fn(backing->state, state->bucket_sizes);
         backing->free_fn(backing->state, state);
         return NULL;
@@ -156,7 +156,7 @@ scl_allocator_t *scl_alloc_slab_create(scl_allocator_t *backing, const size_t *b
         memset(&state->pools[i], 0, sizeof(slab_pool_t));
 
     for (size_t i = 0; i < num_buckets; i++) {
-        if (!slab_pool_init(state, &state->pools[i], state->bucket_sizes[i])) {
+        if (scl_unlikely(!slab_pool_init(state, &state->pools[i], state->bucket_sizes[i]))) {
             for (size_t j = 0; j < i; j++)
                 backing->free_fn(backing->state, state->pools[j].chunk);
             backing->free_fn(backing->state, state->pools);
@@ -167,7 +167,7 @@ scl_allocator_t *scl_alloc_slab_create(scl_allocator_t *backing, const size_t *b
     }
 
     scl_allocator_t *alloc = (scl_allocator_t *)backing->malloc_fn(backing->state, sizeof(scl_allocator_t), alignof(max_align_t));
-    if (!alloc) {
+    if (scl_unlikely(!alloc)) {
         for (size_t i = 0; i < num_buckets; i++)
             backing->free_fn(backing->state, state->pools[i].chunk);
         backing->free_fn(backing->state, state->pools);
@@ -185,7 +185,7 @@ scl_allocator_t *scl_alloc_slab_create(scl_allocator_t *backing, const size_t *b
 }
 
 void scl_alloc_slab_destroy(scl_allocator_t *alloc) {
-    if (!alloc) return;
+    if (scl_unlikely(!alloc)) return;
     slab_state_t *s = (slab_state_t *)alloc->state;
     scl_allocator_t *backing = s->backing;
     for (size_t i = 0; i < s->num_buckets; i++) {

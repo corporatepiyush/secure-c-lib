@@ -4,16 +4,16 @@
 
 #include "scl_interpolation.h"
 
-scl_error_t scl_search_interpolation_search(const int64_t *restrict arr, size_t count, int64_t key, size_t *restrict out_index)
+scl_error_t scl_search_interpolation_search(const int64_t * arr, size_t count, int64_t key, size_t * out_index)
 {
-    if (__builtin_expect(arr == NULL, 0)) return SCL_ERR_NULL_PTR;
-    if (__builtin_expect(out_index == NULL, 0)) return SCL_ERR_NULL_PTR;
-    if (__builtin_expect(count == 0, 0)) return SCL_ERR_EMPTY;
+    if (scl_unlikely(arr == NULL)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(out_index == NULL)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(count == 0)) return SCL_ERR_EMPTY;
 
     size_t lo = 0, hi = count - 1;
 
     while (lo <= hi && key >= arr[lo] && key <= arr[hi]) {
-        if (__builtin_expect(lo == hi, 0)) {
+        if (scl_unlikely(lo == hi)) {
             if (arr[lo] == key) {
                 *out_index = lo;
                 return SCL_OK;

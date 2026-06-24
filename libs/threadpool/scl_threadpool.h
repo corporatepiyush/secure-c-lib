@@ -10,6 +10,33 @@
 #include "scl_atomic.h"
 #include "scl_pthread.h"
 
+/*
+ * scl_threadpool.h — fixed-size worker thread pool.
+ *
+ * Queues tasks (function + void *arg) and executes them in FIFO order
+ * across a fixed set of worker threads.  Designed for use in the HTTP
+ * server's connection handler path — tasks are short-lived and the
+ * pool lives for the lifetime of the server.
+ *
+ * KEY PROPERTIES
+ * ──────────────
+ *   - Fixed thread count (set at init); no dynamic thread creation.
+ *   - Bounded thread count — enforce an upper limit to prevent
+ *     accidental resource exhaustion (# cores * 2 or 64, whichever
+ *     is smaller, is a reasonable default; we cap at 128).
+ *   - Lock-free task submission: only the enqueue/dispatch hot path
+ *     takes the mutex; worker threads block on the condition variable.
+ *   - Wait/drain: scl_threadpool_wait blocks until the queue is empty
+ *     AND all in-flight tasks complete.
+ *   - Safe shutdown: scl_threadpool_destroy signals all workers,
+ *     joins them, then drains any remaining queued tasks.
+ *   - Allocator-aware: all internal allocations (thread handle array,
+ *     task nodes) go through the caller-supplied scl_allocator_t.
+ */
+
+/* Maximum sensible thread count; avoids resource exhaustion. */
+#define SCL_THREADPOOL_MAX_THREADS 128u
+
 typedef void (*scl_threadpool_task_fn)(void *arg);
 
 typedef struct scl_threadpool_task {

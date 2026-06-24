@@ -152,6 +152,19 @@ scl_error_t scl_http_client_init(scl_allocator_t *alloc,
 /* Free all resources (closes any open connection). */
 void scl_http_client_destroy(scl_http_client_t *c);
 
+/* Convenience: free the response body and headers allocated by a previous
+ * call to scl_http_client_request(). This lets callers keep responses
+ * past the next request without leaking. Safe to call with a zeroed-out
+ * response (checks for NULL pointers). After calling this, the response
+ * struct should be re-initialised before reuse (scl_memset to 0). */
+void scl_http_client_request_free(scl_allocator_t *alloc,
+                                  scl_http_client_response_t *resp);
+
+/* Set receive timeout (ms) for the current connection. 0 = no timeout.
+ * Affects subsequent recv() calls. The default is
+ * SCL_HTTP_CLIENT_DEFAULT_TIMEOUT_MS (15000). */
+void scl_http_client_set_timeout(scl_http_client_t *c, int64_t timeout_ms);
+
 /* ── Connection management ────────────────────────────────────────
  *
  * Normally you do not call these directly — request() calls connect()

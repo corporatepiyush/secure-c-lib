@@ -20,12 +20,12 @@ typedef struct {
     atomic_size_t count;
 } scl_concurrent_queue_t;
 
-scl_error_t scl_cqueue_init(scl_allocator_t *alloc, scl_concurrent_queue_t *queue, size_t element_size) SCL_WARN_UNUSED;
-void        scl_cqueue_destroy(scl_allocator_t *alloc, scl_concurrent_queue_t *queue);
-scl_error_t scl_cqueue_enqueue(scl_allocator_t *alloc, scl_concurrent_queue_t *queue, const void *element) SCL_WARN_UNUSED;
-scl_error_t scl_cqueue_dequeue(scl_allocator_t *alloc, scl_concurrent_queue_t *queue, void *out) SCL_WARN_UNUSED;
-size_t      scl_cqueue_count(const scl_concurrent_queue_t *queue);
-bool        scl_cqueue_empty(const scl_concurrent_queue_t *queue);
+scl_error_t scl_cqueue_init(scl_allocator_t *SCL_RESTRICT alloc, scl_concurrent_queue_t *SCL_RESTRICT queue, size_t element_size) SCL_WARN_UNUSED;
+void        scl_cqueue_destroy(scl_allocator_t *SCL_RESTRICT alloc, scl_concurrent_queue_t *SCL_RESTRICT queue);
+scl_error_t scl_cqueue_enqueue(scl_allocator_t *SCL_RESTRICT alloc, scl_concurrent_queue_t *SCL_RESTRICT queue, const void *SCL_RESTRICT element) SCL_WARN_UNUSED;
+scl_error_t scl_cqueue_dequeue(scl_allocator_t *SCL_RESTRICT alloc, scl_concurrent_queue_t *SCL_RESTRICT queue, void *SCL_RESTRICT out) SCL_WARN_UNUSED;
+SCL_PURE size_t      scl_cqueue_count(const scl_concurrent_queue_t *SCL_RESTRICT queue);
+SCL_PURE bool        scl_cqueue_empty(const scl_concurrent_queue_t *SCL_RESTRICT queue);
 
 #ifdef __GNUC__
 #pragma GCC diagnostic pop

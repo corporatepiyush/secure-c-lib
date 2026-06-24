@@ -13,6 +13,44 @@
  * lock-free stack requires for memory safety. acquire()/release() and the
  * ready-queue post/get paths take no locks.
  *
+ * ── Security design ──────────────────────────────────────────────────────────
+ *
+ * The pool provides the foundation for the HTTP server's connection handling;
+ * its security posture is therefore critical:
+ *
+ *   1. Pre-allocation: All connection slots and read buffers are allocated
+ *      once at init() time. This eliminates use-after-free on the data-path
+ *      (the most common lock-free memory-safety bug) and bounds the server's
+ *      memory footprint regardless of how many connections arrive.
+ *
+ *   2. Buffer scrubbing: Release() calls scl_secure_zero on the connection's
+ *      read buffer so no request/response data survives between users. This
+ *      prevents a malicious client from finding another user's data in the
+ *      buffer (the pool analogue of Heartbleed's information disclosure).
+ *
+ *   3. Capacity limits: acquire() returns NULL when all slots are busy,
+ *      bounding the number of simultaneously handled connections. The caller
+ *      (the server's acceptor) drops excess connections rather than queuing
+ *      them indefinitely, providing implicit back-pressure.
+ *
+ *   4. No inline allocation on the data-path: acquire, post, get, release all
+ *      operate on pre-existing slot objects — no malloc/free. This eliminates
+ *      entire classes of memory-exhaustion and fragmentation attacks.
+ *
+ * ── Why lock-free? ───────────────────────────────────────────────────────────
+ *
+ * A mutex-based pool would serialise the accept/dispatch paths under high
+ * concurrency. Lock-free (stack + MPMC) means the acceptor thread never blocks
+ * when handing a connection to a worker, and workers never block when returning
+ * a slot. The only blocking primitive in the server is a condvar that parks
+ * *idle* workers — not the critical path.
+ *
+ * ── Integration note ─────────────────────────────────────────────────────────
+ *
+ * The pool is designed to be embedded in a server (like scl_http_server) but
+ * is generic enough for any TCP-based worker-pool pattern. The DDoS mitigation
+ * module (scl_net_ddos.h) can be plugged in at the accept/post boundary.
+ *
  * The socket helpers are POSIX-only (portable across Linux/macOS/BSD); no
  * OS-specific #ifdef appears here, per project policy.
  */

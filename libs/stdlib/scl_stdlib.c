@@ -3,18 +3,36 @@
 #include <errno.h>
 #include <limits.h>
 #include <stdio.h>
+#include <float.h>
+#include <string.h>
 
 /*
- * scl_stdlib -- secure proxy over <stdlib.h>.
+ * scl_stdlib.c — secure proxy over <stdlib.h>.
  *
- * Key improvements over raw libc:
- *   - NULL-pointer guard: every string argument is checked; NULL
- *     returns 0 / 0.0 / NULL (safe degradation, not UB).
- *   - Overflow-safe abs: scl_abs(INT_MIN) returns INT_MAX instead of UB
- *     (two's complement negation wraps around in C; we cap it).
- *   - strtol/strtoul wrappers clear errno before the call and detect
- *     ERANGE so callers can distinguish overflow from valid parsing.
- *   - strtol endptr is still NULL-checked before dereference.
+ * DESIGN RATIONALE
+ * ────────────────
+ * The wrappers exist so that callers never need to #include <stdlib.h>
+ * directly.  This gives us a single point to add security hardening:
+ *
+ *   - Every string argument is NULL-guarded.  Passing NULL returns 0 /
+ *     0.0 / NULL instead of crashing or producing UB.
+ *   - Overflow-safe abs: scl_abs(INT_MIN) returns INT_MAX instead of
+ *     the UB that two's-complement negation produces.
+ *   - strtol/strtoul family: errno is cleared before the call and
+ *     checked for ERANGE afterwards.  The standard functions do not
+ *     have to set errno on success, so callers that forget to clear
+ *     errno can see stale values.
+ *   - scl_rand is backed by a CSPRNG (arc4random on BSD, /dev/urandom
+ *     on Linux), never the predictable libc rand() which is a linear
+ *     congruential generator with a 32-bit state.
+ *   - scl_strtod checks ERANGE so callers don't have to.
+ *   - scl_realloc provides a safe resize-with-copy that works with the
+ *     project's allocator abstraction and never leaks on failure.
+ *
+ * Integer conversion — atoi / atol / atoll
+ * ────────────────────────────────────────
+ * These are simple wrappers.  The real value of the scl_* versions
+ * is the NULL guard — atoi(NULL) is UB in C.
  */
 
 int scl_atoi(const char *str) {
@@ -31,6 +49,15 @@ long long scl_atoll(const char *str) {
     if (scl_unlikely(!str)) return 0;
     return atoll(str);
 }
+
+/*
+ * strtol / strtoul family — with errno discipline.
+ *
+ * The standard functions may leave errno unchanged on success, so a
+ * caller that forgets to clear errno before calling can wrongly
+ * detect overflow.  We clear errno ourselves and only return the
+ * saturated value when the call actually set ERANGE.
+ */
 
 long scl_strtol(const char *str, char **endptr, int base) {
     if (scl_unlikely(!str)) { if (endptr) *endptr = NULL; return 0; }
@@ -64,6 +91,15 @@ unsigned long long scl_strtoull(const char *str, char **endptr, int base) {
     return ret;
 }
 
+/*
+ * Floating point — atof / strtod
+ *
+ * scl_strtod checks errno for ERANGE so callers don't have to.  This
+ * is important because strtod can underflow to 0.0 on tiny values and
+ * overflow to HUGE_VAL on large ones; the caller cannot distinguish a
+ * genuine "0.0" from an underflow without errno.
+ */
+
 double scl_atof(const char *str) {
     if (scl_unlikely(!str)) return 0.0;
     return atof(str);
@@ -71,8 +107,20 @@ double scl_atof(const char *str) {
 
 double scl_strtod(const char *str, char **endptr) {
     if (scl_unlikely(!str)) { if (endptr) *endptr = NULL; return 0.0; }
-    return strtod(str, endptr);
+    errno = 0;
+    double ret = strtod(str, endptr);
+    if (errno == ERANGE) {
+        return (ret >= 0.0) ? DBL_MAX : -DBL_MAX;
+    }
+    return ret;
 }
+
+/*
+ * Absolute value — overflow-safe.
+ *
+ * In two's complement, abs(INT_MIN) = INT_MIN (UB in C, but the
+ * hardware wraps).  We cap at INT_MAX / LONG_MAX / LLONG_MAX.
+ */
 
 int scl_abs(int x) {
     if (scl_unlikely(x == INT_MIN)) return INT_MAX;
@@ -89,7 +137,19 @@ long long scl_llabs(long long x) {
     return llabs(x);
 }
 
-/* Random numbers — backed by system CSPRNG */
+/*
+ * Random numbers — backed by system CSPRNG.
+ *
+ * On BSD/macOS we use arc4random (which returns 2³¹-1 values).
+ * On Linux we read from /dev/urandom (non-blocking kernel CSPRNG).
+ * We never use libc rand() because its LCG state is tiny and
+ * predictable.
+ *
+ * scl_srand exists only for source-level compatibility with existing
+ * code; it is a no-op.  Seeding a CSPRNG not only unnecessary but
+ * dangerous — user-provided seeds reduce entropy.
+ */
+
 int scl_rand(void) {
 #if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
     return (int)(arc4random() & INT_MAX);
@@ -97,16 +157,26 @@ int scl_rand(void) {
     unsigned int val = 0;
     FILE *f = fopen("/dev/urandom", "rb");
     if (f) {
-        if (fread(&val, sizeof(val), 1, f) == 1) { fclose(f); return (int)(val & INT_MAX); }
+        size_t r = fread(&val, sizeof(val), 1, f);
+        (void)r;
         fclose(f);
     }
-    return 0;
+    return (int)(val & INT_MAX);
 #endif
 }
 
 void scl_srand(unsigned int seed) {
     (void)seed;
 }
+
+/*
+ * Environment — scl_getenv.
+ *
+ * Simply wraps getenv with a NULL guard.  Callers should be aware
+ * that environment variables are global and mutable; in
+ * multi-threaded programs the returned string can be overwritten by
+ * a concurrent setenv call.
+ */
 
 char *scl_getenv(const char *name) {
     if (scl_unlikely(!name)) return NULL;

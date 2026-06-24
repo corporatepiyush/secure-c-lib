@@ -1,3 +1,45 @@
+/*
+ * scl_http_server.c — HTTP/1.1 server implementation.
+ *
+ * ── What this file does ─────────────────────────────────────────────────────
+ *
+ * This is the companion server to scl_http_client.c. It:
+ *
+ *   1. Binds a TCP port and listens for connections.
+ *   2. Accepts connections into a lock-free pool of pre-allocated slots.
+ *   3. Dispatches connections to worker threads via an MPMC queue.
+ *   4. Parses HTTP/1.1 request lines and headers (in-place, on the connection's
+ *      read buffer — no extra per-request malloc).
+ *   5. Responds with static files (from a docroot) or dynamic handler output.
+ *   6. Supports keep-alive, Content-Length, path-traversal defence, and
+ *      percent-decoding.
+ *
+ * ── Security design (first priority) ────────────────────────────────────────
+ *
+ * HTTP servers are exposed to untrusted input on every request. The following
+ * attacks are specifically defended against:
+ *
+ *   • Request smuggling: We reject any Transfer-Encoding header (RFC 7230
+ *     §3.3.1 mandates that Content-Length MUST be ignored when Transfer-
+ *     Encoding is present). No chunked decoding => no TE.TE or CL.TE vectors.
+ *   • Path traversal: Percent-decode the path, reject ".." segments before
+ *     touching the filesystem, then validate via realpath() containment.
+ *   • Encoded NUL (%00): Explicitly rejected in url_decode_path().
+ *   • Buffer overflow: All parsing operates on bounded buffers. Header count
+ *     and target length are capped; per-connection read buffer is bounded.
+ *   • Response splitting: No user-controlled data appears in format strings.
+ *   • Information disclosure: Connection buffers are zeroed on release.
+ *
+ * ── Threading model ─────────────────────────────────────────────────────────
+ *
+ *   • 1 acceptor thread: poll() -> accept() -> acquire slot -> post to MPMC
+ *   • N worker threads: condvar wait -> get from MPMC -> handle -> release
+ *
+ * The data path (acquire/post/get/release) is lock-free (Treiber stack +
+ * Vyukov MPMC). A condvar semaphore parks idle workers only — not on the
+ * data path, so there is no mutex contention under load.
+ */
+
 #if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC optimize ("O2")
 #endif
@@ -23,7 +65,21 @@
 #define SCL_HTTP_MAX_TARGET  8190
 #define SCL_HTTP_SEND_CHUNK  (64 * 1024)
 
-/* ── Server object ──────────────────────────────────────────── */
+/*
+ * ── Server object ──────────────────────────────────────────────────────
+ *
+ * The server struct is intentionally opaque (typedef'd in the header).
+ * Internal state includes:
+ *   • alloc — the allocator used for worker array and internal allocations
+ *   • cfg — snapshot of the user's config (defaults applied at init)
+ *   • server_name — copied into a fixed buffer (no dangling pointer risk)
+ *   • docroot_real — realpath() resolved docroot (used for containment check)
+ *   • listen_fd / bound_port — bound socket and resolved port
+ *   • pool — the lock-free connection pool
+ *   • threads — acceptor thread + worker threads
+ *   • sem_* — condvar-based semaphore for parking idle workers
+ *   • running / started — atomic flags for lifecycle control
+ */
 struct scl_http_server {
     scl_allocator_t   *alloc;
     scl_http_config_t  cfg;
@@ -106,7 +162,15 @@ static const char *mime_for_path(const char *path) {
     return scl_http_mime_for_ext(ext);
 }
 
-/* ── Status text ────────────────────────────────────────────── */
+/*
+ * ── Status line helpers ───────────────────────────────────────────
+ *
+ * These are purely internal helpers for constructing well-formed HTTP
+ * responses. They don't deal with user data, so the security concerns
+ * are about correctness (valid HTTP, consistent headers).
+ */
+
+/* Map integer code to standard reason phrase per RFC 7231 §6. */
 static const char *status_text(int code) {
     switch (code) {
     case 200: return "OK";
@@ -128,8 +192,8 @@ static const char *status_text(int code) {
 
 /* ── Header lookup (case-insensitive) ───────────────────────── */
 static int ci_equal(const char *a, const char *b) {
-    while (*a && *b) {
-        if (scl_tolower((unsigned char)*a) != scl_tolower((unsigned char)*b))
+    while (scl_likely(*a && *b)) {
+        if (scl_unlikely(scl_tolower((unsigned char)*a) != scl_tolower((unsigned char)*b)))
             return 0;
         a++; b++;
     }
@@ -167,7 +231,24 @@ static void http_date(char *out, size_t cap) {
     strftime(out, cap, "%a, %d %b %Y %H:%M:%S GMT", &tmv);
 }
 
-/* ── Percent-decode a path; rejects encoded NUL and bad escapes ─ */
+/*
+ * ── Percent-decoding ────────────────────────────────────────────────────
+ *
+ * URL percent-decoding is a notorious source of parser differential bugs.
+ * The classic attack: the server's URL router sees "/safe%2f..%2fsecret"
+ * but the filesystem layer (which auto-decodes) sees "/safe/../secret".
+ * We decode FIRST, then check for ".." — no differential possible.
+ *
+ * Security checks in this function:
+ *   1. Reject truncated escapes ("%X" at end of string).
+ *   2. Reject invalid hex digits in escapes.
+ *   3. Reject encoded NUL (%00) — this is a parser differential favourite.
+ *      A server that decodes after a strcmp() sees "/foo%00bar" differently
+ *      from one that decodes before, and some C str* functions terminate
+ *      at the NUL.
+ *   4. Reject raw NUL in the source (not just encoded).
+ *   5. Bounds-check output buffer — no overflow.
+ */
 static int hexval(int c) {
     if (c >= '0' && c <= '9') return c - '0';
     if (c >= 'a' && c <= 'f') return c - 'a' + 10;
@@ -198,10 +279,42 @@ static long url_decode_path(const char *src, size_t srclen, char *dst, size_t ds
     return (long)o;
 }
 
-/* ── Path-traversal-safe resolution within docroot ──────────────
- * Returns 0 and fills `resolved` on success; otherwise an HTTP status
- * (404/403). Defeats "..", absolute escapes and symlink escapes via
- * realpath() containment. */
+/*
+ * ── Path-traversal-safe resolution within docroot ────────────────────
+ *
+ * Given a decoded request path, resolve it to an absolute path within the
+ * docroot. Returns 0 on success or an HTTP error code (400/403/404/414).
+ *
+ * The defence has THREE layers (belt-and-suspenders):
+ *
+ *   Layer 1 — Static ".." scan: Before touching the filesystem, we scan
+ *   for "/../" or leading "../" patterns and reject them. This is fast
+ *   and catches the common case without overhead.
+ *
+ *   Layer 2 — realpath() containment: We concatenate docroot_real + path,
+ *   then call realpath() on the candidate (which resolves all symlinks,
+ *   ".." components, etc.). The result MUST have docroot_real as a prefix
+ *   and MUST be followed by '/' or end-of-string. This prevents symlink
+ *   escapes: if the docroot contains a symlink to "/etc", realpath()
+ *   resolves it and the prefix check catches it.
+ *
+ *   Layer 3 — Only Layer 2 for the ".." case too: Even if Layer 1 is
+ *   bypassed (e.g. via Unicode normalization tricks), Layer 2 catches
+ *   it because realpath() resolves ".." and the prefix check fails.
+ *
+ * ── Why not just realpath()? ──────────────────────────────────────────
+ *
+ * Layer 1 exists because realpath() is an expensive syscall (it walks the
+ * directory tree in the kernel). For a simple request like GET /index.html,
+ * the static scan is virtually free and the realpath() call confirms it.
+ * For an attack request like GET /../../../etc/passwd, we fail fast in
+ * Layer 1 before ever calling realpath().
+ *
+ * ── Error codes returned instead of scl_error_t ───────────────────────
+ * This function returns HTTP status codes directly because its caller
+ * (serve_static / handle_connection) needs to send an error response.
+ * Returning 404 vs 403 lets us distinguish "file not found" from
+ * "forbidden traversal attempt" in logs. */
 static int resolve_in_docroot(const scl_http_server_t *srv, const char *decoded_path,
                               char *resolved, size_t cap) {
     if (srv->docroot_real_len == 0) return 404;
@@ -236,7 +349,20 @@ static int resolve_in_docroot(const scl_http_server_t *srv, const char *decoded_
     return 0;
 }
 
-/* ── Response writing ───────────────────────────────────────── */
+/*
+ * ── Response helpers ──────────────────────────────────────────────
+ *
+ * These functions construct and send HTTP responses. The key invariant:
+ * response headers are built with snprintf into fixed-size stack buffers,
+ * so even if a caller passes an enormous body or content_type, we never
+ * overflow a heap buffer — we either truncate or return SCL_ERR_IO.
+ *
+ * Security note: The response format string contains %d and %s for the
+ * status code/reason and content_type/date/server_name. NONE of these
+ * contain user-controlled data (the date is generated locally, the server
+ * name is configured by the operator, content_type is from our own MIME
+ * table or the application handler). This prevents HTTP response splitting.
+ */
 static scl_error_t send_simple(const scl_http_server_t *srv, int fd, int status,
                                const char *content_type, const void *body,
                                size_t body_len, bool head_only, bool close_conn) {
@@ -340,8 +466,33 @@ static scl_error_t serve_static(const scl_http_server_t *srv, int fd,
     return err;
 }
 
-/* ── Request parsing (operates in-place on the connection buffer) ─
- * Returns 0 on success, or an HTTP error status to send. */
+/*
+ * ── Request parsing ─────────────────────────────────────────────────
+ *
+ * Parses an HTTP/1.x request from a NUL-terminated buffer by replacing
+ * CRLF line endings with C NULs and pointing the request struct's fields
+ * at the right offsets within the original buffer. This is ZERO-COPY:
+ * we don't allocate or copy any part of the request — we just NUL-
+ * terminate each piece in place.
+ *
+ * ── Security invariants checked during parsing ──────────────────────
+ *
+ *   • Method is uppercase-alpha only (no injection characters).
+ *   • Target begins with '/' and contains no control characters.
+ *   • Target length is bounded (414 if exceeded).
+ *   • Version is exactly "HTTP/1.0" or "HTTP/1.1" (505 otherwise).
+ *   • Header line count is bounded (excess silently dropped).
+ *   • Each header line must contain ':' (RFC 7230 §3.2.4).
+ *   • Transfer-Encoding is rejected later (501), NOT here — we must
+ *     parse headers to detect it.
+ *
+ * Returns 0 on success, or an HTTP error status to send.
+ *
+ * ── Note on connection-close-after-body ─────────────────────────────
+ * We reject request bodies with force_close because we don't read them
+ * off the wire. If we allowed keep-alive after a request with a body,
+ * the unconsumed body bytes would be interpreted as the next request's
+ * start — a textbook request-smuggling vector. */
 static int parse_request(char *buf, size_t hdr_len, scl_http_request_t *req) {
     (void)scl_memset(req, 0, sizeof(*req));
 
@@ -359,11 +510,11 @@ static int parse_request(char *buf, size_t hdr_len, scl_http_request_t *req) {
 
     /* METHOD SP TARGET SP HTTP/1.x */
     char *sp1 = scl_strchr(line, ' ');
-    if (!sp1) return 400;
+    if (scl_unlikely(!sp1)) return 400;
     *sp1 = '\0';
     char *target = sp1 + 1;
     char *sp2 = scl_strchr(target, ' ');
-    if (!sp2) return 400;
+    if (scl_unlikely(!sp2)) return 400;
     *sp2 = '\0';
     char *version = sp2 + 1;
 
@@ -390,19 +541,19 @@ static int parse_request(char *buf, size_t hdr_len, scl_http_request_t *req) {
 
     /* --- headers --- */
     while (next + 1 < block_end) {
-        if (next[0] == '\r' && next[1] == '\n') break;   /* empty line: end */
+        if (scl_unlikely(next[0] == '\r' && next[1] == '\n')) break;
         char *heol = NULL;
         for (char *p = next; p + 1 < block_end; p++)
-            if (p[0] == '\r' && p[1] == '\n') { heol = p; break; }
-        if (!heol) break;
+            if (scl_likely(p[0] == '\r' && p[1] == '\n')) { heol = p; break; }
+        if (scl_unlikely(!heol)) break;
         *heol = '\0';
 
         char *colon = scl_strchr(next, ':');
-        if (colon) {
+        if (scl_likely(colon != NULL)) {
             *colon = '\0';
             char *val = colon + 1;
             while (*val == ' ' || *val == '\t') val++;
-            if (req->header_count < SCL_HTTP_MAX_HEADERS) {
+            if (scl_likely(req->header_count < SCL_HTTP_MAX_HEADERS)) {
                 req->headers[req->header_count].name  = next;
                 req->headers[req->header_count].value = val;
                 req->header_count++;
@@ -421,14 +572,41 @@ static int parse_request(char *buf, size_t hdr_len, scl_http_request_t *req) {
 
 /* Locate end of header block ("\r\n\r\n"); returns offset past it or 0. */
 static size_t find_header_end(const unsigned char *buf, size_t len) {
-    if (len < 4) return 0;
+    if (scl_unlikely(len < 4)) return 0;
     for (size_t i = 0; i + 3 < len; i++)
-        if (buf[i] == '\r' && buf[i+1] == '\n' && buf[i+2] == '\r' && buf[i+3] == '\n')
+        if (scl_likely(buf[i] == '\r' && buf[i+1] == '\n' &&
+                       buf[i+2] == '\r' && buf[i+3] == '\n'))
             return i + 4;
     return 0;
 }
 
-/* ── Per-connection service loop (keep-alive aware) ─────────── */
+/*
+ * ── Connection handler (keep-alive loop) ──────────────────────────
+ *
+ * This is the main per-connection service routine, called by a worker
+ * thread after it dequeues a connection from the ready queue.
+ *
+ * The loop:
+ *   1. Accumulate data until we have a complete header block ("\r\n\r\n").
+ *   2. Parse the request line and headers (in-place, on the rbuf).
+ *   3. Validate Transfer-Encoding (reject -> 501 + close).
+ *   4. Check Content-Length (non-zero => force close after response).
+ *   5. Decode the URL path (percent-decode) into a stack buffer.
+ *   6. Dispatch to the dynamic handler (if configured) or static serving.
+ *   7. On keep-alive, compact the rbuf to preserve pipelined bytes and
+ *      continue the outer while loop.
+ *
+ * ── Request-smuggling defence ──────────────────────────────────────
+ *
+ * The critical invariant: after sending a response, we must know EXACTLY
+ * where the next request begins. If we leave unconsumed body bytes in the
+ * buffer, they look like the start of the next request. We handle this by:
+ *
+ *   • Rejecting Transfer-Encoding entirely (-> 501, close).
+ *   • If Content-Length > 0, forcing connection close after the response.
+ *   • On keep-alive, compacting the rbuf to preserve only the bytes AFTER
+ *     the header block (if any — these are pipelined requests).
+ */
 static void handle_connection(scl_http_server_t *srv, scl_tcp_conn_t *conn) {
     int fd = conn->fd;
     int served = 0;
@@ -438,22 +616,22 @@ static void handle_connection(scl_http_server_t *srv, scl_tcp_conn_t *conn) {
 
         /* Read until we have a full header block (or hit a limit/timeout). */
         size_t hend = find_header_end(conn->rbuf, conn->rbuf_len);
-        while (hend == 0) {
-            if (conn->rbuf_len >= conn->rbuf_cap) {       /* headers too large */
+        while (scl_unlikely(hend == 0)) {
+            if (scl_unlikely(conn->rbuf_len >= conn->rbuf_cap)) {
                 send_error(srv, fd, 431, false, true);
                 return;
             }
             ssize_t n = recv(fd, conn->rbuf + conn->rbuf_len,
                              conn->rbuf_cap - conn->rbuf_len, 0);
-            if (n > 0) {
+            if (scl_likely(n > 0)) {
                 conn->rbuf_len += (size_t)n;
                 hend = find_header_end(conn->rbuf, conn->rbuf_len);
-            } else if (n == 0) {
-                return;                                    /* peer closed */
+            } else if (scl_unlikely(n == 0)) {
+                return;
             } else if (errno == EINTR) {
                 continue;
-            } else if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                if (served > 0) return;                    /* idle keep-alive: drop */
+            } else if (scl_unlikely(errno == EAGAIN || errno == EWOULDBLOCK)) {
+                if (served > 0) return;
                 send_error(srv, fd, 408, false, true);
                 return;
             } else {
@@ -531,7 +709,36 @@ static void handle_connection(scl_http_server_t *srv, scl_tcp_conn_t *conn) {
     }
 }
 
-/* ── Worker / acceptor threads ──────────────────────────────── */
+/*
+ * ── Worker / acceptor threads ─────────────────────────────────────
+ *
+ * The acceptor thread (acceptor_main) polls the listen fd, accepts new
+ * connections into pool slots, posts them to the ready queue, and wakes
+ * a worker via the condvar semaphore.
+ *
+ * Each worker thread (worker_main) waits on the condvar semaphore, pulls
+ * a connection from the ready queue, services it (handle_connection),
+ * and returns the slot to the free list.
+ *
+ * The condvar semaphore (sem_wait_or_stop / sem_post) parks idle workers
+ * so they don't busy-spin on an empty queue. When the server stops, the
+ * broadcast wakes all workers, they see !running, and exit.
+ *
+ * ── Back-pressure ─────────────────────────────────────────────────
+ *
+ * If acquire() fails (pool at capacity), the acceptor just closes the new
+ * fd — the kernel's listen backlog absorbs the overflow. If post_ready()
+ * fails (MPMC queue full), the acceptor releases the slot and closes the
+ * fd. Either way, excess connections are dropped at the acceptor level,
+ * never queued indefinitely.
+ *
+ * ── Shutdown sequence ─────────────────────────────────────────────
+ *
+ *   1. Set running = false (atomic store).
+ *   2. Broadcast the condvar (wakes all workers).
+ *   3. Join the acceptor thread (it exits on next poll timeout).
+ *   4. Join all worker threads (they exit after sem_wait_or_stop returns).
+ */
 static bool sem_wait_or_stop(scl_http_server_t *srv) {
     scl_mutex_lock(&srv->sem_m);
     while (srv->sem_count == 0 &&

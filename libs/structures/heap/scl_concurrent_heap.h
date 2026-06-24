@@ -19,12 +19,12 @@ typedef struct {
 
 scl_error_t scl_cheap_init(scl_allocator_t *alloc, scl_concurrent_heap_t *heap, size_t element_size,
                           size_t capacity, scl_cmp_func_t cmp) SCL_WARN_UNUSED;
-void        scl_cheap_destroy(scl_allocator_t *alloc, scl_concurrent_heap_t *heap);
-scl_error_t scl_cheap_push(scl_allocator_t *alloc, scl_concurrent_heap_t *heap, const void *element) SCL_WARN_UNUSED;
-scl_error_t scl_cheap_pop(scl_allocator_t *alloc, scl_concurrent_heap_t *heap, void *out) SCL_WARN_UNUSED;
-scl_error_t scl_cheap_peek(scl_concurrent_heap_t *heap, void *out) SCL_WARN_UNUSED;
-size_t      scl_cheap_count(const scl_concurrent_heap_t *heap);
-bool        scl_cheap_empty(const scl_concurrent_heap_t *heap);
+void        scl_cheap_destroy(scl_allocator_t *SCL_RESTRICT alloc, scl_concurrent_heap_t *SCL_RESTRICT heap);
+scl_error_t scl_cheap_push(scl_allocator_t *SCL_RESTRICT alloc, scl_concurrent_heap_t *SCL_RESTRICT heap, const void *SCL_RESTRICT element) SCL_WARN_UNUSED;
+scl_error_t scl_cheap_pop(scl_allocator_t *SCL_RESTRICT alloc, scl_concurrent_heap_t *SCL_RESTRICT heap, void *SCL_RESTRICT out) SCL_WARN_UNUSED;
+scl_error_t scl_cheap_peek(scl_concurrent_heap_t *SCL_RESTRICT heap, void *SCL_RESTRICT out) SCL_WARN_UNUSED;
+SCL_PURE size_t      scl_cheap_count(const scl_concurrent_heap_t *SCL_RESTRICT heap);
+SCL_PURE bool        scl_cheap_empty(const scl_concurrent_heap_t *SCL_RESTRICT heap);
 
 #ifdef __GNUC__
 #pragma GCC diagnostic pop

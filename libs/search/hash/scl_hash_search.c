@@ -19,10 +19,10 @@ static char *str_dup(scl_allocator_t *alloc, const char *s)
     return copy;
 }
 
-scl_error_t scl_search_ht_init(scl_allocator_t *alloc, scl_search_ht_t **ht, size_t capacity)
+scl_error_t scl_search_ht_init(scl_allocator_t * alloc, scl_search_ht_t **SCL_RESTRICT ht, size_t capacity)
 {
-    if (__builtin_expect(ht == NULL, 0)) return SCL_ERR_NULL_PTR;
-    if (__builtin_expect(capacity == 0, 0)) return SCL_ERR_INVALID_ARG;
+    if (scl_unlikely(ht == NULL)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(capacity == 0)) return SCL_ERR_INVALID_ARG;
     scl_search_ht_t *t = (scl_search_ht_t *)scl_alloc(alloc, sizeof(scl_search_ht_t), alignof(max_align_t));
     if (!t) return SCL_ERR_OUT_OF_MEMORY;
     t->entries = (scl_search_ht_entry_t *)scl_calloc(alloc, capacity, sizeof(scl_search_ht_entry_t), alignof(max_align_t));
@@ -34,10 +34,10 @@ scl_error_t scl_search_ht_init(scl_allocator_t *alloc, scl_search_ht_t **ht, siz
     return SCL_OK;
 }
 
-scl_error_t scl_search_ht_insert(scl_search_ht_t *ht, const char *key, void *value)
+scl_error_t scl_search_ht_insert(scl_search_ht_t * ht, const char * key, void * value)
 {
-    if (__builtin_expect(ht == NULL, 0)) return SCL_ERR_NULL_PTR;
-    if (__builtin_expect(key == NULL, 0)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(ht == NULL)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(key == NULL)) return SCL_ERR_NULL_PTR;
     if (ht->count >= ht->capacity / 2) return SCL_ERR_FULL;
 
     size_t idx = hash_str(key, ht->capacity);
@@ -60,12 +60,12 @@ scl_error_t scl_search_ht_insert(scl_search_ht_t *ht, const char *key, void *val
     return SCL_ERR_FULL;
 }
 
-scl_error_t scl_search_ht_search(const scl_search_ht_t *ht, const char *key, void **out_value)
+scl_error_t scl_search_ht_search(const scl_search_ht_t * ht, const char * key, void **SCL_RESTRICT out_value)
 {
-    if (__builtin_expect(ht == NULL, 0)) return SCL_ERR_NULL_PTR;
-    if (__builtin_expect(key == NULL, 0)) return SCL_ERR_NULL_PTR;
-    if (__builtin_expect(out_value == NULL, 0)) return SCL_ERR_NULL_PTR;
-    if (__builtin_expect(ht->count == 0, 0)) return SCL_ERR_EMPTY;
+    if (scl_unlikely(ht == NULL)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(key == NULL)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(out_value == NULL)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(ht->count == 0)) return SCL_ERR_EMPTY;
 
     size_t idx = hash_str(key, ht->capacity);
     for (size_t i = 0; i < ht->capacity; i++) {
@@ -79,11 +79,11 @@ scl_error_t scl_search_ht_search(const scl_search_ht_t *ht, const char *key, voi
     return SCL_ERR_NOT_FOUND;
 }
 
-scl_error_t scl_search_ht_delete(scl_search_ht_t *ht, const char *key)
+scl_error_t scl_search_ht_delete(scl_search_ht_t * ht, const char * key)
 {
-    if (__builtin_expect(ht == NULL, 0)) return SCL_ERR_NULL_PTR;
-    if (__builtin_expect(key == NULL, 0)) return SCL_ERR_NULL_PTR;
-    if (__builtin_expect(ht->count == 0, 0)) return SCL_ERR_EMPTY;
+    if (scl_unlikely(ht == NULL)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(key == NULL)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(ht->count == 0)) return SCL_ERR_EMPTY;
 
     size_t idx = hash_str(key, ht->capacity);
     for (size_t i = 0; i < ht->capacity; i++) {

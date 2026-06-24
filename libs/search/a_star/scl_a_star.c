@@ -15,15 +15,15 @@ static int heuristic(int x1, int y1, int x2, int y2)
     return abs(x1 - x2) + abs(y1 - y2);
 }
 
-scl_error_t scl_search_a_star(scl_allocator_t *alloc, int sx, int sy, int gx, int gy, int **restrict grid, int w, int h, int *restrict px, int *restrict py, size_t *restrict plen, size_t maxplen)
+scl_error_t scl_search_a_star(scl_allocator_t * alloc, int sx, int sy, int gx, int gy, int **SCL_RESTRICT grid, int w, int h, int * px, int * py, size_t * plen, size_t maxplen)
 {
-    if (__builtin_expect(grid == NULL, 0)) return SCL_ERR_NULL_PTR;
-    if (__builtin_expect(px == NULL, 0)) return SCL_ERR_NULL_PTR;
-    if (__builtin_expect(py == NULL, 0)) return SCL_ERR_NULL_PTR;
-    if (__builtin_expect(plen == NULL, 0)) return SCL_ERR_NULL_PTR;
-    if (__builtin_expect(w <= 0 || h <= 0, 0)) return SCL_ERR_EMPTY;
-    if (__builtin_expect(sx < 0 || sx >= w || sy < 0 || sy >= h, 0)) return SCL_ERR_INVALID_INDEX;
-    if (__builtin_expect(gx < 0 || gx >= w || gy < 0 || gy >= h, 0)) return SCL_ERR_INVALID_INDEX;
+    if (scl_unlikely(grid == NULL)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(px == NULL)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(py == NULL)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(plen == NULL)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(w <= 0 || h <= 0)) return SCL_ERR_EMPTY;
+    if (scl_unlikely(sx < 0 || sx >= w || sy < 0 || sy >= h)) return SCL_ERR_INVALID_INDEX;
+    if (scl_unlikely(gx < 0 || gx >= w || gy < 0 || gy >= h)) return SCL_ERR_INVALID_INDEX;
 
     if (grid[sy][sx] != 0 || grid[gy][gx] != 0) return SCL_ERR_INVALID_ARG;
 

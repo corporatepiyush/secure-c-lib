@@ -341,6 +341,41 @@ scl_error_t scl_http_client_connect(scl_http_client_t *c,
     return SCL_OK;
 }
 
+/*
+ * Free the body and headers of a response. This is a convenience wrapper
+ * so callers don't need to call scl_free on the allocator directly.
+ *
+ * Safe to call with a zeroed-out response (checks each pointer for NULL
+ * before freeing). After calling, the response should be zeroed before
+ * reuse to avoid double-free from stale pointers.
+ */
+void scl_http_client_request_free(scl_allocator_t *alloc,
+                                  scl_http_client_response_t *resp) {
+    if (!alloc || !resp) return;
+    scl_free(alloc, resp->headers);
+    resp->headers = NULL;
+    resp->headers_len = 0;
+    resp->header_count = 0;
+    scl_free(alloc, resp->body);
+    resp->body = NULL;
+    resp->body_len = 0;
+    resp->body_cap = 0;
+}
+
+/*
+ * Set the receive timeout for the current TCP connection.
+ * If called before the first request, it takes effect on connect.
+ * If called mid-connection, it sets SO_RCVTIMEO on the live socket.
+ * Timeout of 0 means no timeout (blocking indefinitely).
+ */
+void scl_http_client_set_timeout(scl_http_client_t *c, int64_t timeout_ms) {
+    if (!c || c->fd < 0) return;
+    struct timeval tv;
+    tv.tv_sec  = (long)(timeout_ms / 1000);
+    tv.tv_usec = (long)((timeout_ms % 1000) * 1000);
+    setsockopt(c->fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+}
+
 void scl_http_client_disconnect(scl_http_client_t *c) {
     if (!c) return;
     if (c->fd >= 0) close(c->fd);
@@ -366,9 +401,9 @@ static scl_error_t send_request(scl_http_client_t *c,
                                 const char *extra_headers,
                                 const void *body, size_t body_len) {
     /* Validate method: uppercase alpha only (CRLF injection defence). */
-    if (!method || method[0] == '\0') return SCL_ERR_INVALID_ARG;
+    if (scl_unlikely(!method || method[0] == '\0')) return SCL_ERR_INVALID_ARG;
     for (const char *m = method; *m; m++) {
-        if (*m < 'A' || *m > 'Z') return SCL_ERR_INVALID_ARG;
+        if (scl_unlikely(*m < 'A' || *m > 'Z')) return SCL_ERR_INVALID_ARG;
     }
 
     char reqbuf[8192];
@@ -453,7 +488,7 @@ static scl_error_t send_request(scl_http_client_t *c,
  */
 static long find_crlf(const unsigned char *buf, size_t buf_len, size_t start) {
     for (size_t i = start; i + 1 < buf_len; i++) {
-        if (buf[i] == '\r' && buf[i + 1] == '\n')
+        if (scl_likely(buf[i] == '\r' && buf[i + 1] == '\n'))
             return (long)(i - start);
     }
     return -1;
@@ -464,8 +499,8 @@ static long find_crlf(const unsigned char *buf, size_t buf_len, size_t start) {
  */
 static long find_hdrend(const unsigned char *buf, size_t buf_len) {
     for (size_t i = 0; i + 3 < buf_len; i++) {
-        if (buf[i] == '\r' && buf[i+1] == '\n' &&
-            buf[i+2] == '\r' && buf[i+3] == '\n')
+        if (scl_likely(buf[i] == '\r' && buf[i+1] == '\n' &&
+                       buf[i+2] == '\r' && buf[i+3] == '\n'))
             return (long)i;
     }
     return -1;
@@ -543,18 +578,18 @@ static scl_error_t read_response(scl_http_client_t *c,
 
     while ((hdr_end = find_hdrend(c->rbuf, c->rbuf_len)) < 0) {
         /* Check for oversized headers before reading more. */
-        if (c->rbuf_len >= SCL_HTTP_CLIENT_MAX_HEADER_BUF)
+        if (scl_unlikely(c->rbuf_len >= SCL_HTTP_CLIENT_MAX_HEADER_BUF))
             return SCL_ERR_SIZE_OVERFLOW;
 
         ssize_t n = recv(c->fd, c->rbuf + c->rbuf_len,
                          c->rbuf_cap - c->rbuf_len, 0);
-        if (n > 0) {
+        if (scl_likely(n > 0)) {
             c->rbuf_len += (size_t)n;
             continue;
         }
-        if (n == 0) return SCL_ERR_IO;         /* peer closed during headers */
+        if (scl_unlikely(n == 0)) return SCL_ERR_IO;
         if (errno == EINTR) continue;
-        if (errno == EAGAIN || errno == EWOULDBLOCK) return SCL_ERR_TIMEOUT;
+        if (scl_unlikely(errno == EAGAIN || errno == EWOULDBLOCK)) return SCL_ERR_TIMEOUT;
         return SCL_ERR_IO;
     }
 
@@ -741,15 +776,15 @@ static scl_error_t read_response(scl_http_client_t *c,
             ssize_t n = recv(c->fd,
                              (unsigned char *)resp->body + resp->body_len,
                              to_read, 0);
-            if (n > 0) {
+            if (scl_likely(n > 0)) {
                 resp->body_len += (size_t)n;
-            } else if (n == 0) {
+            } else if (scl_unlikely(n == 0)) {
                 /* Premature close — server sent fewer bytes than promised. */
                 c->conn_close = true;
                 break;
-            } else if (errno == EINTR) {
+            } else if (scl_unlikely(errno == EINTR)) {
                 continue;
-            } else if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            } else if (scl_unlikely(errno == EAGAIN || errno == EWOULDBLOCK)) {
                 return SCL_ERR_TIMEOUT;
             } else {
                 return SCL_ERR_IO;

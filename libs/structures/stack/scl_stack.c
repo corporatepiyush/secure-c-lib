@@ -7,8 +7,8 @@
 
 scl_error_t scl_stack_init(scl_allocator_t *alloc, scl_stack_t *stack, size_t element_size, size_t initial_capacity)
 {
-    if (!stack) return SCL_ERR_NULL_PTR;
-    if (element_size == 0) return SCL_ERR_INVALID_ARG;
+    if (scl_unlikely(!stack)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(element_size == 0)) return SCL_ERR_INVALID_ARG;
 
     stack->data = NULL;
     stack->element_size = element_size;
@@ -20,7 +20,7 @@ scl_error_t scl_stack_init(scl_allocator_t *alloc, scl_stack_t *stack, size_t el
         if (scl_mul_overflow(initial_capacity, element_size, &bytes))
             return SCL_ERR_SIZE_OVERFLOW;
         stack->data = scl_alloc(alloc, bytes, alignof(max_align_t));
-        if (!stack->data) return SCL_ERR_OUT_OF_MEMORY;
+        if (scl_unlikely(!stack->data)) return SCL_ERR_OUT_OF_MEMORY;
         stack->capacity = initial_capacity;
     }
     return SCL_OK;
@@ -36,9 +36,9 @@ void scl_stack_destroy(scl_allocator_t *alloc, scl_stack_t *stack)
     }
 }
 
-scl_error_t scl_stack_push(scl_allocator_t *alloc, scl_stack_t *stack, const void *element)
+scl_error_t scl_stack_push(scl_allocator_t *alloc, scl_stack_t *stack, const void  *SCL_RESTRICT element)
 {
-    if (!stack || !element) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!stack || !element)) return SCL_ERR_NULL_PTR;
 
     size_t cnt = stack->count;
     size_t es = stack->element_size;
@@ -50,7 +50,7 @@ scl_error_t scl_stack_push(scl_allocator_t *alloc, scl_stack_t *stack, const voi
         if (scl_mul_overflow(new_cap, es, &new_bytes))
             return SCL_ERR_SIZE_OVERFLOW;
         unsigned char *tmp = scl_realloc(alloc, stack->data, old_bytes, new_bytes, alignof(max_align_t));
-        if (!tmp) return SCL_ERR_OUT_OF_MEMORY;
+        if (scl_unlikely(!tmp)) return SCL_ERR_OUT_OF_MEMORY;
         stack->data = tmp;
         stack->capacity = new_cap;
     }
@@ -62,7 +62,7 @@ scl_error_t scl_stack_push(scl_allocator_t *alloc, scl_stack_t *stack, const voi
 
 scl_error_t scl_stack_pop(scl_stack_t *stack, void *out)
 {
-    if (!stack || !out) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!stack || !out)) return SCL_ERR_NULL_PTR;
     if (scl_unlikely(stack->count == 0)) return SCL_ERR_EMPTY;
 
     size_t es = stack->element_size;
@@ -73,7 +73,7 @@ scl_error_t scl_stack_pop(scl_stack_t *stack, void *out)
 
 scl_error_t scl_stack_peek(const scl_stack_t *stack, void *out)
 {
-    if (!stack || !out) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!stack || !out)) return SCL_ERR_NULL_PTR;
     if (scl_unlikely(stack->count == 0)) return SCL_ERR_EMPTY;
 
     scl_memcpy(out, stack->data + (stack->count - 1) * stack->element_size, stack->element_size);

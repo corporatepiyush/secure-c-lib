@@ -7,30 +7,30 @@
 #include "scl_stdlib.h"
 #include "scl_string.h"
 
-static inline double fade(double t) {
+static SCL_ALWAYS_INLINE SCL_PURE double fade(double t) {
     return t * t * t * (t * (t * 6.0 - 15.0) + 10.0);
 }
 
-static inline double lerp(double a, double b, double t) {
+static SCL_ALWAYS_INLINE SCL_PURE double lerp(double a, double b, double t) {
     return a + t * (b - a);
 }
 
-static inline double smoothstep(double t) {
+static SCL_ALWAYS_INLINE SCL_PURE double smoothstep(double t) {
     return t * t * (3.0 - 2.0 * t);
 }
 
-static inline double grad1d(int hash, double x) {
+static SCL_ALWAYS_INLINE SCL_PURE double grad1d(int hash, double x) {
     return (hash & 1) ? x : -x;
 }
 
-static inline double grad2d(int hash, double x, double y) {
+static SCL_ALWAYS_INLINE SCL_PURE double grad2d(int hash, double x, double y) {
     int h = hash & 3;
     double u = (h < 2) ? x : y;
     double v = (h < 2) ? y : x;
     return ((h & 1) ? -u : u) + ((h & 2) ? -v : v);
 }
 
-static inline double grad3d(int hash, double x, double y, double z) {
+static SCL_ALWAYS_INLINE SCL_PURE double grad3d(int hash, double x, double y, double z) {
     int h = hash & 15;
     double u = (h < 8) ? x : y;
     double v = (h < 4) ? y : ((h == 12 || h == 14) ? x : z);
@@ -44,8 +44,8 @@ static uint64_t splitmix64(uint64_t *state) {
     return z ^ (z >> 31);
 }
 
-scl_error_t scl_rand_noise_init(scl_rand_noise_t *noise, uint64_t seed) {
-    if (!noise) return SCL_ERR_NULL_PTR;
+scl_error_t scl_rand_noise_init(scl_rand_noise_t * noise, uint64_t seed) {
+    if (scl_unlikely(!noise)) return SCL_ERR_NULL_PTR;
     noise->seed = seed;
     noise->freq = 1.0;
     int arr[256];
@@ -61,8 +61,8 @@ scl_error_t scl_rand_noise_init(scl_rand_noise_t *noise, uint64_t seed) {
     return SCL_OK;
 }
 
-double scl_rand_noise_value1d(scl_rand_noise_t *noise, double x) {
-    if (!noise) return 0.0;
+double scl_rand_noise_value1d(scl_rand_noise_t * noise, double x) {
+    if (scl_unlikely(!noise)) return 0.0;
     double fx = x * noise->freq;
     int ix = (int)scl_floor(fx) & 255;
     double frac = fx - scl_floor(fx);
@@ -74,8 +74,8 @@ double scl_rand_noise_value1d(scl_rand_noise_t *noise, double x) {
     return lerp(va, vb, s);
 }
 
-double scl_rand_noise_value2d(scl_rand_noise_t *noise, double x, double y) {
-    if (!noise) return 0.0;
+double scl_rand_noise_value2d(scl_rand_noise_t * noise, double x, double y) {
+    if (scl_unlikely(!noise)) return 0.0;
     double fx = x * noise->freq, fy = y * noise->freq;
     int ix = (int)scl_floor(fx) & 255;
     int iy = (int)scl_floor(fy) & 255;
@@ -96,8 +96,8 @@ double scl_rand_noise_value2d(scl_rand_noise_t *noise, double x, double y) {
     return lerp(l1, l2, sy);
 }
 
-double scl_rand_noise_perlin1d(scl_rand_noise_t *noise, double x) {
-    if (!noise) return 0.0;
+double scl_rand_noise_perlin1d(scl_rand_noise_t * noise, double x) {
+    if (scl_unlikely(!noise)) return 0.0;
     double fx = x * noise->freq;
     int ix = (int)scl_floor(fx);
     double frac = fx - scl_floor(fx);
@@ -107,8 +107,8 @@ double scl_rand_noise_perlin1d(scl_rand_noise_t *noise, double x) {
     return lerp(n0, n1, f);
 }
 
-double scl_rand_noise_perlin2d(scl_rand_noise_t *noise, double x, double y) {
-    if (!noise) return 0.0;
+double scl_rand_noise_perlin2d(scl_rand_noise_t * noise, double x, double y) {
+    if (scl_unlikely(!noise)) return 0.0;
     double fx = x * noise->freq, fy = y * noise->freq;
     int ix = (int)scl_floor(fx);
     int iy = (int)scl_floor(fy);
@@ -125,8 +125,8 @@ double scl_rand_noise_perlin2d(scl_rand_noise_t *noise, double x, double y) {
     return lerp(x1, x2, v);
 }
 
-double scl_rand_noise_perlin3d(scl_rand_noise_t *noise, double x, double y, double z) {
-    if (!noise) return 0.0;
+double scl_rand_noise_perlin3d(scl_rand_noise_t * noise, double x, double y, double z) {
+    if (scl_unlikely(!noise)) return 0.0;
     double fx = x * noise->freq, fy = y * noise->freq, fz = z * noise->freq;
     int ix = (int)scl_floor(fx);
     int iy = (int)scl_floor(fy);
@@ -156,8 +156,8 @@ double scl_rand_noise_perlin3d(scl_rand_noise_t *noise, double x, double y, doub
     return lerp(y1, y2, w);
 }
 
-double scl_rand_noise_white(scl_rand_noise_t *noise, double x, double y) {
-    if (!noise) return 0.0;
+double scl_rand_noise_white(scl_rand_noise_t * noise, double x, double y) {
+    if (scl_unlikely(!noise)) return 0.0;
     (void)x;
     (void)y;
     uint64_t sm = noise->seed;
@@ -165,8 +165,8 @@ double scl_rand_noise_white(scl_rand_noise_t *noise, double x, double y) {
     return (double)(r & 0x1FFFFFFFFFFFFFULL) / 9007199254740991.0 * 2.0 - 1.0;
 }
 
-double scl_rand_noise_fbm(scl_rand_noise_t *noise, double x, double y, int octaves, double lacunarity, double gain) {
-    if (!noise || octaves < 1) return 0.0;
+double scl_rand_noise_fbm(scl_rand_noise_t * noise, double x, double y, int octaves, double lacunarity, double gain) {
+    if (scl_unlikely(!noise || octaves < 1)) return 0.0;
     double total = 0.0;
     double amplitude = 1.0;
     double max_amplitude = 0.0;

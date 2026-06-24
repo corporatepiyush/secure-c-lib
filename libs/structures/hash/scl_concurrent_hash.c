@@ -17,12 +17,12 @@ static size_t default_hash(const void *key, size_t len)
 scl_error_t scl_chash_init(scl_allocator_t *alloc, scl_concurrent_hash_t *ht, size_t key_size, size_t value_size,
                           size_t bucket_count, scl_hash_func_t hf)
 {
-    if (!ht) return SCL_ERR_NULL_PTR;
-    if (key_size == 0 || value_size == 0 || bucket_count == 0) return SCL_ERR_INVALID_ARG;
+    if (scl_unlikely(!ht)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(key_size == 0 || value_size == 0 || bucket_count == 0)) return SCL_ERR_INVALID_ARG;
     ht->entries = scl_calloc(alloc, bucket_count, sizeof(scl_concurrent_hash_entry_t *), alignof(max_align_t));
-    if (!ht->entries) return SCL_ERR_OUT_OF_MEMORY;
+    if (scl_unlikely(!ht->entries)) return SCL_ERR_OUT_OF_MEMORY;
     ht->buckets = scl_calloc(alloc, bucket_count, sizeof(scl_concurrent_hash_bucket_t), alignof(max_align_t));
-    if (!ht->buckets) {
+    if (scl_unlikely(!ht->buckets)) {
         scl_free(alloc, ht->entries);
         return SCL_ERR_OUT_OF_MEMORY;
     }
@@ -38,12 +38,12 @@ scl_error_t scl_chash_init(scl_allocator_t *alloc, scl_concurrent_hash_t *ht, si
 
 void scl_chash_destroy(scl_allocator_t *alloc, scl_concurrent_hash_t *ht)
 {
-    if (!ht) return;
+    if (scl_unlikely(!ht)) return;
     size_t ksz = ht->key_size;
     size_t vsz = ht->value_size;
     for (size_t i = 0; i < ht->bucket_count; i++) {
         scl_concurrent_hash_entry_t *e = ht->entries[i];
-        while (e) {
+        while (scl_likely(e)) {
             scl_concurrent_hash_entry_t *next = e->next;
             if (e->key)   scl_secure_zero(e->key,   ksz);
             if (e->value) scl_secure_zero(e->value, vsz);
@@ -61,13 +61,13 @@ void scl_chash_destroy(scl_allocator_t *alloc, scl_concurrent_hash_t *ht)
     atomic_store_explicit(&ht->count, 0, memory_order_relaxed);
 }
 
-scl_error_t scl_chash_insert(scl_allocator_t *alloc, scl_concurrent_hash_t *ht, const void *key, const void *value)
+scl_error_t scl_chash_insert(scl_allocator_t *alloc, scl_concurrent_hash_t *ht, const void  *SCL_RESTRICT key, const void *value)
 {
-    if (!ht || !key || !value) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!ht || !key || !value)) return SCL_ERR_NULL_PTR;
     size_t idx = ht->hash_func(key, ht->key_size) % ht->bucket_count;
     scl_spinlock_lock(&ht->buckets[idx].lock);
     scl_concurrent_hash_entry_t *e = ht->entries[idx];
-    while (e) {
+    while (scl_likely(e)) {
         if (scl_memcmp(e->key, key, ht->key_size) == 0) {
             scl_memcpy(e->value, value, ht->value_size);
             scl_spinlock_unlock(&ht->buckets[idx].lock);
@@ -79,7 +79,7 @@ scl_error_t scl_chash_insert(scl_allocator_t *alloc, scl_concurrent_hash_t *ht, 
     if (!n) { scl_spinlock_unlock(&ht->buckets[idx].lock); return SCL_ERR_OUT_OF_MEMORY; }
     n->key = scl_alloc(alloc, ht->key_size, alignof(max_align_t));
     n->value = scl_alloc(alloc, ht->value_size, alignof(max_align_t));
-    if (!n->key || !n->value) {
+    if (scl_unlikely(!n->key || !n->value)) {
         scl_free(alloc, n->key); scl_free(alloc, n->value); scl_free(alloc, n);
         scl_spinlock_unlock(&ht->buckets[idx].lock);
         return SCL_ERR_OUT_OF_MEMORY;
@@ -93,13 +93,13 @@ scl_error_t scl_chash_insert(scl_allocator_t *alloc, scl_concurrent_hash_t *ht, 
     return SCL_OK;
 }
 
-scl_error_t scl_chash_get(const scl_concurrent_hash_t *ht, const void *key, void *out_value)
+scl_error_t scl_chash_get(const scl_concurrent_hash_t *ht, const void *key, void  *SCL_RESTRICT out_value)
 {
-    if (!ht || !key || !out_value) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!ht || !key || !out_value)) return SCL_ERR_NULL_PTR;
     size_t idx = ht->hash_func(key, ht->key_size) % ht->bucket_count;
     scl_spinlock_lock(&ht->buckets[idx].lock);
     scl_concurrent_hash_entry_t *e = ht->entries[idx];
-    while (e) {
+    while (scl_likely(e)) {
         if (scl_memcmp(e->key, key, ht->key_size) == 0) {
             scl_memcpy(out_value, e->value, ht->value_size);
             scl_spinlock_unlock(&ht->buckets[idx].lock);
@@ -111,14 +111,14 @@ scl_error_t scl_chash_get(const scl_concurrent_hash_t *ht, const void *key, void
     return SCL_ERR_NOT_FOUND;
 }
 
-scl_error_t scl_chash_remove(scl_allocator_t *alloc, scl_concurrent_hash_t *ht, const void *key)
+scl_error_t scl_chash_remove(scl_allocator_t *alloc, scl_concurrent_hash_t *ht, const void  *SCL_RESTRICT key)
 {
-    if (!ht || !key) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!ht || !key)) return SCL_ERR_NULL_PTR;
     size_t idx = ht->hash_func(key, ht->key_size) % ht->bucket_count;
     scl_spinlock_lock(&ht->buckets[idx].lock);
     scl_concurrent_hash_entry_t **prev = &ht->entries[idx];
     scl_concurrent_hash_entry_t *e = ht->entries[idx];
-    while (e) {
+    while (scl_likely(e)) {
         if (scl_memcmp(e->key, key, ht->key_size) == 0) {
             *prev = e->next;
             scl_secure_zero(e->key,   ht->key_size);
@@ -139,11 +139,11 @@ scl_error_t scl_chash_remove(scl_allocator_t *alloc, scl_concurrent_hash_t *ht, 
 
 bool scl_chash_contains(const scl_concurrent_hash_t *ht, const void *key)
 {
-    if (!ht || !key) return false;
+    if (scl_unlikely(!ht || !key)) return false;
     size_t idx = ht->hash_func(key, ht->key_size) % ht->bucket_count;
     scl_spinlock_lock(&ht->buckets[idx].lock);
     scl_concurrent_hash_entry_t *e = ht->entries[idx];
-    while (e) {
+    while (scl_likely(e)) {
         if (scl_memcmp(e->key, key, ht->key_size) == 0) {
             scl_spinlock_unlock(&ht->buckets[idx].lock);
             return true;

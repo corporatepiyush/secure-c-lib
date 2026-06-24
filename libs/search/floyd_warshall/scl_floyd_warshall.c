@@ -6,11 +6,11 @@
 #include <limits.h>
 #include <stdlib.h>
 
-scl_error_t scl_search_floyd_warshall(int n, const scl_edge_t *edges, size_t ecount, int64_t *restrict dist)
+scl_error_t scl_search_floyd_warshall(int n, const scl_edge_t * edges, size_t ecount, int64_t * dist)
 {
-    if (__builtin_expect(edges == NULL, 0)) return SCL_ERR_NULL_PTR;
-    if (__builtin_expect(dist == NULL, 0)) return SCL_ERR_NULL_PTR;
-    if (__builtin_expect(n <= 0, 0)) return SCL_ERR_EMPTY;
+    if (scl_unlikely(edges == NULL)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(dist == NULL)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(n <= 0)) return SCL_ERR_EMPTY;
 
     for (int i = 0; i < n; i++) {
         for (int j = 0; j < n; j++) {

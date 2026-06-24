@@ -7,8 +7,8 @@
 
 scl_error_t scl_array_init(scl_allocator_t *alloc, scl_array_t *arr, size_t element_size, size_t initial_capacity)
 {
-    if (!arr) return SCL_ERR_NULL_PTR;
-    if (element_size == 0) return SCL_ERR_INVALID_ARG;
+    if (scl_unlikely(!arr)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(element_size == 0)) return SCL_ERR_INVALID_ARG;
 
     arr->data = NULL;
     arr->element_size = element_size;
@@ -20,7 +20,7 @@ scl_error_t scl_array_init(scl_allocator_t *alloc, scl_array_t *arr, size_t elem
         if (scl_mul_overflow(initial_capacity, element_size, &bytes))
             return SCL_ERR_SIZE_OVERFLOW;
         arr->data = scl_alloc(alloc, bytes, alignof(max_align_t));
-        if (!arr->data) return SCL_ERR_OUT_OF_MEMORY;
+        if (scl_unlikely(!arr->data)) return SCL_ERR_OUT_OF_MEMORY;
         arr->capacity = initial_capacity;
     }
     return SCL_OK;
@@ -38,7 +38,7 @@ void scl_array_destroy(scl_allocator_t *alloc, scl_array_t *arr)
 
 scl_error_t scl_array_reserve(scl_allocator_t *alloc, scl_array_t *arr, size_t new_capacity)
 {
-    if (!arr) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!arr)) return SCL_ERR_NULL_PTR;
     if (new_capacity <= arr->capacity) return SCL_OK;
 
     size_t old_bytes, new_bytes;
@@ -48,16 +48,16 @@ scl_error_t scl_array_reserve(scl_allocator_t *alloc, scl_array_t *arr, size_t n
         return SCL_ERR_SIZE_OVERFLOW;
 
     unsigned char *tmp = scl_realloc(alloc, arr->data, old_bytes, new_bytes, alignof(max_align_t));
-    if (!tmp) return SCL_ERR_OUT_OF_MEMORY;
+    if (scl_unlikely(!tmp)) return SCL_ERR_OUT_OF_MEMORY;
 
     arr->data = tmp;
     arr->capacity = new_capacity;
     return SCL_OK;
 }
 
-scl_error_t scl_array_push(scl_allocator_t *alloc, scl_array_t *arr, const void *element)
+scl_error_t scl_array_push(scl_allocator_t *alloc, scl_array_t *arr, const void  *SCL_RESTRICT element)
 {
-    if (!arr || !element) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!arr || !element)) return SCL_ERR_NULL_PTR;
 
     size_t cnt = arr->count;
     size_t es = arr->element_size;
@@ -75,7 +75,7 @@ scl_error_t scl_array_push(scl_allocator_t *alloc, scl_array_t *arr, const void 
 
 scl_error_t scl_array_pop(scl_array_t *arr, void *out)
 {
-    if (!arr || !out) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!arr || !out)) return SCL_ERR_NULL_PTR;
     if (scl_unlikely(arr->count == 0)) return SCL_ERR_EMPTY;
 
     size_t es = arr->element_size;
@@ -84,28 +84,28 @@ scl_error_t scl_array_pop(scl_array_t *arr, void *out)
     return SCL_OK;
 }
 
-scl_error_t scl_array_get(const scl_array_t *arr, size_t index, void *out)
+scl_error_t scl_array_get(const scl_array_t *arr, size_t index, void  *SCL_RESTRICT out)
 {
-    if (!arr || !out) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!arr || !out)) return SCL_ERR_NULL_PTR;
     if (scl_unlikely(index >= arr->count)) return SCL_ERR_INVALID_INDEX;
 
     scl_memcpy(out, arr->data + index * arr->element_size, arr->element_size);
     return SCL_OK;
 }
 
-scl_error_t scl_array_set(scl_array_t *arr, size_t index, const void *element)
+scl_error_t scl_array_set(scl_array_t *arr, size_t index, const void  *SCL_RESTRICT element)
 {
-    if (!arr || !element) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!arr || !element)) return SCL_ERR_NULL_PTR;
     if (scl_unlikely(index >= arr->count)) return SCL_ERR_INVALID_INDEX;
 
     scl_memcpy(arr->data + index * arr->element_size, element, arr->element_size);
     return SCL_OK;
 }
 
-scl_error_t scl_array_insert(scl_allocator_t *alloc, scl_array_t *arr, size_t index, const void *element)
+scl_error_t scl_array_insert(scl_allocator_t *alloc, scl_array_t *arr, size_t index, const void  *SCL_RESTRICT element)
 {
-    if (!arr || !element) return SCL_ERR_NULL_PTR;
-    if (index > arr->count) return SCL_ERR_INVALID_INDEX;
+    if (scl_unlikely(!arr || !element)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(index > arr->count)) return SCL_ERR_INVALID_INDEX;
 
     size_t cnt = arr->count;
     size_t es = arr->element_size;
@@ -128,9 +128,9 @@ scl_error_t scl_array_insert(scl_allocator_t *alloc, scl_array_t *arr, size_t in
     return SCL_OK;
 }
 
-scl_error_t scl_array_remove(scl_array_t *arr, size_t index, void *out)
+scl_error_t scl_array_remove(scl_array_t *arr, size_t index, void  *SCL_RESTRICT out)
 {
-    if (!arr || !out) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!arr || !out)) return SCL_ERR_NULL_PTR;
     if (scl_unlikely(index >= arr->count)) return SCL_ERR_INVALID_INDEX;
 
     size_t es = arr->element_size;
@@ -148,7 +148,7 @@ scl_error_t scl_array_remove(scl_array_t *arr, size_t index, void *out)
 
 scl_error_t scl_array_shrink(scl_allocator_t *alloc, scl_array_t *arr)
 {
-    if (!arr) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!arr)) return SCL_ERR_NULL_PTR;
     if (arr->count == arr->capacity) return SCL_OK;
 
     size_t old_bytes, new_bytes;
@@ -165,7 +165,7 @@ scl_error_t scl_array_shrink(scl_allocator_t *alloc, scl_array_t *arr)
     }
 
     unsigned char *tmp = scl_realloc(alloc, arr->data, old_bytes, new_bytes, alignof(max_align_t));
-    if (!tmp) return SCL_ERR_OUT_OF_MEMORY;
+    if (scl_unlikely(!tmp)) return SCL_ERR_OUT_OF_MEMORY;
 
     arr->data = tmp;
     arr->capacity = arr->count;

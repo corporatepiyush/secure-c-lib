@@ -21,11 +21,11 @@ typedef struct {
     scl_spinlock_t lock;
 } scl_concurrent_graph_t;
 
-scl_error_t scl_cgraph_init(scl_allocator_t *alloc, scl_concurrent_graph_t *g, size_t vertex_count) SCL_WARN_UNUSED;
-void        scl_cgraph_destroy(scl_allocator_t *alloc, scl_concurrent_graph_t *g);
-scl_error_t scl_cgraph_add_edge(scl_allocator_t *alloc, scl_concurrent_graph_t *g, size_t from, size_t to, int weight) SCL_WARN_UNUSED;
-scl_error_t scl_cgraph_remove_edge(scl_allocator_t *alloc, scl_concurrent_graph_t *g, size_t from, size_t to) SCL_WARN_UNUSED;
-bool        scl_cgraph_has_edge(const scl_concurrent_graph_t *g, size_t from, size_t to);
+scl_error_t scl_cgraph_init(scl_allocator_t *SCL_RESTRICT alloc, scl_concurrent_graph_t *SCL_RESTRICT g, size_t vertex_count) SCL_WARN_UNUSED;
+void        scl_cgraph_destroy(scl_allocator_t *SCL_RESTRICT alloc, scl_concurrent_graph_t *SCL_RESTRICT g);
+scl_error_t scl_cgraph_add_edge(scl_allocator_t *SCL_RESTRICT alloc, scl_concurrent_graph_t *SCL_RESTRICT g, size_t from, size_t to, int weight) SCL_WARN_UNUSED;
+scl_error_t scl_cgraph_remove_edge(scl_allocator_t *SCL_RESTRICT alloc, scl_concurrent_graph_t *SCL_RESTRICT g, size_t from, size_t to) SCL_WARN_UNUSED;
+bool        scl_cgraph_has_edge(const scl_concurrent_graph_t *SCL_RESTRICT g, size_t from, size_t to);
 
 #ifdef __GNUC__
 #pragma GCC diagnostic pop

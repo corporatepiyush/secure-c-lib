@@ -8,8 +8,8 @@
 scl_error_t scl_ringbuf_init(scl_allocator_t *alloc, scl_ringbuf_t *rb, size_t element_size, size_t capacity,
                              bool overwrite)
 {
-    if (!rb) return SCL_ERR_NULL_PTR;
-    if (element_size == 0 || capacity == 0) return SCL_ERR_INVALID_ARG;
+    if (scl_unlikely(!rb)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(element_size == 0 || capacity == 0)) return SCL_ERR_INVALID_ARG;
 
     /* Round capacity to next power of 2 for fast bitmask modulo */
     size_t cap = scl_bit_ceil_sz(capacity);
@@ -19,7 +19,7 @@ scl_error_t scl_ringbuf_init(scl_allocator_t *alloc, scl_ringbuf_t *rb, size_t e
         return SCL_ERR_SIZE_OVERFLOW;
 
     rb->data = scl_alloc(alloc, bytes, alignof(max_align_t));
-    if (!rb->data) return SCL_ERR_OUT_OF_MEMORY;
+    if (scl_unlikely(!rb->data)) return SCL_ERR_OUT_OF_MEMORY;
 
     rb->element_size = element_size;
     rb->capacity = cap;
@@ -42,14 +42,14 @@ void scl_ringbuf_destroy(scl_allocator_t *alloc, scl_ringbuf_t *rb)
 
 scl_error_t scl_ringbuf_push(scl_ringbuf_t *rb, const void *element)
 {
-    if (!rb || !element) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!rb || !element)) return SCL_ERR_NULL_PTR;
 
     size_t cnt = rb->count;
     size_t cap = rb->capacity;
     size_t es = rb->element_size;
 
     if (scl_unlikely(cnt == cap)) {
-        if (!rb->overwrite) return SCL_ERR_FULL;
+        if (scl_unlikely(!rb->overwrite)) return SCL_ERR_FULL;
         scl_memcpy(rb->data + rb->head * es, element, es);
         rb->head = (rb->head + 1) & rb->mask;
         return SCL_OK;
@@ -63,7 +63,7 @@ scl_error_t scl_ringbuf_push(scl_ringbuf_t *rb, const void *element)
 
 scl_error_t scl_ringbuf_pop(scl_ringbuf_t *rb, void *out)
 {
-    if (!rb || !out) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!rb || !out)) return SCL_ERR_NULL_PTR;
     if (scl_unlikely(rb->count == 0)) return SCL_ERR_EMPTY;
 
     size_t es = rb->element_size;
@@ -73,9 +73,9 @@ scl_error_t scl_ringbuf_pop(scl_ringbuf_t *rb, void *out)
     return SCL_OK;
 }
 
-scl_error_t scl_ringbuf_peek(const scl_ringbuf_t *rb, size_t index, void *out)
+scl_error_t scl_ringbuf_peek(const scl_ringbuf_t *rb, size_t index, void  *SCL_RESTRICT out)
 {
-    if (!rb || !out) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!rb || !out)) return SCL_ERR_NULL_PTR;
     if (scl_unlikely(index >= rb->count)) return SCL_ERR_INVALID_INDEX;
 
     size_t pos = (rb->head + index) & rb->mask;

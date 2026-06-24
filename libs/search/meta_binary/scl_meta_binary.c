@@ -4,11 +4,11 @@
 
 #include "scl_meta_binary.h"
 
-scl_error_t scl_search_meta_binary_search(const int32_t *restrict arr, size_t count, int32_t key, size_t *restrict out_index)
+scl_error_t scl_search_meta_binary_search(const int32_t * arr, size_t count, int32_t key, size_t * out_index)
 {
-    if (__builtin_expect(arr == NULL, 0)) return SCL_ERR_NULL_PTR;
-    if (__builtin_expect(out_index == NULL, 0)) return SCL_ERR_NULL_PTR;
-    if (__builtin_expect(count == 0, 0)) return SCL_ERR_EMPTY;
+    if (scl_unlikely(arr == NULL)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(out_index == NULL)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(count == 0)) return SCL_ERR_EMPTY;
 
     size_t bit_count = 0;
     size_t tmp = count;

@@ -6,7 +6,7 @@
 #include "scl_stdlib.h"
 #include "scl_string.h"
 
-static inline uint64_t rotl(const uint64_t x, int k) {
+static SCL_ALWAYS_INLINE SCL_PURE uint64_t rotl(const uint64_t x, int k) {
     return (x << k) | (x >> (64 - k));
 }
 
@@ -17,22 +17,22 @@ static uint64_t splitmix64_next(uint64_t *state) {
     return z ^ (z >> 31);
 }
 
-scl_error_t scl_rand_prng_init(scl_rand_prng_t *rng, uint64_t seed) {
-    if (!rng) return SCL_ERR_NULL_PTR;
+scl_error_t scl_rand_prng_init(scl_rand_prng_t * rng, uint64_t seed) {
+    if (scl_unlikely(!rng)) return SCL_ERR_NULL_PTR;
     uint64_t sm = seed;
     for (int i = 0; i < 4; i++)
         rng->state[i] = splitmix64_next(&sm);
     return SCL_OK;
 }
 
-scl_error_t scl_rand_prng_init_array(scl_rand_prng_t *rng, const uint64_t state[4]) {
-    if (!rng || !state) return SCL_ERR_NULL_PTR;
+scl_error_t scl_rand_prng_init_array(scl_rand_prng_t * rng, const uint64_t * state) {
+    if (scl_unlikely(!rng || !state)) return SCL_ERR_NULL_PTR;
     scl_memcpy(rng->state, state, sizeof(rng->state));
     return SCL_OK;
 }
 
-uint64_t scl_rand_prng_next(scl_rand_prng_t *rng) {
-    if (!rng) return 0;
+uint64_t scl_rand_prng_next(scl_rand_prng_t * rng) {
+    if (scl_unlikely(!rng)) return 0;
     const uint64_t result = rotl(rng->state[1] * 5, 7) * 9;
     const uint64_t t = rng->state[1] << 17;
     rng->state[2] ^= rng->state[0];
@@ -44,13 +44,13 @@ uint64_t scl_rand_prng_next(scl_rand_prng_t *rng) {
     return result;
 }
 
-double scl_rand_prng_next_double(scl_rand_prng_t *rng) {
-    if (!rng) return 0.0;
+double scl_rand_prng_next_double(scl_rand_prng_t * rng) {
+    if (scl_unlikely(!rng)) return 0.0;
     return (scl_rand_prng_next(rng) >> 11) * 0x1.0p-53;
 }
 
-uint64_t scl_rand_prng_next_bounded(scl_rand_prng_t *rng, uint64_t bound) {
-    if (!rng || bound == 0) return 0;
+uint64_t scl_rand_prng_next_bounded(scl_rand_prng_t * rng, uint64_t bound) {
+    if (scl_unlikely(!rng || bound == 0)) return 0;
     uint64_t threshold = -bound % bound;
     uint64_t val;
     do {
@@ -59,8 +59,8 @@ uint64_t scl_rand_prng_next_bounded(scl_rand_prng_t *rng, uint64_t bound) {
     return val % bound;
 }
 
-void scl_rand_prng_jump(scl_rand_prng_t *rng) {
-    if (!rng) return;
+void scl_rand_prng_jump(scl_rand_prng_t * rng) {
+    if (scl_unlikely(!rng)) return;
     static const uint64_t JUMP[] = {
         0x180ec6d33cfd0abaULL,
         0xd5a61266f0c9392cULL,
@@ -84,13 +84,13 @@ void scl_rand_prng_jump(scl_rand_prng_t *rng) {
     rng->state[3] = s3;
 }
 
-void scl_rand_prng_get_state(const scl_rand_prng_t *rng, uint64_t out_state[4]) {
-    if (!rng || !out_state) return;
+void scl_rand_prng_get_state(const scl_rand_prng_t * rng, uint64_t * out_state) {
+    if (scl_unlikely(!rng || !out_state)) return;
     scl_memcpy(out_state, rng->state, sizeof(rng->state));
 }
 
-void scl_rand_prng_fill(scl_rand_prng_t *rng, void *buf, size_t len) {
-    if (!rng || !buf) return;
+void scl_rand_prng_fill(scl_rand_prng_t * rng, void * buf, size_t len) {
+    if (scl_unlikely(!rng || !buf)) return;
     unsigned char *p = (unsigned char *)buf;
     size_t i = 0;
     while (i + 8 <= len) {

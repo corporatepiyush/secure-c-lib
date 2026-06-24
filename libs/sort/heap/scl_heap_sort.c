@@ -1,7 +1,7 @@
 #include "scl_heap_sort.h"
 #include <string.h>
 
-static void swap(unsigned char *a, unsigned char *b, size_t element_size)
+static SCL_ALWAYS_INLINE void swap(unsigned char * a, unsigned char * b, size_t element_size)
 {
     while (element_size--) {
         unsigned char t = *a;
@@ -10,7 +10,7 @@ static void swap(unsigned char *a, unsigned char *b, size_t element_size)
     }
 }
 
-static void sift_down(unsigned char *base, size_t start, size_t end,
+static void sift_down(unsigned char * base, size_t start, size_t end,
                       size_t element_size, scl_cmp_func_t cmp)
 {
     size_t root = start;
@@ -28,11 +28,11 @@ static void sift_down(unsigned char *base, size_t start, size_t end,
     }
 }
 
-scl_error_t scl_sort_heap_sort(void *base, size_t count, size_t element_size, scl_cmp_func_t cmp)
+scl_error_t scl_sort_heap_sort(void * base, size_t count, size_t element_size, scl_cmp_func_t cmp)
 {
     unsigned char *ptr = (unsigned char *)base;
-    if (!base || !cmp) return SCL_ERR_NULL_PTR;
-    if (count < 2) return SCL_OK;
+    if (scl_unlikely(!base || !cmp)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(count < 2)) return SCL_OK;
 
     for (size_t i = count / 2; i > 0; i--)
         sift_down(ptr, i - 1, count - 1, element_size, cmp);

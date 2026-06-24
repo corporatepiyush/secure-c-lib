@@ -13,7 +13,7 @@ static scl_concurrent_btree_node_t *create_node(scl_allocator_t *alloc, bool lea
     n->keys = scl_calloc(alloc, 2 * t - 1, sizeof(void *), alignof(max_align_t));
     n->values = scl_calloc(alloc, 2 * t - 1, sizeof(void *), alignof(max_align_t));
     n->children = scl_calloc(alloc, 2 * t, sizeof(scl_concurrent_btree_node_t *), alignof(max_align_t));
-    if (!n->keys || !n->values || !n->children) {
+    if (scl_unlikely(!n->keys || !n->values || !n->children)) {
         scl_free(alloc, n->keys); scl_free(alloc, n->values); scl_free(alloc, n->children); scl_free(alloc, n);
         return NULL;
     }
@@ -28,7 +28,7 @@ static scl_concurrent_btree_node_t *create_node(scl_allocator_t *alloc, bool lea
 
 void scl_cbtree_destroy(scl_allocator_t *alloc, scl_concurrent_btree_t *tree)
 {
-    if (!tree || !tree->root) return;
+    if (scl_unlikely(!tree || !tree->root)) return;
 
     scl_concurrent_btree_node_t *stack[256];
     int sp = 0;
@@ -93,11 +93,11 @@ static void split_child(scl_allocator_t *alloc, scl_concurrent_btree_node_t *x, 
 scl_error_t scl_cbtree_init(scl_allocator_t *alloc, scl_concurrent_btree_t *tree, size_t key_size, size_t value_size,
                            int degree, scl_cmp_func_t cmp)
 {
-    if (!tree) return SCL_ERR_NULL_PTR;
-    if (key_size == 0 || value_size == 0 || degree < 2 || !cmp) return SCL_ERR_INVALID_ARG;
+    if (scl_unlikely(!tree)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(key_size == 0 || value_size == 0 || degree < 2 || !cmp)) return SCL_ERR_INVALID_ARG;
     tree->t = degree;
     tree->root = create_node(alloc, true, degree, key_size, value_size);
-    if (!tree->root) return SCL_ERR_OUT_OF_MEMORY;
+    if (scl_unlikely(!tree->root)) return SCL_ERR_OUT_OF_MEMORY;
     tree->key_size = key_size;
     tree->value_size = value_size;
     atomic_init(&tree->count, 0);
@@ -106,9 +106,9 @@ scl_error_t scl_cbtree_init(scl_allocator_t *alloc, scl_concurrent_btree_t *tree
     return SCL_OK;
 }
 
-scl_error_t scl_cbtree_insert(scl_allocator_t *alloc, scl_concurrent_btree_t *tree, const void *key, const void *value)
+scl_error_t scl_cbtree_insert(scl_allocator_t *alloc, scl_concurrent_btree_t *tree, const void  *SCL_RESTRICT key, const void *value)
 {
-    if (!tree || !key || !value) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!tree || !key || !value)) return SCL_ERR_NULL_PTR;
     scl_spinlock_lock(&tree->lock);
 
     if (tree->root->count == (size_t)(2 * tree->t - 1)) {
@@ -165,13 +165,13 @@ scl_error_t scl_cbtree_insert(scl_allocator_t *alloc, scl_concurrent_btree_t *tr
     return SCL_OK;
 }
 
-scl_error_t scl_cbtree_get(scl_concurrent_btree_t *tree, const void *key, void *out_value)
+scl_error_t scl_cbtree_get(scl_concurrent_btree_t *tree, const void *key, void  *SCL_RESTRICT out_value)
 {
-    if (!tree || !key || !out_value) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!tree || !key || !out_value)) return SCL_ERR_NULL_PTR;
     scl_spinlock_lock(&tree->lock);
 
     scl_concurrent_btree_node_t *node = tree->root;
-    while (node) {
+    while (scl_likely(node)) {
         int i = 0;
         while (i < (int)node->count && tree->cmp(key, node->keys[i]) > 0)
             i++;
@@ -189,10 +189,10 @@ scl_error_t scl_cbtree_get(scl_concurrent_btree_t *tree, const void *key, void *
 
 bool scl_cbtree_contains(scl_concurrent_btree_t *tree, const void *key)
 {
-    if (!tree || !key) return false;
+    if (scl_unlikely(!tree || !key)) return false;
     scl_spinlock_lock(&tree->lock);
     scl_concurrent_btree_node_t *node = tree->root;
-    while (node) {
+    while (scl_likely(node)) {
         int i = 0;
         while (i < (int)node->count && tree->cmp(key, node->keys[i]) > 0)
             i++;
@@ -207,7 +207,7 @@ bool scl_cbtree_contains(scl_concurrent_btree_t *tree, const void *key)
     return false;
 }
 
-scl_error_t scl_cbtree_remove(scl_allocator_t *alloc, scl_concurrent_btree_t *tree, const void *key)
+scl_error_t scl_cbtree_remove(scl_allocator_t *alloc, scl_concurrent_btree_t *tree, const void  *SCL_RESTRICT key)
 {
     (void)alloc;
     (void)tree;

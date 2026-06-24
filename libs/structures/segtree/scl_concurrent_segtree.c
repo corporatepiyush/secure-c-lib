@@ -3,16 +3,16 @@
 
 scl_error_t scl_csegtree_init(scl_allocator_t *alloc, scl_concurrent_segtree_t *tree,
                               size_t n, size_t element_size, const void *data,
-                              void (*combine)(void *out, const void *a, const void *b))
+                              void (*combine)(void *out, const void *a, const void  *SCL_RESTRICT b))
 {
-    if (!tree || !combine || !data) return SCL_ERR_NULL_PTR;
-    if (n == 0 || element_size == 0) return SCL_ERR_INVALID_ARG;
+    if (scl_unlikely(!tree || !combine || !data)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(n == 0 || element_size == 0)) return SCL_ERR_INVALID_ARG;
 
     size_t size = 1;
     while (size < n) size <<= 1;
 
     tree->data = scl_calloc(alloc, 2 * size, element_size, alignof(max_align_t));
-    if (!tree->data) return SCL_ERR_OUT_OF_MEMORY;
+    if (scl_unlikely(!tree->data)) return SCL_ERR_OUT_OF_MEMORY;
     tree->n = n;
     tree->size = size;
     tree->element_size = element_size;
@@ -33,7 +33,7 @@ scl_error_t scl_csegtree_init(scl_allocator_t *alloc, scl_concurrent_segtree_t *
 
 void scl_csegtree_destroy(scl_allocator_t *alloc, scl_concurrent_segtree_t *tree)
 {
-    if (!tree || !tree->data) return;
+    if (scl_unlikely(!tree || !tree->data)) return;
     scl_free(alloc, tree->data);
     tree->data = NULL;
     tree->n = 0;
@@ -44,8 +44,8 @@ scl_error_t scl_csegtree_update(scl_allocator_t *alloc, scl_concurrent_segtree_t
                                 size_t idx, const void *val)
 {
     (void)alloc;
-    if (!tree || !val) return SCL_ERR_NULL_PTR;
-    if (idx >= tree->n) return SCL_ERR_INVALID_INDEX;
+    if (scl_unlikely(!tree || !val)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(idx >= tree->n)) return SCL_ERR_INVALID_INDEX;
 
     scl_spinlock_lock(&tree->lock);
 
@@ -62,10 +62,10 @@ scl_error_t scl_csegtree_update(scl_allocator_t *alloc, scl_concurrent_segtree_t
     return SCL_OK;
 }
 
-scl_error_t scl_csegtree_query(const scl_concurrent_segtree_t *tree, size_t l, size_t r, void *out)
+scl_error_t scl_csegtree_query(const scl_concurrent_segtree_t *tree, size_t l, size_t r, void  *SCL_RESTRICT out)
 {
-    if (!tree || !out) return SCL_ERR_NULL_PTR;
-    if (l >= r || r > tree->n) return SCL_ERR_INVALID_ARG;
+    if (scl_unlikely(!tree || !out)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(l >= r || r > tree->n)) return SCL_ERR_INVALID_ARG;
 
     scl_spinlock_lock((scl_spinlock_t *)&tree->lock);
 

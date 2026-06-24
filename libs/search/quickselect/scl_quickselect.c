@@ -28,19 +28,19 @@ static size_t partition(void *base, size_t lo, size_t hi, size_t elem_size, scl_
     return i;
 }
 
-scl_error_t scl_search_quickselect(scl_allocator_t *alloc, void *base, size_t count, size_t elem_size, scl_cmp_func_t cmp, size_t k, void *out)
+scl_error_t scl_search_quickselect(scl_allocator_t * alloc, void * base, size_t count, size_t elem_size, scl_cmp_func_t cmp, size_t k, void * out)
 {
-    if (__builtin_expect(base == NULL, 0)) return SCL_ERR_NULL_PTR;
-    if (__builtin_expect(cmp == NULL, 0)) return SCL_ERR_NULL_PTR;
-    if (__builtin_expect(out == NULL, 0)) return SCL_ERR_NULL_PTR;
-    if (__builtin_expect(count == 0, 0)) return SCL_ERR_EMPTY;
-    if (__builtin_expect(k >= count, 0)) return SCL_ERR_INVALID_INDEX;
+    if (scl_unlikely(base == NULL)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(cmp == NULL)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(out == NULL)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(count == 0)) return SCL_ERR_EMPTY;
+    if (scl_unlikely(k >= count)) return SCL_ERR_INVALID_INDEX;
 
     size_t bytes;
     if (scl_mul_overflow(count, elem_size, &bytes))
         return SCL_ERR_SIZE_OVERFLOW;
     void *copy = scl_alloc(alloc, bytes, alignof(max_align_t));
-    if (__builtin_expect(copy == NULL, 0)) return SCL_ERR_OUT_OF_MEMORY;
+    if (scl_unlikely(copy == NULL)) return SCL_ERR_OUT_OF_MEMORY;
     scl_memcpy(copy, base, bytes);
 
     size_t lo = 0, hi = count - 1;

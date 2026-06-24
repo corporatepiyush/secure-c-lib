@@ -18,12 +18,12 @@ typedef struct {
 
 scl_error_t scl_heap_init(scl_allocator_t *alloc, scl_heap_t *heap, size_t element_size, size_t initial_capacity,
                           scl_cmp_func_t cmp) SCL_WARN_UNUSED;
-void        scl_heap_destroy(scl_allocator_t *alloc, scl_heap_t *heap);
-scl_error_t scl_heap_push(scl_allocator_t *alloc, scl_heap_t *heap, const void *element) SCL_WARN_UNUSED;
-scl_error_t scl_heap_pop(scl_heap_t *heap, void *out) SCL_WARN_UNUSED;
-scl_error_t scl_heap_peek(const scl_heap_t *heap, void *out) SCL_WARN_UNUSED;
-size_t      scl_heap_count(const scl_heap_t *heap);
-bool        scl_heap_empty(const scl_heap_t *heap);
+void        scl_heap_destroy(scl_allocator_t *SCL_RESTRICT alloc, scl_heap_t *SCL_RESTRICT heap);
+scl_error_t scl_heap_push(scl_allocator_t *SCL_RESTRICT alloc, scl_heap_t *SCL_RESTRICT heap, const void *SCL_RESTRICT element) SCL_WARN_UNUSED;
+scl_error_t scl_heap_pop(scl_heap_t *SCL_RESTRICT heap, void *SCL_RESTRICT out) SCL_WARN_UNUSED;
+scl_error_t scl_heap_peek(const scl_heap_t *SCL_RESTRICT heap, void *SCL_RESTRICT out) SCL_WARN_UNUSED;
+SCL_PURE size_t      scl_heap_count(const scl_heap_t *SCL_RESTRICT heap);
+SCL_PURE bool        scl_heap_empty(const scl_heap_t *SCL_RESTRICT heap);
 
 scl_error_t scl_heap_search(const scl_heap_t *heap, const void *key,
                             scl_cmp_func_t cmp,

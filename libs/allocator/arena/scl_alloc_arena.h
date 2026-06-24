@@ -8,7 +8,7 @@
 
 #include "scl_common.h"
 
-scl_allocator_t *scl_alloc_arena_create(scl_allocator_t *backing, size_t capacity);
+scl_allocator_t *scl_alloc_arena_create(scl_allocator_t *backing, size_t capacity) SCL_WARN_UNUSED;
 void scl_alloc_arena_reset(scl_allocator_t *alloc);
 void scl_alloc_arena_destroy(scl_allocator_t *alloc);
 

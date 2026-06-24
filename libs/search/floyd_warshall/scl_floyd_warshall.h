@@ -9,7 +9,7 @@
 #include "scl_common.h"
 #include <stdint.h>
 
-scl_error_t scl_search_floyd_warshall(int n, const scl_edge_t *edges, size_t ecount, int64_t *restrict dist) SCL_WARN_UNUSED;
+scl_error_t scl_search_floyd_warshall(int n, const scl_edge_t * edges, size_t ecount, int64_t * dist) SCL_WARN_UNUSED;
 
 #ifdef __GNUC__
 #pragma GCC diagnostic pop

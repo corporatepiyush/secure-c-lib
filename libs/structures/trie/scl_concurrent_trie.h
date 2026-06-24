@@ -23,8 +23,8 @@ typedef struct {
     atomic_size_t count;
 } scl_concurrent_trie_t;
 
-scl_error_t scl_ctrie_init(scl_allocator_t *alloc, scl_concurrent_trie_t *trie, size_t value_size) SCL_WARN_UNUSED;
-void        scl_ctrie_destroy(scl_allocator_t *alloc, scl_concurrent_trie_t *trie);
+scl_error_t scl_ctrie_init(scl_allocator_t *SCL_RESTRICT alloc, scl_concurrent_trie_t *SCL_RESTRICT trie, size_t value_size) SCL_WARN_UNUSED;
+void        scl_ctrie_destroy(scl_allocator_t *SCL_RESTRICT alloc, scl_concurrent_trie_t *SCL_RESTRICT trie);
 scl_error_t scl_ctrie_insert(scl_allocator_t *alloc, scl_concurrent_trie_t *trie, const unsigned char *key,
                             size_t key_len, const void *value) SCL_WARN_UNUSED;
 scl_error_t scl_ctrie_get(const scl_concurrent_trie_t *trie, const unsigned char *key,
@@ -33,7 +33,7 @@ bool        scl_ctrie_contains(const scl_concurrent_trie_t *trie, const unsigned
                               size_t key_len);
 scl_error_t scl_ctrie_remove(scl_allocator_t *alloc, scl_concurrent_trie_t *trie, const unsigned char *key,
                             size_t key_len) SCL_WARN_UNUSED;
-size_t      scl_ctrie_count(const scl_concurrent_trie_t *trie);
+SCL_PURE size_t      scl_ctrie_count(const scl_concurrent_trie_t *SCL_RESTRICT trie);
 
 #ifdef __GNUC__
 #pragma GCC diagnostic pop

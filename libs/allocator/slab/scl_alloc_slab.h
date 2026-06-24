@@ -8,7 +8,7 @@
 
 #include "scl_common.h"
 
-scl_allocator_t *scl_alloc_slab_create(scl_allocator_t *backing, const size_t *bucket_sizes, size_t num_buckets);
+scl_allocator_t *scl_alloc_slab_create(scl_allocator_t *backing, const size_t *bucket_sizes, size_t num_buckets) SCL_WARN_UNUSED;
 void scl_alloc_slab_destroy(scl_allocator_t *alloc);
 
 #ifdef __GNUC__

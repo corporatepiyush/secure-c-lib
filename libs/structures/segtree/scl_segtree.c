@@ -3,20 +3,20 @@
 
 scl_error_t scl_segtree_init(scl_allocator_t *alloc, scl_segtree_t *tree,
                               size_t n, size_t element_size, const void *data,
-                              void (*combine)(void *out, const void *a, const void *b))
+                              void (*combine)(void *out, const void *a, const void  *SCL_RESTRICT b))
 {
-    if (!tree || !combine || !data) return SCL_ERR_NULL_PTR;
-    if (n == 0 || element_size == 0) return SCL_ERR_INVALID_ARG;
+    if (scl_unlikely(!tree || !combine || !data)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(n == 0 || element_size == 0)) return SCL_ERR_INVALID_ARG;
 
     size_t size = 1;
     while (size < n) {
-        if (size > SIZE_MAX / 2) return SCL_ERR_SIZE_OVERFLOW;
+        if (scl_unlikely(size > SIZE_MAX / 2)) return SCL_ERR_SIZE_OVERFLOW;
         size <<= 1;
     }
-    if (size > SIZE_MAX / 2) return SCL_ERR_SIZE_OVERFLOW;
+    if (scl_unlikely(size > SIZE_MAX / 2)) return SCL_ERR_SIZE_OVERFLOW;
 
     tree->data = scl_calloc(alloc, 2 * size, element_size, alignof(max_align_t));
-    if (!tree->data) return SCL_ERR_OUT_OF_MEMORY;
+    if (scl_unlikely(!tree->data)) return SCL_ERR_OUT_OF_MEMORY;
     tree->n = n;
     tree->size = size;
     tree->element_size = element_size;
@@ -36,17 +36,17 @@ scl_error_t scl_segtree_init(scl_allocator_t *alloc, scl_segtree_t *tree,
 
 void scl_segtree_destroy(scl_allocator_t *alloc, scl_segtree_t *tree)
 {
-    if (!tree || !tree->data) return;
+    if (scl_unlikely(!tree || !tree->data)) return;
     scl_free(alloc, tree->data);
     tree->data = NULL;
     tree->n = 0;
     tree->size = 0;
 }
 
-scl_error_t scl_segtree_update(scl_segtree_t *tree, size_t idx, const void *val)
+scl_error_t scl_segtree_update(scl_segtree_t *tree, size_t idx, const void  *SCL_RESTRICT val)
 {
-    if (!tree || !val) return SCL_ERR_NULL_PTR;
-    if (idx >= tree->n) return SCL_ERR_INVALID_INDEX;
+    if (scl_unlikely(!tree || !val)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(idx >= tree->n)) return SCL_ERR_INVALID_INDEX;
 
     size_t esize = tree->element_size;
     size_t p = tree->size + idx;
@@ -60,10 +60,10 @@ scl_error_t scl_segtree_update(scl_segtree_t *tree, size_t idx, const void *val)
     return SCL_OK;
 }
 
-scl_error_t scl_segtree_query(const scl_segtree_t *tree, size_t l, size_t r, void *out)
+scl_error_t scl_segtree_query(const scl_segtree_t *tree, size_t l, size_t r, void  *SCL_RESTRICT out)
 {
-    if (!tree || !out) return SCL_ERR_NULL_PTR;
-    if (l >= r || r > tree->n) return SCL_ERR_INVALID_ARG;
+    if (scl_unlikely(!tree || !out)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(l >= r || r > tree->n)) return SCL_ERR_INVALID_ARG;
 
     size_t esize = tree->element_size;
     l += tree->size;

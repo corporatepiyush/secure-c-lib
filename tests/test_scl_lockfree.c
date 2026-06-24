@@ -9,6 +9,8 @@
 #include "scl_test.h"
 #include "scl_atomic.h"
 #include "scl_concurrent_common.h"
+#include "scl_concurrent_lfstack.h"
+#include "scl_concurrent_mpmc.h"
 #include <stdatomic.h>
 
 /* ── Single-threaded DWCAS sanity ───────────────────────────── */

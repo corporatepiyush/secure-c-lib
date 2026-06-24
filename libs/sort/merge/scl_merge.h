@@ -8,7 +8,7 @@
 
 #include "scl_common.h"
 
-scl_error_t scl_sort_merge_sort(scl_allocator_t *alloc, void *base, size_t count, size_t element_size, scl_cmp_func_t cmp) SCL_WARN_UNUSED;
+scl_error_t scl_sort_merge_sort(scl_allocator_t *alloc, void * base, size_t count, size_t element_size, scl_cmp_func_t cmp) SCL_WARN_UNUSED;
 
 #ifdef __GNUC__
 #pragma GCC diagnostic pop

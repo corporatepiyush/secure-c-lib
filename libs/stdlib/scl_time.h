@@ -43,6 +43,20 @@ static inline scl_error_t scl_deadline_from_now_ms(scl_timespec_t *ts, int64_t m
     return SCL_OK;
 }
 
+/* Current time in milliseconds (monotonic where possible, wall-clock otherwise).
+   Used by rate-limiters, timeouts, and the DDoS module. */
+static inline int64_t scl_now_ms(void) {
+#if defined(SCL_OS_MACOS)
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return (int64_t)tv.tv_sec * 1000 + (int64_t)tv.tv_usec / 1000;
+#else
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    return (int64_t)ts.tv_sec * 1000 + (int64_t)ts.tv_nsec / 1000000;
+#endif
+}
+
 /* Sleep for ms milliseconds (nanosleep-based) */
 static inline scl_error_t scl_sleep_ms(int64_t ms) {
     if (ms <= 0) return SCL_OK;

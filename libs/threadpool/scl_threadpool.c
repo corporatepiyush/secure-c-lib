@@ -6,20 +6,77 @@
 #include "scl_stdlib.h"
 #include "scl_string.h"
 
+/*
+ * scl_threadpool.c — fixed-size worker thread pool.
+ *
+ * THREADING MODEL
+ * ───────────────
+ * The pool uses a single mutex (lock) + condition variable (cond)
+ * to protect the shared task queue.  This is a classic producer-
+ * consumer design:
+ *
+ *   Producers (callers of scl_threadpool_enqueue):
+ *     - Lock, append to tail, signal, unlock.
+ *     - Fast path: O(1) lock, no syscall if a worker is already
+ *       awake (cond_signal is a no-op when no thread is waiting).
+ *
+ *   Consumers (worker threads):
+ *     - Lock, wait while queue is empty AND pool is active.
+ *     - Dequeue from head, increment working, unlock.
+ *     - Execute task (outside the lock — execution can block).
+ *     - Lock, decrement working, broadcast (to wake wait()),
+ *       unlock.  Free the task node.
+ *
+ * The "working" counter lets scl_threadpool_wait() know when all
+ * in-flight tasks have completed.  We use broadcast (not signal)
+ * when decrementing working because multiple waiters may be
+ * waiting in scl_threadpool_wait().
+ *
+ * SHUTDOWN SEQUENCE
+ * ─────────────────
+ * 1. Set pool->active = 0 under the lock.
+ * 2. Broadcast the condition variable (wakes all workers).
+ * 3. Workers see !active, exit their loop, return NULL.
+ * 4. The initiator joins all threads (waits for them to exit).
+ * 5. Free the thread handle array.
+ * 6. Drain any tasks still in the queue (should be none if
+ *    the caller called scl_threadpool_wait first, but we handle
+ *    it defensively).
+ * 7. Destroy mutex + condvar.
+ *
+ * The shutdown does NOT interrupt a running task — it waits for
+ * the task to finish (via scl_thread_join).  If the caller needs
+ * cancellation, they must implement it in the task function
+ * (e.g., via an atomic flag).
+ *
+ * THREAD_COUNT BOUNDS
+ * ───────────────────
+ * We cap thread_count at SCL_THREADPOOL_MAX_THREADS (128) to
+ * prevent accidental resource exhaustion.  Each thread consumes
+ * ~8 MB of virtual address space for its stack (on macOS/Linux),
+ * so 128 threads ~ 1 GB of virtual address space.
+ */
+
 static void *scl_threadpool_worker(void *arg) {
     scl_threadpool_t *pool = (scl_threadpool_t *)arg;
 
     while (1) {
         scl_mutex_lock(&pool->lock);
 
-        while (pool->active && !pool->head)
+        /*
+         * Wait while the queue is empty and the pool is still active.
+         * Spurious wakeups are handled by re-checking the predicate.
+         */
+        while (scl_likely(pool->active) && !pool->head)
             scl_cond_wait(&pool->cond, &pool->lock);
 
-        if (!pool->active) {
+        /* Shutdown signal received — exit. */
+        if (scl_unlikely(!pool->active)) {
             scl_mutex_unlock(&pool->lock);
             return NULL;
         }
 
+        /* Dequeue the head task. */
         scl_threadpool_task_t *task = pool->head;
         pool->head = task->next;
         if (!pool->head) pool->tail = NULL;
@@ -28,8 +85,10 @@ static void *scl_threadpool_worker(void *arg) {
 
         scl_mutex_unlock(&pool->lock);
 
+        /* Execute the task (outside the lock so it can block). */
         task->func(task->arg);
 
+        /* Notify waiters that a task slot has freed up. */
         scl_mutex_lock(&pool->lock);
         pool->working--;
         scl_cond_broadcast(&pool->cond);
@@ -49,7 +108,7 @@ static scl_error_t scl_threadpool_create_threads(scl_threadpool_t *pool) {
     for (unsigned int i = 0; i < pool->thread_count; i++) {
         scl_error_t err = scl_thread_create(&pool->thread_handles[i], scl_threadpool_worker, pool);
         if (err != SCL_OK) {
-            /* Stop the threads that did start */
+            /* Partial failure: stop created threads, join them, clean up. */
             scl_mutex_lock(&pool->lock);
             pool->active = 0;
             scl_cond_broadcast(&pool->cond);
@@ -68,6 +127,7 @@ static scl_error_t scl_threadpool_create_threads(scl_threadpool_t *pool) {
 scl_error_t scl_threadpool_init(scl_allocator_t *alloc, scl_threadpool_t *pool, unsigned int thread_count) {
     if (scl_unlikely(!pool)) return SCL_ERR_NULL_PTR;
     if (scl_unlikely(thread_count == 0)) return SCL_ERR_INVALID_ARG;
+    if (scl_unlikely(thread_count > SCL_THREADPOOL_MAX_THREADS)) return SCL_ERR_INVALID_ARG;
 
     (void)scl_memset(pool, 0, sizeof(*pool));
     pool->alloc = alloc;
@@ -108,7 +168,7 @@ scl_error_t scl_threadpool_enqueue(scl_threadpool_t *pool, scl_threadpool_task_f
 
     scl_mutex_lock(&pool->lock);
 
-    if (pool->tail) {
+    if (scl_likely(pool->tail != NULL)) {
         pool->tail->next = task;
     } else {
         pool->head = task;
@@ -126,6 +186,7 @@ scl_error_t scl_threadpool_wait(scl_threadpool_t *pool) {
     if (scl_unlikely(!pool)) return SCL_ERR_NULL_PTR;
 
     scl_mutex_lock(&pool->lock);
+    /* Wait until both the queue is empty AND all workers are idle. */
     while (pool->queued > 0 || pool->working > 0)
         scl_cond_wait(&pool->cond, &pool->lock);
     scl_mutex_unlock(&pool->lock);
@@ -136,17 +197,21 @@ scl_error_t scl_threadpool_wait(scl_threadpool_t *pool) {
 scl_error_t scl_threadpool_destroy(scl_threadpool_t *pool) {
     if (scl_unlikely(!pool)) return SCL_ERR_NULL_PTR;
 
+    /* Signal all workers to exit. */
     scl_mutex_lock(&pool->lock);
     pool->active = 0;
     scl_cond_broadcast(&pool->cond);
     scl_mutex_unlock(&pool->lock);
 
+    /* Join all worker threads. */
     for (unsigned int i = 0; i < pool->thread_count; i++)
         scl_thread_join(pool->thread_handles[i], NULL);
 
+    /* Free thread handle array. */
     scl_free(pool->alloc, pool->thread_handles);
     pool->thread_handles = NULL;
 
+    /* Drain any remaining tasks (safety net; should be empty). */
     while (pool->head) {
         scl_threadpool_task_t *tmp = pool->head;
         pool->head = tmp->next;

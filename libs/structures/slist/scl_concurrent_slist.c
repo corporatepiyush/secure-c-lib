@@ -4,8 +4,8 @@
 scl_error_t scl_cslist_init(scl_allocator_t *alloc, scl_concurrent_slist_t *list, size_t element_size)
 {
     (void)alloc;
-    if (!list) return SCL_ERR_NULL_PTR;
-    if (element_size == 0) return SCL_ERR_INVALID_ARG;
+    if (scl_unlikely(!list)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(element_size == 0)) return SCL_ERR_INVALID_ARG;
     atomic_init(&list->head, scl_tagged_make(NULL, 0));
     atomic_init(&list->count, 0);
     list->element_size = element_size;
@@ -14,10 +14,10 @@ scl_error_t scl_cslist_init(scl_allocator_t *alloc, scl_concurrent_slist_t *list
 
 void scl_cslist_destroy(scl_allocator_t *alloc, scl_concurrent_slist_t *list)
 {
-    if (!list) return;
+    if (scl_unlikely(!list)) return;
     scl_tagged_ptr_t tp = atomic_load_explicit(&list->head, memory_order_acquire);
     scl_concurrent_slist_node_t *cur = (scl_concurrent_slist_node_t *)tp.ptr;
-    while (cur) {
+    while (scl_likely(cur)) {
         scl_concurrent_slist_node_t *next = cur->next;
         scl_free(alloc, cur->data);
         scl_free(alloc, cur);
@@ -27,13 +27,13 @@ void scl_cslist_destroy(scl_allocator_t *alloc, scl_concurrent_slist_t *list)
     atomic_store_explicit(&list->count, 0, memory_order_relaxed);
 }
 
-scl_error_t scl_cslist_push_front(scl_allocator_t *alloc, scl_concurrent_slist_t *list, const void *element)
+scl_error_t scl_cslist_push_front(scl_allocator_t *alloc, scl_concurrent_slist_t *list, const void  *SCL_RESTRICT element)
 {
-    if (!list || !element) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!list || !element)) return SCL_ERR_NULL_PTR;
     scl_concurrent_slist_node_t *node = scl_alloc(alloc, sizeof(scl_concurrent_slist_node_t), alignof(max_align_t));
-    if (!node) return SCL_ERR_OUT_OF_MEMORY;
+    if (scl_unlikely(!node)) return SCL_ERR_OUT_OF_MEMORY;
     node->data = scl_alloc(alloc, list->element_size, alignof(max_align_t));
-    if (!node->data) {
+    if (scl_unlikely(!node->data)) {
         scl_free(alloc, node);
         return SCL_ERR_OUT_OF_MEMORY;
     }
@@ -50,12 +50,12 @@ scl_error_t scl_cslist_push_front(scl_allocator_t *alloc, scl_concurrent_slist_t
     return SCL_OK;
 }
 
-scl_error_t scl_cslist_pop_front(scl_allocator_t *alloc, scl_concurrent_slist_t *list, void *out)
+scl_error_t scl_cslist_pop_front(scl_allocator_t *alloc, scl_concurrent_slist_t *list, void  *SCL_RESTRICT out)
 {
-    if (!list || !out) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!list || !out)) return SCL_ERR_NULL_PTR;
     scl_tagged_ptr_t old = atomic_load_explicit(&list->head, memory_order_relaxed);
     while (1) {
-        if (!old.ptr) return SCL_ERR_EMPTY;
+        if (scl_unlikely(!old.ptr)) return SCL_ERR_EMPTY;
         scl_concurrent_slist_node_t *next = ((scl_concurrent_slist_node_t *)old.ptr)->next;
         if (atomic_compare_exchange_weak_explicit(&list->head, &old,
                 scl_tagged_make(next, old.tag + 1),
@@ -77,7 +77,7 @@ size_t scl_cslist_count(const scl_concurrent_slist_t *list)
 bool scl_cslist_empty(const scl_concurrent_slist_t *list)
 {
     scl_tagged_ptr_t tp;
-    if (!list) return true;
+    if (scl_unlikely(!list)) return true;
     tp = atomic_load_explicit(&list->head, memory_order_relaxed);
     return tp.ptr == NULL;
 }

@@ -17,12 +17,12 @@ static scl_error_t binary_string_range(const char **strs, size_t lo, size_t hi, 
     return SCL_ERR_NOT_FOUND;
 }
 
-scl_error_t scl_search_exponential_string(const char **restrict strs, size_t count, const char *restrict key, size_t *restrict idx)
+scl_error_t scl_search_exponential_string(const char **SCL_RESTRICT strs, size_t count, const char * key, size_t * idx)
 {
-    if (__builtin_expect(strs == NULL, 0)) return SCL_ERR_NULL_PTR;
-    if (__builtin_expect(key == NULL, 0)) return SCL_ERR_NULL_PTR;
-    if (__builtin_expect(idx == NULL, 0)) return SCL_ERR_NULL_PTR;
-    if (__builtin_expect(count == 0, 0)) return SCL_ERR_EMPTY;
+    if (scl_unlikely(strs == NULL)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(key == NULL)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(idx == NULL)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(count == 0)) return SCL_ERR_EMPTY;
 
     if (strcmp(strs[0], key) == 0) { *idx = 0; return SCL_OK; }
     if (count == 1) return SCL_ERR_NOT_FOUND;

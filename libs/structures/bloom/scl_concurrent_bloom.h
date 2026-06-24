@@ -22,11 +22,11 @@ typedef struct {
 scl_error_t scl_cbloom_init(scl_allocator_t *alloc, scl_concurrent_bloom_t *bf, size_t expected_items,
                            double false_positive_rate,
                            scl_bloom_hash_t hash_func) SCL_WARN_UNUSED;
-void        scl_cbloom_destroy(scl_allocator_t *alloc, scl_concurrent_bloom_t *bf);
-scl_error_t scl_cbloom_insert(scl_concurrent_bloom_t *bf, const void *data, size_t len) SCL_WARN_UNUSED;
-bool        scl_cbloom_maybe_contains(const scl_concurrent_bloom_t *bf, const void *data, size_t len);
-void        scl_cbloom_clear(scl_concurrent_bloom_t *bf);
-size_t      scl_cbloom_count(const scl_concurrent_bloom_t *bf);
+void        scl_cbloom_destroy(scl_allocator_t *SCL_RESTRICT alloc, scl_concurrent_bloom_t *SCL_RESTRICT bf);
+scl_error_t scl_cbloom_insert(scl_concurrent_bloom_t *SCL_RESTRICT bf, const void *SCL_RESTRICT data, size_t len) SCL_WARN_UNUSED;
+SCL_PURE bool        scl_cbloom_maybe_contains(const scl_concurrent_bloom_t *SCL_RESTRICT bf, const void *SCL_RESTRICT data, size_t len);
+void        scl_cbloom_clear(scl_concurrent_bloom_t *SCL_RESTRICT bf);
+SCL_PURE size_t      scl_cbloom_count(const scl_concurrent_bloom_t *SCL_RESTRICT bf);
 
 #ifdef __GNUC__
 #pragma GCC diagnostic pop

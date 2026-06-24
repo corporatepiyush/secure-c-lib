@@ -2,52 +2,104 @@
 #include <string.h>
 #include <ctype.h>
 
-/* ── Length ─────────────────────────────────────────────────── */
+/*
+ * scl_string.c — secure wrappers over libc <string.h> / <ctype.h>.
+ *
+ * DESIGN RATIONALE
+ * ────────────────
+ * The wrappers exist so that every call goes through the project's own
+ * API boundary.  This lets us:
+ *   1. NULL-guard every pointer argument (libc often crashes on NULL;
+ *      we return a safe zero / NULL for pointer-taking functions).
+ *   2. Avoid direct #include of <string.h> or <ctype.h> in application
+ *      code — only the .c file touches them, keeping the dependency
+ *      graph clean and making it easy to swap the backend (e.g. use
+ *      a freestanding implementation) later.
+ *   3. Add overflow-safe operations (scl_strdup uses scl_add_overflow).
+ *
+ * The memory wrappers (memcpy, memmove, memset, …) are simple
+ * delegates to the compiler builtins.  Modern compilers recognise
+ * these and replace them with efficient inline code anyway.
+ *
+ * ── Length ─────────────────────────────────────────────────── */
 
 size_t scl_strlen(const char *s) {
     if (scl_unlikely(!s)) return 0;
     return strlen(s);
 }
 
+size_t scl_strnlen(const char *s, size_t maxlen) {
+    if (scl_unlikely(!s)) return 0;
+    return strnlen(s, maxlen);
+}
+
 /* ── Copy / concat ──────────────────────────────────────────── */
 
 char *scl_strncpy(char *restrict dest, const char *restrict src, size_t n) {
+    if (scl_unlikely(!dest || !src)) return dest;
     return strncpy(dest, src, n);
 }
 
 char *scl_strncat(char *restrict dest, const char *restrict src, size_t n) {
+    if (scl_unlikely(!dest || !src)) return dest;
     return strncat(dest, src, n);
+}
+
+char *scl_stpncpy(char *restrict dest, const char *restrict src, size_t n) {
+    if (scl_unlikely(!dest || !src)) return dest;
+    return stpncpy(dest, src, n);
 }
 
 /* ── Compare ────────────────────────────────────────────────── */
 
 int scl_strcmp(const char *s1, const char *s2) {
+    if (scl_unlikely(!s1)) return -1;
+    if (scl_unlikely(!s2)) return 1;
     return strcmp(s1, s2);
 }
 
 int scl_strncmp(const char *s1, const char *s2, size_t n) {
+    if (scl_unlikely(!s1)) return -1;
+    if (scl_unlikely(!s2)) return 1;
     return strncmp(s1, s2, n);
 }
 
 /* ── Search ─────────────────────────────────────────────────── */
 
-char *scl_strchr(const char *s, int c)  { return (char *)strchr(s, c); }
-char *scl_strrchr(const char *s, int c) { return (char *)strrchr(s, c); }
+char *scl_strchr(const char *s, int c) {
+    if (scl_unlikely(!s)) return NULL;
+    return (char *)strchr(s, c);
+}
+
+char *scl_strrchr(const char *s, int c) {
+    if (scl_unlikely(!s)) return NULL;
+    return (char *)strrchr(s, c);
+}
 
 char *scl_strstr(const char *haystack, const char *needle) {
+    if (scl_unlikely(!haystack || !needle)) return NULL;
     return (char *)strstr(haystack, needle);
 }
 
 char *scl_strpbrk(const char *s, const char *accept) {
+    if (scl_unlikely(!s || !accept)) return NULL;
     return (char *)strpbrk(s, accept);
 }
 
-size_t scl_strspn(const char *s, const char *accept)  { return strspn(s, accept); }
-size_t scl_strcspn(const char *s, const char *reject) { return strcspn(s, reject); }
+size_t scl_strspn(const char *s, const char *accept) {
+    if (scl_unlikely(!s || !accept)) return 0;
+    return strspn(s, accept);
+}
+
+size_t scl_strcspn(const char *s, const char *reject) {
+    if (scl_unlikely(!s || !reject)) return 0;
+    return strcspn(s, reject);
+}
 
 /* ── Tokenise (reentrant version wraps strtok_r) ───────────── */
 
 char *scl_strtok_r(char *restrict str, const char *restrict delim, char **restrict saveptr) {
+    if (scl_unlikely(!delim || !saveptr)) return NULL;
     return strtok_r(str, delim, saveptr);
 }
 
@@ -82,19 +134,30 @@ void *scl_memset(void *s, int c, size_t n) {
     return memset(s, c, n);
 }
 
+void scl_memzero(void *s, size_t n) {
+    if (scl_unlikely(!s)) return;
+    volatile unsigned char *p = (volatile unsigned char *)s;
+    for (size_t i = 0; i < n; i++) p[i] = 0;
+}
+
 void *scl_memcpy(void *restrict dest, const void *restrict src, size_t n) {
+    if (scl_unlikely(!dest || !src)) return dest;
     return memcpy(dest, src, n);
 }
 
 void *scl_memmove(void *dest, const void *src, size_t n) {
+    if (scl_unlikely(!dest || !src)) return dest;
     return memmove(dest, src, n);
 }
 
 int scl_memcmp(const void *s1, const void *s2, size_t n) {
+    if (scl_unlikely(!s1)) return -1;
+    if (scl_unlikely(!s2)) return 1;
     return memcmp(s1, s2, n);
 }
 
 void *scl_memchr(const void *s, int c, size_t n) {
+    if (scl_unlikely(!s)) return NULL;
     return (void *)memchr(s, c, n);
 }
 
