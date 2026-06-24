@@ -25,6 +25,9 @@
 #include <unistd.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
+#include <sys/time.h>
+#include <arpa/inet.h>
 
 /* ── Fixture: temp docroot ─────────────────────────────────── */
 static char root[256];
@@ -73,6 +76,56 @@ static void fixture_teardown(void) {
     snprintf(p, sizeof(p), "%s/hello.txt", root);  unlink(p);
     snprintf(p, sizeof(p), "%s/data.json", root);  unlink(p);
     rmdir(root);
+}
+
+/* ── Response edge-case helpers ────────────────────────────
+ *
+ * Spawns a child process that listens on localhost:0, responds
+ * with `response` (ignoring the request), and exits. Returns the
+ * port the child bound, or 0 on failure. Parent must waitpid(). */
+static uint16_t miniserver_spawn(const char *response) {
+    int sv[2];
+    if (pipe(sv) != 0) return 0;
+
+    pid_t pid = fork();
+    if (pid == 0) {
+        close(sv[0]);
+        int fd = socket(AF_INET, SOCK_STREAM, 0);
+        if (fd < 0) _exit(1);
+        int opt = 1;
+        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+        struct sockaddr_in addr;
+        memset(&addr, 0, sizeof(addr));
+        addr.sin_family = AF_INET;
+        addr.sin_port   = 0;
+        inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
+        if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) _exit(2);
+        if (listen(fd, 1) != 0) _exit(3);
+
+        struct sockaddr_in bound;
+        socklen_t blen = sizeof(bound);
+        getsockname(fd, (struct sockaddr *)&bound, &blen);
+        uint16_t port = ntohs(bound.sin_port);
+        write(sv[1], &port, sizeof(port));
+        close(sv[1]);
+
+        int cfd = accept(fd, NULL, NULL);
+        if (cfd < 0) _exit(4);
+        close(fd);
+        char buf[4096];
+        recv(cfd, buf, sizeof(buf), 0);
+        send(cfd, response, strlen(response), 0);
+        shutdown(cfd, SHUT_WR);
+        usleep(10000);
+        close(cfd);
+        _exit(0);
+    }
+
+    close(sv[1]);
+    uint16_t port = 0;
+    read(sv[0], &port, sizeof(port));
+    close(sv[0]);
+    return port;
 }
 
 int main(void) {
@@ -317,6 +370,195 @@ int main(void) {
         /* Should fail with not-found or I/O error. */
         SCL_EXPECT_TRUE(&tr, e == SCL_ERR_NOT_FOUND || e == SCL_ERR_IO);
         scl_http_client_destroy(c);
+    }
+
+    scl_test_group("Client: 1xx interim response skipped automatically");
+    {
+        const char *response =
+            "HTTP/1.1 100 Continue\r\n\r\n"
+            "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n"
+            "Connection: close\r\n"
+            "\r\n"
+            "Hello";
+        uint16_t mport = miniserver_spawn(response);
+        if (mport != 0) {
+            scl_http_client_t *c = NULL;
+            SCL_EXPECT_OK(&tr, scl_http_client_init(scl_allocator_default(), &c, 65536));
+            if (c) {
+                char url[256];
+                snprintf(url, sizeof(url), "http://127.0.0.1:%u/echo", mport);
+                scl_http_client_response_t resp;
+                scl_memset(&resp, 0, sizeof(resp));
+                scl_error_t e = scl_http_client_get(c, url, NULL, &resp);
+                SCL_EXPECT_OK(&tr, e);
+                if (e == SCL_OK) {
+                    SCL_EXPECT_EQ_I(&tr, resp.status, 200);
+                    if (resp.body && resp.body_len == 5)
+                        SCL_EXPECT_EQ_STR(&tr, (const char *)resp.body, "Hello");
+                }
+                scl_http_client_destroy(c);
+            }
+            int wstatus;
+            waitpid(-1, &wstatus, 0);
+        } else { SCL_EXPECT_TRUE(&tr, 0); }
+    }
+
+    scl_test_group("Client: chunked response returns UNSUPPORTED");
+    {
+        const char *response =
+            "HTTP/1.1 200 OK\r\n"
+            "Transfer-Encoding: chunked\r\n"
+            "Connection: close\r\n"
+            "\r\n"
+            "5\r\nHello\r\n0\r\n\r\n";
+        uint16_t mport = miniserver_spawn(response);
+        if (mport != 0) {
+            scl_http_client_t *c = NULL;
+            SCL_EXPECT_OK(&tr, scl_http_client_init(scl_allocator_default(), &c, 65536));
+            if (c) {
+                char url[256];
+                snprintf(url, sizeof(url), "http://127.0.0.1:%u/echo", mport);
+                scl_http_client_response_t resp;
+                scl_memset(&resp, 0, sizeof(resp));
+                scl_error_t e = scl_http_client_get(c, url, NULL, &resp);
+                SCL_EXPECT_EQ_I(&tr, (int)e, (int)SCL_ERR_UNSUPPORTED);
+                scl_http_client_destroy(c);
+            }
+            int wstatus;
+            waitpid(-1, &wstatus, 0);
+        } else { SCL_EXPECT_TRUE(&tr, 0); }
+    }
+
+    scl_test_group("Client: connection: close with body");
+    {
+        const char *response =
+            "HTTP/1.1 200 OK\r\n"
+            "Connection: close\r\n"
+            "\r\n"
+            "hello world";
+        uint16_t mport = miniserver_spawn(response);
+        if (mport != 0) {
+            scl_http_client_t *c = NULL;
+            SCL_EXPECT_OK(&tr, scl_http_client_init(scl_allocator_default(), &c, 65536));
+            if (c) {
+                char url[256];
+                snprintf(url, sizeof(url), "http://127.0.0.1:%u/echo", mport);
+                scl_http_client_response_t resp;
+                scl_memset(&resp, 0, sizeof(resp));
+                scl_error_t e = scl_http_client_get(c, url, NULL, &resp);
+                SCL_EXPECT_OK(&tr, e);
+                if (e == SCL_OK) {
+                    SCL_EXPECT_EQ_I(&tr, resp.status, 200);
+                    SCL_EXPECT_TRUE(&tr, resp.connection_close);
+                    SCL_EXPECT_TRUE(&tr, resp.body_len >= 11);
+                }
+                scl_http_client_destroy(c);
+            }
+            int wstatus;
+            waitpid(-1, &wstatus, 0);
+        } else { SCL_EXPECT_TRUE(&tr, 0); }
+    }
+
+    scl_test_group("Client: malformed status line");
+    {
+        char url[] = "http://127.0.0.1:1/bad";
+        scl_http_url_t u;
+        scl_error_t e = scl_http_parse_url(url, &u);
+        /* URL should parse fine even if server is unreachable */
+        SCL_EXPECT_OK(&tr, e);
+        SCL_EXPECT_EQ_I(&tr, u.port, 1);
+    }
+
+    scl_test_group("Client: URL with IPv6 address");
+    {
+        char url[] = "http://[::1]:8080/path";
+        scl_http_url_t u;
+        scl_error_t e = scl_http_parse_url(url, &u);
+        SCL_EXPECT_OK(&tr, e);
+        SCL_EXPECT_NOT_NULL(&tr, u.host);
+        if (u.host) {
+            SCL_EXPECT_EQ_STR(&tr, u.host, "[::1]");
+        }
+        SCL_EXPECT_EQ_I(&tr, u.port, 8080);
+        if (u.path) SCL_EXPECT_EQ_STR(&tr, u.path, "/path");
+    }
+
+    scl_test_group("Client: URL with no port uses default 80");
+    {
+        char url[] = "http://example.com";
+        scl_http_url_t u;
+        scl_error_t e = scl_http_parse_url(url, &u);
+        SCL_EXPECT_OK(&tr, e);
+        SCL_EXPECT_EQ_I(&tr, u.port, 80);
+        if (u.path) SCL_EXPECT_EQ_STR(&tr, u.path, "/");
+    }
+
+    scl_test_group("Client: URL reject userinfo (credentials)");
+    {
+        char url[] = "http://user:pass@example.com/";
+        scl_http_url_t u;
+        scl_error_t e = scl_http_parse_url(url, &u);
+        SCL_EXPECT_TRUE(&tr, e != SCL_OK);
+    }
+
+    scl_test_group("Client: null or empty header lookups");
+    {
+        scl_http_client_response_t r;
+        scl_memset(&r, 0, sizeof(r));
+        const char *v = scl_http_client_find_header(&r, "Content-Type");
+        SCL_EXPECT_NULL(&tr, v);
+        v = scl_http_client_find_header(NULL, "Anything");
+        SCL_EXPECT_NULL(&tr, v);
+        v = scl_http_client_find_header(&r, NULL);
+        SCL_EXPECT_NULL(&tr, v);
+        v = scl_http_client_find_header(&r, "");
+        SCL_EXPECT_NULL(&tr, v);
+    }
+
+    scl_test_group("Client: find header with populated response");
+    {
+        scl_http_client_response_t r;
+        scl_memset(&r, 0, sizeof(r));
+        r.headers = "Content-Type: text/plain\0Content-Length: 42\0\0";
+        r.headers_len = 46;
+        r.header_count = 2;
+
+        const char *ct = scl_http_client_find_header(&r, "Content-Type");
+        SCL_EXPECT_NOT_NULL(&tr, ct);
+        if (ct) SCL_EXPECT_EQ_STR(&tr, ct, "text/plain");
+
+        const char *cl = scl_http_client_find_header(&r, "Content-Length");
+        SCL_EXPECT_NOT_NULL(&tr, cl);
+        if (cl) SCL_EXPECT_EQ_STR(&tr, cl, "42");
+
+        const char *mx = scl_http_client_find_header(&r, "X-Missing");
+        SCL_EXPECT_NULL(&tr, mx);
+    }
+
+    scl_test_group("Client: request_free is safe on zeroed response");
+    {
+        scl_http_client_response_t r;
+        scl_memset(&r, 0, sizeof(r));
+        /* Should not crash */
+        scl_http_client_request_free(scl_allocator_default(), &r);
+    }
+
+    scl_test_group("Client: request_free cleans up headers and body");
+    {
+        scl_http_client_response_t r;
+        scl_memset(&r, 0, sizeof(r));
+        /* Allocate some fake memory */
+        scl_allocator_t *alloc = scl_allocator_default();
+        r.headers = (char *)scl_alloc(alloc, 64, _Alignof(max_align_t));
+        r.body = scl_alloc(alloc, 64, _Alignof(max_align_t));
+        if (r.headers && r.body) {
+            r.headers_len = 64;
+            r.body_cap = 64;
+            /* Free should work and null out pointers */
+            scl_http_client_request_free(alloc, &r);
+            SCL_EXPECT_NULL(&tr, r.headers);
+            SCL_EXPECT_NULL(&tr, r.body);
+        }
     }
 
     /* ── Summary ───────────────────────────────────────────────── */

@@ -130,7 +130,7 @@ scl_error_t scl_http_parse_url(char *url_str, scl_http_url_t *out) {
         if (*p == ':') {
             char *end = NULL;
             unsigned long port = scl_strtoul(p + 1, &end, 10);
-            if (!end || end == p + 1 || *end != '\0' ||
+            if (!end || end == p + 1 ||
                 port == 0 || port > 65535)
                 return SCL_ERR_INVALID_ARG;
             out->port = (uint16_t)port;
@@ -567,12 +567,26 @@ static scl_error_t read_response(scl_http_client_t *c,
     scl_memset(resp, 0, sizeof(*resp));
     resp->status = 0;
 
+    long hdr_end;
+    size_t header_block_len;
+    long eol_off;
+    int status;
+    scl_error_t err;
+    size_t hdr_start;
+    size_t hdr_area_len;
+    unsigned long content_length;
+    bool connection_close;
+    bool chunked;
+    size_t found_headers;
+    size_t resp_headers_cap;
+
+    for (;;) {
     /*
      * Phase 1: accumulate until we have the complete header block
      * delimited by "\r\n\r\n". If there's already data in rbuf
      * (e.g., leftover from a previous partial read), use it.
      */
-    long hdr_end = -1;
+    hdr_end = -1;
 
     while ((hdr_end = find_hdrend(c->rbuf, c->rbuf_len)) < 0) {
         /* Check for oversized headers before reading more. */
@@ -593,7 +607,7 @@ static scl_error_t read_response(scl_http_client_t *c,
 
     /* hdr_end is the offset of the "\r\n" before the blank line.
      * hdr_end + 4 skips past "\r\n\r\n". */
-    size_t header_block_len = (size_t)hdr_end + 4;
+    header_block_len = (size_t)hdr_end + 4;
 
     /* NOT writing a global NUL here — the individual header-line NUL
      * terminations (done during parsing below) are sufficient, and a
@@ -603,15 +617,15 @@ static scl_error_t read_response(scl_http_client_t *c,
      * Phase 2: parse status line.
      * The status line is "HTTP/1.1 200 OK\r\n" starting at rbuf[0].
      */
-    long eol_off = find_crlf(c->rbuf, c->rbuf_len, 0);
+    eol_off = find_crlf(c->rbuf, c->rbuf_len, 0);
     if (eol_off < 0) return SCL_ERR_PARSE;
     c->rbuf[(size_t)eol_off] = '\0';
 
-    int status = 0;
-    scl_error_t err = parse_status_line((const char *)c->rbuf,
-                                        &status,
-                                        resp->status_text,
-                                        sizeof(resp->status_text));
+    status = 0;
+    err = parse_status_line((const char *)c->rbuf,
+                            &status,
+                            resp->status_text,
+                            sizeof(resp->status_text));
     c->rbuf[(size_t)eol_off] = '\r';  /* restore */
     if (err != SCL_OK) return err;
     resp->status = status;
@@ -622,14 +636,14 @@ static scl_error_t read_response(scl_http_client_t *c,
      * Headers begin after the status line's CRLF, i.e. at
      * rbuf[eol_off + 2], and end at rbuf[hdr_end].
      */
-    size_t hdr_start = (size_t)eol_off + 2;  /* after status line's CRLF */
-    size_t hdr_area_len = header_block_len - 4 - hdr_start;  /* excl. \r\n\r\n */
+    hdr_start = (size_t)eol_off + 2;  /* after status line's CRLF */
+    hdr_area_len = header_block_len - 4 - hdr_start;  /* excl. \r\n\r\n */
 
-    unsigned long content_length = 0;
-    bool connection_close = false;
-    bool chunked = false;
-    size_t found_headers = 0;
-    size_t resp_headers_cap = 0;
+    content_length = 0;
+    connection_close = false;
+    chunked = false;
+    found_headers = 0;
+    resp_headers_cap = 0;
 
     /*
      * We extract headers into a persistent heap block that outlives
@@ -734,12 +748,28 @@ static scl_error_t read_response(scl_http_client_t *c,
     resp->connection_close = connection_close;
     c->conn_close = connection_close;
 
+    /* Skip interim 1xx responses (RFC 7231 §6.2) */
+    if (status >= 100 && status < 200 && status != 101) {
+        scl_free(c->alloc, resp->headers);
+        resp->headers = NULL;
+        if (c->rbuf_len > header_block_len) {
+            memmove(c->rbuf, c->rbuf + header_block_len, c->rbuf_len - header_block_len);
+            c->rbuf_len -= header_block_len;
+        } else {
+            c->rbuf_len = 0;
+        }
+        scl_memset(resp, 0, sizeof(*resp));
+        resp->status = 0;
+        continue;
+    }
+    break;
+    }
+
     /*
      * Phase 4: body reading.
      */
     bool no_body = head_response ||
-                   status == 204 || status == 304 ||
-                   (status >= 100 && status < 200);
+                   status == 204 || status == 304 || status == 101;
 
     if (no_body) {
         return SCL_OK;

@@ -421,7 +421,7 @@ static scl_error_t serve_static(const scl_http_server_t *srv, int fd,
 static int read_chunked_body(scl_allocator_t *alloc, int fd,
                              unsigned char *SCL_RESTRICT rbuf,
                              size_t *SCL_RESTRICT rbuf_len, size_t rbuf_cap,
-                             size_t max_body,
+                             size_t head_end, size_t max_body,
                              void *SCL_RESTRICT *SCL_RESTRICT out,
                              size_t *SCL_RESTRICT out_len) {
     size_t cap = 4096;
@@ -430,7 +430,7 @@ static int read_chunked_body(scl_allocator_t *alloc, int fd,
     size_t len = 0;
 
     /* Consume any data already in rbuf after the header block */
-    size_t offset = 0;
+    size_t offset = head_end;
 
     /* Read until we have a full line (chunk-size) */
     while (1) {
@@ -1019,13 +1019,31 @@ static void handle_connection(scl_http_server_t *srv, scl_tcp_conn_t *conn) {
             }
         }
 
+        /* Decode path into a stack buffer BEFORE body reading, because
+         * read_chunked_body may compact rbuf (overwriting the request-line
+         * area that req.target points into). */
+        bool is_get  = scl_strcmp(req.method, "GET") == 0;
+        bool is_head = scl_strcmp(req.method, "HEAD") == 0;
+        head_only = is_head;
+        char pathbuf[SCL_PATH_MAX];
+        {
+            const char *q = scl_strchr(req.target, '?');
+            size_t rawlen = q ? (size_t)(q - req.target) : scl_strlen(req.target);
+            long dl = url_decode_path(req.target, rawlen, pathbuf, sizeof(pathbuf));
+            if (scl_unlikely(dl < 0)) {
+                send_error(srv, fd, 400, head_only, true);
+                return;
+            }
+            req.path = pathbuf;
+        }
+
         /* Read body */
         void *body_buf = NULL;
         size_t body_len = 0;
 
         if (is_chunked) {
             status = read_chunked_body(alloc, fd, conn->rbuf, &conn->rbuf_len,
-                                       conn->rbuf_cap,
+                                       conn->rbuf_cap, hend,
                                        max_body, &body_buf, &body_len);
             if (status != 0) {
                 send_error(srv, fd, status, false, true);
@@ -1045,6 +1063,12 @@ static void handle_connection(scl_http_server_t *srv, scl_tcp_conn_t *conn) {
         req.body = body_buf;
         req.body_len = body_len;
 
+        bool is_get  = scl_strcmp(req.method, "GET") == 0;
+        bool is_head = scl_strcmp(req.method, "HEAD") == 0;
+        head_only = is_head;
+
+        will_close = !req.keep_alive || (served + 1 >= srv->cfg.keep_alive_max);
+
         /* Parse multipart/form-data if applicable */
         if (body_len > 0 && req.content_type &&
             scl_strstr(req.content_type, "multipart/form-data")) {
@@ -1053,24 +1077,6 @@ static void handle_connection(scl_http_server_t *srv, scl_tcp_conn_t *conn) {
                                      req.uploads, &upcount, SCL_HTTP_MAX_UPLOADS);
             req.upload_count = upcount;
         }
-
-        bool is_get  = scl_strcmp(req.method, "GET") == 0;
-        bool is_head = scl_strcmp(req.method, "HEAD") == 0;
-        head_only = is_head;
-
-        will_close = !req.keep_alive || (served + 1 >= srv->cfg.keep_alive_max);
-
-        /* Decode path into a stack buffer; point req.path at it. */
-        char pathbuf[SCL_PATH_MAX];
-        const char *q = scl_strchr(req.target, '?');
-        size_t rawlen = q ? (size_t)(q - req.target) : scl_strlen(req.target);
-        long dl = url_decode_path(req.target, rawlen, pathbuf, sizeof(pathbuf));
-        if (dl < 0) {
-            send_error(srv, fd, 400, head_only, true);
-            if (body_allocated) scl_free(alloc, body_buf);
-            return;
-        }
-        req.path = pathbuf;
 
         scl_error_t serr = SCL_OK;
         scl_http_response_t resp = {0};
