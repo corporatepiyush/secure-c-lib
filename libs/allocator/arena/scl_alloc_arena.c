@@ -6,6 +6,7 @@ typedef struct scl_arena_node {
     char *buffer;
     size_t offset;
     size_t capacity;
+    size_t bytes_used;       /* total bytes actually handed out from this node */
     struct scl_arena_node *next;
 } arena_node_t;
 
@@ -13,6 +14,8 @@ typedef struct {
     scl_allocator_t *backing;
     arena_node_t *head;
     arena_node_t *current;
+    size_t max_capacity;     /* total backing memory limit (0 = no limit) */
+    size_t total_allocated;  /* sum of all node capacities */
 } arena_state_t;
 
 static SCL_ALWAYS_INLINE SCL_PURE size_t arena_align_up(size_t offset, size_t align) {
@@ -20,7 +23,7 @@ static SCL_ALWAYS_INLINE SCL_PURE size_t arena_align_up(size_t offset, size_t al
     return (offset + mask) & ~mask;
 }
 
-static arena_node_t *arena_node_create(arena_state_t * s, size_t capacity) {
+static arena_node_t *arena_node_create(arena_state_t *s, size_t capacity) {
     scl_allocator_t *b = s->backing;
     arena_node_t *node = (arena_node_t *)b->malloc_fn(b->state, sizeof(arena_node_t), alignof(max_align_t));
     if (scl_unlikely(!node)) return NULL;
@@ -33,6 +36,7 @@ static arena_node_t *arena_node_create(arena_state_t * s, size_t capacity) {
 
     node->offset = 0;
     node->capacity = capacity;
+    node->bytes_used = 0;
     node->next = NULL;
     return node;
 }
@@ -49,18 +53,23 @@ static void *arena_malloc_fn(void *state, size_t size, size_t alignment) {
         while (new_cap < size + alignment)
             new_cap *= 2;
 
+        if (scl_unlikely(s->max_capacity > 0 && s->total_allocated + new_cap > s->max_capacity))
+            return NULL;
+
         arena_node_t *node = arena_node_create(s, new_cap);
         if (scl_unlikely(!node)) return NULL;
 
         node->next = cur->next;
         cur->next = node;
         s->current = node;
+        s->total_allocated += new_cap;
         cur = node;
         aligned = 0;
     }
 
     void *ptr = cur->buffer + aligned;
     cur->offset = aligned + size;
+    cur->bytes_used += size;
     return ptr;
 }
 
@@ -88,19 +97,22 @@ static void arena_free_fn(void *state, void *ptr) {
     (void)ptr;
 }
 
-scl_allocator_t *scl_alloc_arena_create(scl_allocator_t *backing, size_t capacity) {
+scl_allocator_t *scl_alloc_arena_create(scl_allocator_t *backing, size_t capacity, size_t max_capacity) {
     if (scl_unlikely(!backing || capacity == 0)) return NULL;
 
     arena_state_t *state = (arena_state_t *)backing->malloc_fn(backing->state, sizeof(arena_state_t), alignof(max_align_t));
     if (scl_unlikely(!state)) return NULL;
 
     state->backing = backing;
+    state->max_capacity = max_capacity;
+    state->total_allocated = 0;
 
     state->head = arena_node_create(state, capacity);
     if (scl_unlikely(!state->head)) {
         backing->free_fn(backing->state, state);
         return NULL;
     }
+    state->total_allocated += capacity;
     state->current = state->head;
 
     scl_allocator_t *alloc = (scl_allocator_t *)backing->malloc_fn(backing->state, sizeof(scl_allocator_t), alignof(max_align_t));
@@ -124,7 +136,12 @@ void scl_alloc_arena_reset(scl_allocator_t *alloc) {
     arena_state_t *s = (arena_state_t *)alloc->state;
     arena_node_t *cur = s->head;
     while (cur) {
+#ifndef NDEBUG
+        /* Poison free area in debug builds */
+        memset(cur->buffer, 0xAA, cur->offset);
+#endif
         cur->offset = 0;
+        cur->bytes_used = 0;
         cur = cur->next;
     }
     s->current = s->head;
@@ -137,10 +154,30 @@ void scl_alloc_arena_destroy(scl_allocator_t *alloc) {
     arena_node_t *cur = s->head;
     while (cur) {
         arena_node_t *next = cur->next;
+#ifndef NDEBUG
+        /* Poison entire buffer on destroy in debug builds */
+        memset(cur->buffer, 0xBB, cur->capacity);
+#endif
         backing->free_fn(backing->state, cur->buffer);
         backing->free_fn(backing->state, cur);
         cur = next;
     }
     backing->free_fn(backing->state, s);
     backing->free_fn(backing->state, alloc);
+}
+
+bool scl_alloc_arena_stats(scl_allocator_t *alloc, scl_alloc_arena_stats_t *out) {
+    if (scl_unlikely(!alloc || !out)) return false;
+    arena_state_t *s = (arena_state_t *)alloc->state;
+    out->bytes_used = 0;
+    out->bytes_wasted = 0;
+    out->node_count = 0;
+    arena_node_t *cur = s->head;
+    while (cur) {
+        out->bytes_used += cur->bytes_used;
+        out->bytes_wasted += cur->capacity - cur->bytes_used;
+        out->node_count++;
+        cur = cur->next;
+    }
+    return true;
 }

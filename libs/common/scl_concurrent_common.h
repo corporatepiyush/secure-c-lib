@@ -5,25 +5,40 @@
 #include "scl_atomic.h"
 #include <sched.h>
 #include <time.h>
+#include <pthread.h>
 
 /* ── Atomic flags (spinlock) ───────────────────────────────── */
 typedef struct {
     atomic_flag flag;
+#ifndef NDEBUG
+    pthread_t owner;
+#endif
 } scl_spinlock_t;
 
 static inline void scl_spinlock_init(scl_spinlock_t *lock) {
     atomic_flag_clear(&lock->flag);
+#ifndef NDEBUG
+    lock->owner = (pthread_t)0;
+#endif
 }
 
 static inline void scl_spinlock_lock(scl_spinlock_t *lock) {
-    if (scl_likely(!atomic_flag_test_and_set_explicit(&lock->flag, memory_order_acquire)))
+    if (scl_likely(!atomic_flag_test_and_set_explicit(&lock->flag, memory_order_acquire))) {
+#ifndef NDEBUG
+        lock->owner = pthread_self();
+#endif
         return;
+    }
     for (int backoff = 1; ; backoff++) {
         int pauses = backoff < 10 ? (1 << backoff) : 1024;
         for (int i = 0; i < pauses; i++)
             scl_cpu_pause();
-        if (scl_likely(!atomic_flag_test_and_set_explicit(&lock->flag, memory_order_acquire)))
+        if (scl_likely(!atomic_flag_test_and_set_explicit(&lock->flag, memory_order_acquire))) {
+#ifndef NDEBUG
+            lock->owner = pthread_self();
+#endif
             return;
+        }
         if (scl_unlikely(backoff > 12))
             (void)nanosleep(&(struct timespec){0, 1000000}, NULL);
         else if (scl_unlikely(backoff > 8))
@@ -32,10 +47,17 @@ static inline void scl_spinlock_lock(scl_spinlock_t *lock) {
 }
 
 static inline int scl_spinlock_trylock(scl_spinlock_t *lock) {
-    return !atomic_flag_test_and_set(&lock->flag);
+    int ok = !atomic_flag_test_and_set(&lock->flag);
+#ifndef NDEBUG
+    if (ok) lock->owner = pthread_self();
+#endif
+    return ok;
 }
 
 static inline void scl_spinlock_unlock(scl_spinlock_t *lock) {
+#ifndef NDEBUG
+    lock->owner = (pthread_t)0;
+#endif
     atomic_flag_clear_explicit(&lock->flag, memory_order_release);
 }
 

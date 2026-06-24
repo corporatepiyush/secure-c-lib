@@ -2,18 +2,23 @@
 
 /* ── Default libc-backed allocator ──────────────────────────── */
 
-static void *def_malloc(void *state, size_t size, size_t alignment) {
-    (void)state;
-    if (scl_unlikely(size == 0)) return NULL;
-    if (scl_likely(alignment <= alignof(max_align_t)))
-        return malloc(size);
+static SCL_COLD_PATH void *def_malloc_fallback(size_t size, size_t alignment) {
 #if defined(_POSIX_C_SOURCE) || defined(__APPLE__)
     void *p = NULL;
     if (scl_unlikely(posix_memalign(&p, alignment, size) != 0)) return NULL;
     return p;
 #else
+    (void)alignment;
     return malloc(size);
 #endif
+}
+
+static void *def_malloc(void *state, size_t size, size_t alignment) {
+    (void)state;
+    if (scl_unlikely(size == 0 || size > SCL_ALLOC_MAX_SIZE)) return NULL;
+    if (scl_likely(alignment <= alignof(max_align_t)))
+        return malloc(size);
+    return def_malloc_fallback(size, alignment);
 }
 
 static void *def_calloc(void *state, size_t count, size_t size, size_t alignment) {
@@ -21,6 +26,7 @@ static void *def_calloc(void *state, size_t count, size_t size, size_t alignment
     if (scl_unlikely(count == 0 || size == 0)) return NULL;
     size_t total;
     if (scl_unlikely(__builtin_mul_overflow(count, size, &total))) return NULL;
+    if (scl_unlikely(total > SCL_ALLOC_MAX_SIZE)) return NULL;
     void *p = def_malloc(state, total, alignment);
     if (scl_likely(p)) memset(p, 0, total);
     return p;
@@ -28,13 +34,19 @@ static void *def_calloc(void *state, size_t count, size_t size, size_t alignment
 
 static void *def_realloc(void *state, void *ptr, size_t old_size, size_t new_size, size_t alignment) {
     (void)state;
-    if (scl_unlikely(new_size == 0)) { free(ptr); return NULL; }
+    if (scl_unlikely(new_size == 0 || new_size > SCL_ALLOC_MAX_SIZE)) { free(ptr); return NULL; }
     if (scl_unlikely(!ptr)) return def_malloc(state, new_size, alignment);
     if (scl_likely(alignment <= alignof(max_align_t)))
         return realloc(ptr, new_size);
-    void *newp = def_malloc(state, new_size, alignment);
+    void *newp;
+    if (scl_likely(((uintptr_t)ptr & (alignment - 1)) == 0))
+        newp = realloc(ptr, new_size);
+    else
+        newp = NULL;
+    if (scl_likely(newp)) return newp;
+    newp = def_malloc(state, new_size, alignment);
     if (scl_unlikely(!newp)) return NULL;
-    size_t copy_sz = SCL_MIN(old_size, new_size);
+    size_t copy_sz = old_size < new_size ? old_size : new_size;
     memcpy(newp, ptr, copy_sz);
     free(ptr);
     return newp;

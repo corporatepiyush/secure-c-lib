@@ -229,6 +229,11 @@ static inline void *scl_ptr_align_forward(void *ptr, size_t align) {
     return (void *)((p + mask) & ~mask);
 }
 
+/* ── Global allocation cap (opt-in; SIZE_MAX = no limit) ──── */
+#ifndef SCL_ALLOC_MAX_SIZE
+#define SCL_ALLOC_MAX_SIZE SIZE_MAX
+#endif
+
 /* ── Allocator interface ────────────────────────────────────── */
 typedef struct scl_allocator {
     void *(*malloc_fn)(void *state, size_t size, size_t alignment);

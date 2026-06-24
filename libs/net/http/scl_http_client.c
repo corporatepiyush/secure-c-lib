@@ -756,9 +756,10 @@ static scl_error_t read_response(scl_http_client_t *c,
         if (content_length > c->max_body_size)
             return SCL_ERR_SIZE_OVERFLOW;
 
-        resp->body = scl_alloc(c->alloc, content_length, _Alignof(max_align_t));
+        /* +1 for null terminator so body can be used as a C string */
+        resp->body = scl_alloc(c->alloc, content_length + 1, _Alignof(max_align_t));
         if (!resp->body) return SCL_ERR_OUT_OF_MEMORY;
-        resp->body_cap = content_length;
+        resp->body_cap = content_length + 1;
         resp->body_len = 0;
 
         /* Copy any body bytes already in rbuf. */
@@ -836,6 +837,8 @@ static scl_error_t read_response(scl_http_client_t *c,
         }
     }
 
+    if (resp->body && resp->body_len < resp->body_cap)
+        ((unsigned char *)resp->body)[resp->body_len] = '\0';
     return SCL_OK;
 }
 

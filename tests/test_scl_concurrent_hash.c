@@ -8,8 +8,18 @@
 #define OPS_PER_THREAD 500
 
 static size_t int_hash(const void *key, size_t len) {
-    (void)len;
-    size_t k = *(const size_t *)key;
+    size_t k;
+    if (len >= sizeof(size_t)) {
+        k = *(const size_t *)key;
+    } else if (len == 4) {
+        k = (size_t)*(const uint32_t *)key;
+    } else if (len == 2) {
+        k = (size_t)*(const uint16_t *)key;
+    } else if (len == 1) {
+        k = (size_t)*(const uint8_t *)key;
+    } else {
+        k = 0;
+    }
     k ^= k >> 33;
     k *= 0xff51afd7ed558ccdULL;
     k ^= k >> 33;
