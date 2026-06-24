@@ -14,10 +14,10 @@ typedef struct scl_concurrent_queue_node {
 } scl_concurrent_queue_node_t;
 
 typedef struct {
-    atomic_uintptr_t head;
-    atomic_uintptr_t tail;
+    atomic_uintptr_t head SCL_CACHE_ALIGNED;
+    atomic_uintptr_t tail SCL_CACHE_ALIGNED;
     size_t element_size;
-    atomic_size_t count;
+    atomic_size_t count SCL_CACHE_ALIGNED;
 } scl_concurrent_queue_t;
 
 scl_error_t scl_cqueue_init(scl_allocator_t *SCL_RESTRICT alloc, scl_concurrent_queue_t *SCL_RESTRICT queue, size_t element_size) SCL_WARN_UNUSED;

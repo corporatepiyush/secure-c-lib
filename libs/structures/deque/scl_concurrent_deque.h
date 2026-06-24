@@ -12,9 +12,10 @@ typedef struct {
     unsigned char *data;
     size_t element_size;
     size_t capacity;
+    size_t mask;
     size_t head;
     atomic_size_t count;
-    scl_spinlock_t lock;
+    scl_spinlock_t lock SCL_CACHE_ALIGNED;
 } scl_concurrent_deque_t;
 
 scl_error_t scl_cdeque_init(scl_allocator_t *SCL_RESTRICT alloc, scl_concurrent_deque_t *SCL_RESTRICT deque, size_t element_size, size_t capacity) SCL_WARN_UNUSED;

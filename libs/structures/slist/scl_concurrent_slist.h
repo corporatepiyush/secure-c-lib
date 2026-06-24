@@ -14,9 +14,9 @@ typedef struct scl_concurrent_slist_node {
 } scl_concurrent_slist_node_t;
 
 typedef struct {
-    _Atomic scl_tagged_ptr_t head;
+    _Atomic scl_tagged_ptr_t head SCL_CACHE_ALIGNED;
     size_t element_size;
-    atomic_size_t count;
+    atomic_size_t count SCL_CACHE_ALIGNED;
 } scl_concurrent_slist_t;
 
 scl_error_t scl_cslist_init(scl_allocator_t *SCL_RESTRICT alloc, scl_concurrent_slist_t *SCL_RESTRICT list, size_t element_size) SCL_WARN_UNUSED;

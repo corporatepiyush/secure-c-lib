@@ -13,16 +13,19 @@ scl_error_t scl_deque_init(scl_allocator_t *alloc, scl_deque_t *deque, size_t el
     deque->data = NULL;
     deque->element_size = element_size;
     deque->capacity = 0;
+    deque->mask = 0;
     deque->head = 0;
     deque->count = 0;
 
     if (initial_capacity > 0) {
+        size_t cap = initial_capacity < 4 ? 4 : scl_bit_ceil_sz(initial_capacity);
         size_t bytes;
-        if (scl_mul_overflow(initial_capacity, element_size, &bytes))
+        if (scl_mul_overflow(cap, element_size, &bytes))
             return SCL_ERR_SIZE_OVERFLOW;
         deque->data = scl_alloc(alloc, bytes, alignof(max_align_t));
         if (scl_unlikely(!deque->data)) return SCL_ERR_OUT_OF_MEMORY;
-        deque->capacity = initial_capacity;
+        deque->capacity = cap;
+        deque->mask = cap - 1;
     }
     return SCL_OK;
 }
@@ -33,32 +36,34 @@ void scl_deque_destroy(scl_allocator_t *alloc, scl_deque_t *deque)
         scl_free(alloc, deque->data);
         deque->data = NULL;
         deque->capacity = 0;
+        deque->mask = 0;
         deque->head = 0;
         deque->count = 0;
     }
 }
 
-static scl_error_t scl_deque_grow(scl_allocator_t *alloc, scl_deque_t *deque)
+static SCL_COLD_PATH scl_error_t scl_deque_grow(scl_allocator_t *alloc, scl_deque_t *deque)
 {
+    size_t es = deque->element_size;
     size_t new_cap = deque->capacity == 0 ? 4 : deque->capacity * 2;
     size_t new_bytes;
-    if (scl_mul_overflow(new_cap, deque->element_size, &new_bytes))
+    if (scl_mul_overflow(new_cap, es, &new_bytes))
         return SCL_ERR_SIZE_OVERFLOW;
 
     unsigned char *tmp = scl_alloc(alloc, new_bytes, alignof(max_align_t));
     if (scl_unlikely(!tmp)) return SCL_ERR_OUT_OF_MEMORY;
 
+    size_t mask = deque->mask;
     for (size_t i = 0; i < deque->count; i++) {
-        size_t src_idx = (deque->head + i) % deque->capacity;
-        scl_memcpy(tmp + i * deque->element_size,
-               deque->data + src_idx * deque->element_size,
-               deque->element_size);
+        size_t src_idx = (deque->head + i) & mask;
+        scl_memcpy(tmp + i * es, deque->data + src_idx * es, es);
     }
 
     scl_free(alloc, deque->data);
     deque->data = tmp;
     deque->head = 0;
     deque->capacity = new_cap;
+    deque->mask = new_cap - 1;
     return SCL_OK;
 }
 
@@ -71,7 +76,7 @@ scl_error_t scl_deque_push_front(scl_allocator_t *alloc, scl_deque_t *deque, con
         if (err != SCL_OK) return err;
     }
 
-    deque->head = (deque->head == 0) ? deque->capacity - 1 : deque->head - 1;
+    deque->head = (deque->head - 1)  & deque->mask;
     size_t offset;
     if (scl_mul_overflow(deque->head, deque->element_size, &offset))
         return SCL_ERR_SIZE_OVERFLOW;
@@ -90,7 +95,7 @@ scl_error_t scl_deque_push_back(scl_allocator_t *alloc, scl_deque_t *deque, cons
         if (err != SCL_OK) return err;
     }
 
-    size_t tail = (deque->head + deque->count) % deque->capacity;
+    size_t tail = (deque->head + deque->count)  & deque->mask;
     size_t offset;
     if (scl_mul_overflow(tail, deque->element_size, &offset))
         return SCL_ERR_SIZE_OVERFLOW;
@@ -110,7 +115,7 @@ scl_error_t scl_deque_pop_front(scl_deque_t *deque, void *out)
         return SCL_ERR_SIZE_OVERFLOW;
 
     scl_memcpy(out, deque->data + offset, deque->element_size);
-    deque->head = (deque->head + 1) % deque->capacity;
+    deque->head = (deque->head + 1)  & deque->mask;
     deque->count--;
     return SCL_OK;
 }
@@ -120,7 +125,7 @@ scl_error_t scl_deque_pop_back(scl_deque_t *deque, void *out)
     if (scl_unlikely(!deque || !out)) return SCL_ERR_NULL_PTR;
     if (deque->count == 0) return SCL_ERR_EMPTY;
 
-    size_t tail = (deque->head + deque->count - 1) % deque->capacity;
+    size_t tail = (deque->head + deque->count - 1)  & deque->mask;
     size_t offset;
     if (scl_mul_overflow(tail, deque->element_size, &offset))
         return SCL_ERR_SIZE_OVERFLOW;
@@ -148,7 +153,7 @@ scl_error_t scl_deque_peek_back(const scl_deque_t *deque, void *out)
     if (scl_unlikely(!deque || !out)) return SCL_ERR_NULL_PTR;
     if (deque->count == 0) return SCL_ERR_EMPTY;
 
-    size_t tail = (deque->head + deque->count - 1) % deque->capacity;
+    size_t tail = (deque->head + deque->count - 1)  & deque->mask;
     size_t offset;
     if (scl_mul_overflow(tail, deque->element_size, &offset))
         return SCL_ERR_SIZE_OVERFLOW;
@@ -175,7 +180,7 @@ scl_error_t scl_deque_search(const scl_deque_t *restrict deque, const void *rest
         return SCL_ERR_NULL_PTR;
 
     for (size_t i = 0; i < deque->count; i++) {
-        size_t pos = (deque->head + i) % deque->capacity;
+        size_t pos = (deque->head + i)  & deque->mask;
         if (cmp(deque->data + pos * deque->element_size, key) == 0) {
             *out_index = i;
             return SCL_OK;

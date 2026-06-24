@@ -18,6 +18,7 @@ typedef struct {
 typedef struct {
     scl_search_ht_entry_t *entries;
     size_t capacity;
+    size_t mask;
     size_t count;
     scl_allocator_t *alloc;
 } scl_search_ht_t;

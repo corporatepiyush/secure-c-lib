@@ -9,13 +9,15 @@ scl_error_t scl_cdeque_init(scl_allocator_t *alloc, scl_concurrent_deque_t *dequ
 {
     if (scl_unlikely(!deque)) return SCL_ERR_NULL_PTR;
     if (scl_unlikely(element_size == 0 || capacity == 0)) return SCL_ERR_INVALID_ARG;
+    size_t cap = capacity < 4 ? 4 : scl_bit_ceil_sz(capacity);
     size_t bytes;
-    if (scl_mul_overflow(capacity, element_size, &bytes))
+    if (scl_mul_overflow(cap, element_size, &bytes))
         return SCL_ERR_SIZE_OVERFLOW;
     deque->data = scl_alloc(alloc, bytes, alignof(max_align_t));
     if (scl_unlikely(!deque->data)) return SCL_ERR_OUT_OF_MEMORY;
     deque->element_size = element_size;
-    deque->capacity = capacity;
+    deque->capacity = cap;
+    deque->mask = cap - 1;
     deque->head = 0;
     atomic_init(&deque->count, 0);
     scl_spinlock_init(&deque->lock);
@@ -28,6 +30,7 @@ void scl_cdeque_destroy(scl_allocator_t *alloc, scl_concurrent_deque_t *deque)
     scl_free(alloc, deque->data);
     deque->data = NULL;
     deque->capacity = 0;
+    deque->mask = 0;
     atomic_store_explicit(&deque->count, 0, memory_order_relaxed);
 }
 
@@ -41,7 +44,7 @@ scl_error_t scl_cdeque_push_front(scl_allocator_t *alloc, scl_concurrent_deque_t
         scl_spinlock_unlock(&deque->lock);
         return SCL_ERR_FULL;
     }
-    deque->head = (deque->head == 0) ? deque->capacity - 1 : deque->head - 1;
+    deque->head = (deque->head - 1)  & deque->mask;
     size_t offset;
     if (scl_mul_overflow(deque->head, deque->element_size, &offset)) {
         scl_spinlock_unlock(&deque->lock);
@@ -63,7 +66,7 @@ scl_error_t scl_cdeque_push_back(scl_allocator_t *alloc, scl_concurrent_deque_t 
         scl_spinlock_unlock(&deque->lock);
         return SCL_ERR_FULL;
     }
-    size_t tail = (deque->head + cnt) % deque->capacity;
+    size_t tail = (deque->head + cnt)  & deque->mask;
     size_t offset;
     if (scl_mul_overflow(tail, deque->element_size, &offset)) {
         scl_spinlock_unlock(&deque->lock);
@@ -90,7 +93,7 @@ scl_error_t scl_cdeque_pop_front(scl_concurrent_deque_t *deque, void *out)
         return SCL_ERR_SIZE_OVERFLOW;
     }
     scl_memcpy(out, deque->data + offset, deque->element_size);
-    deque->head = (deque->head + 1) % deque->capacity;
+    deque->head = (deque->head + 1)  & deque->mask;
     atomic_fetch_sub_explicit(&deque->count, 1, memory_order_relaxed);
     scl_spinlock_unlock(&deque->lock);
     return SCL_OK;
@@ -105,7 +108,7 @@ scl_error_t scl_cdeque_pop_back(scl_concurrent_deque_t *deque, void *out)
         scl_spinlock_unlock(&deque->lock);
         return SCL_ERR_EMPTY;
     }
-    size_t tail = (deque->head + cnt - 1) % deque->capacity;
+    size_t tail = (deque->head + cnt - 1)  & deque->mask;
     size_t offset;
     if (scl_mul_overflow(tail, deque->element_size, &offset)) {
         scl_spinlock_unlock(&deque->lock);

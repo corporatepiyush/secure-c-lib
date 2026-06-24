@@ -24,7 +24,8 @@ typedef struct {
     scl_concurrent_hash_entry_t **entries;
     scl_concurrent_hash_bucket_t *buckets;
     size_t bucket_count;
-    atomic_size_t count;
+    size_t mask;
+    atomic_size_t count SCL_CACHE_ALIGNED;
     scl_hash_func_t hash_func;
     size_t key_size;
     size_t value_size;

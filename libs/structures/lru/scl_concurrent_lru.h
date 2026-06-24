@@ -26,7 +26,7 @@ typedef struct {
     size_t index_capacity;
     int (*key_cmp)(const void *, const void *);
     size_t (*key_hash)(const void *, size_t);
-    scl_spinlock_t lock;
+    scl_spinlock_t lock SCL_CACHE_ALIGNED;
 } scl_concurrent_lru_t;
 
 scl_error_t scl_clru_init(scl_allocator_t *alloc, scl_concurrent_lru_t *cache, size_t key_size, size_t value_size,

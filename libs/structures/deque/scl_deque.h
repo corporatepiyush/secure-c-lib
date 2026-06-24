@@ -12,6 +12,7 @@ typedef struct {
     unsigned char *data;
     size_t element_size;
     size_t capacity;
+    size_t mask;
     size_t head;
     size_t count;
 } scl_deque_t;

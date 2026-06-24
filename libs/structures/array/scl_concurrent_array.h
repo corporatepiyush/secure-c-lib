@@ -12,7 +12,7 @@ typedef struct {
     unsigned char *data;
     size_t element_size;
     size_t capacity;
-    atomic_size_t count;
+    atomic_size_t count SCL_CACHE_ALIGNED;
 } scl_concurrent_array_t;
 
 scl_error_t scl_carray_init(scl_allocator_t *SCL_RESTRICT alloc, scl_concurrent_array_t *SCL_RESTRICT arr, size_t element_size, size_t capacity) SCL_WARN_UNUSED;

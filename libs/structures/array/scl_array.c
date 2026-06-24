@@ -36,15 +36,16 @@ void scl_array_destroy(scl_allocator_t *alloc, scl_array_t *arr)
     }
 }
 
-scl_error_t scl_array_reserve(scl_allocator_t *alloc, scl_array_t *arr, size_t new_capacity)
+SCL_COLD_PATH scl_error_t scl_array_reserve(scl_allocator_t *alloc, scl_array_t *arr, size_t new_capacity)
 {
     if (scl_unlikely(!arr)) return SCL_ERR_NULL_PTR;
     if (new_capacity <= arr->capacity) return SCL_OK;
 
+    size_t es = arr->element_size;
     size_t old_bytes, new_bytes;
-    if (scl_mul_overflow(arr->capacity, arr->element_size, &old_bytes))
+    if (scl_mul_overflow(arr->capacity, es, &old_bytes))
         old_bytes = 0;
-    if (scl_mul_overflow(new_capacity, arr->element_size, &new_bytes))
+    if (scl_mul_overflow(new_capacity, es, &new_bytes))
         return SCL_ERR_SIZE_OVERFLOW;
 
     unsigned char *tmp = scl_realloc(alloc, arr->data, old_bytes, new_bytes, alignof(max_align_t));
@@ -89,7 +90,8 @@ scl_error_t scl_array_get(const scl_array_t *arr, size_t index, void  *SCL_RESTR
     if (scl_unlikely(!arr || !out)) return SCL_ERR_NULL_PTR;
     if (scl_unlikely(index >= arr->count)) return SCL_ERR_INVALID_INDEX;
 
-    scl_memcpy(out, arr->data + index * arr->element_size, arr->element_size);
+    size_t es = arr->element_size;
+    scl_memcpy(out, arr->data + index * es, es);
     return SCL_OK;
 }
 
@@ -98,7 +100,8 @@ scl_error_t scl_array_set(scl_array_t *arr, size_t index, const void  *SCL_RESTR
     if (scl_unlikely(!arr || !element)) return SCL_ERR_NULL_PTR;
     if (scl_unlikely(index >= arr->count)) return SCL_ERR_INVALID_INDEX;
 
-    scl_memcpy(arr->data + index * arr->element_size, element, arr->element_size);
+    size_t es = arr->element_size;
+    scl_memcpy(arr->data + index * es, element, es);
     return SCL_OK;
 }
 

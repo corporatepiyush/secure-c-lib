@@ -12,7 +12,7 @@ typedef struct {
     atomic_uint *parent;
     atomic_uint *rank;
     size_t count;
-    atomic_size_t sets;
+    atomic_size_t sets SCL_CACHE_ALIGNED;
 } scl_concurrent_unionfind_t;
 
 scl_error_t scl_cunionfind_init(scl_allocator_t *SCL_RESTRICT alloc, scl_concurrent_unionfind_t *SCL_RESTRICT uf, size_t count) SCL_WARN_UNUSED;

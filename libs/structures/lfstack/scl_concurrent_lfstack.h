@@ -22,7 +22,7 @@
 #include "scl_atomic.h"
 
 typedef struct {
-    _Alignas(16) scl_dwcas_t head;   /* .lo = node ptr, .hi = ABA tag */
+    scl_dwcas_t head SCL_CACHE_ALIGNED;  /* .lo = node ptr, .hi = ABA tag */
 } scl_lfstack_t;
 
 static inline void scl_lfstack_init(scl_lfstack_t *s) {

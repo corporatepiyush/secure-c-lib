@@ -16,7 +16,7 @@ typedef struct {
     size_t byte_count;
     size_t num_hashes;
     scl_bloom_hash_t hash_func;
-    atomic_size_t inserted;
+    atomic_size_t inserted SCL_CACHE_ALIGNED;
 } scl_concurrent_bloom_t;
 
 scl_error_t scl_cbloom_init(scl_allocator_t *alloc, scl_concurrent_bloom_t *bf, size_t expected_items,

@@ -14,9 +14,9 @@ typedef struct scl_concurrent_stack_node {
 } scl_concurrent_stack_node_t;
 
 typedef struct {
-    _Atomic scl_tagged_ptr_t top;
+    _Atomic scl_tagged_ptr_t top SCL_CACHE_ALIGNED;
     size_t element_size;
-    atomic_size_t count;
+    atomic_size_t count SCL_CACHE_ALIGNED;
 } scl_concurrent_stack_t;
 
 scl_error_t scl_cstack_init(scl_allocator_t *SCL_RESTRICT alloc, scl_concurrent_stack_t *SCL_RESTRICT stack, size_t element_size) SCL_WARN_UNUSED;

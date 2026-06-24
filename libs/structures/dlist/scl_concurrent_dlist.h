@@ -19,7 +19,7 @@ typedef struct {
     scl_concurrent_dlist_node_t *tail;
     size_t element_size;
     atomic_size_t count;
-    scl_spinlock_t lock;
+    scl_spinlock_t lock SCL_CACHE_ALIGNED;
 } scl_concurrent_dlist_t;
 
 scl_error_t scl_cdlist_init(scl_allocator_t *SCL_RESTRICT alloc, scl_concurrent_dlist_t *SCL_RESTRICT list, size_t element_size) SCL_WARN_UNUSED;

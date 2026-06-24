@@ -25,7 +25,7 @@ typedef struct {
     atomic_size_t count;
     scl_cmp_func_t cmp;
     int t;
-    scl_spinlock_t lock;
+    scl_spinlock_t lock SCL_CACHE_ALIGNED;
 } scl_concurrent_btree_t;
 
 scl_error_t scl_cbtree_init(scl_allocator_t *alloc, scl_concurrent_btree_t *tree, size_t key_size, size_t value_size,

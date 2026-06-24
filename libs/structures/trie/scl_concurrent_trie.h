@@ -20,7 +20,7 @@ typedef struct scl_concurrent_trie_node {
 typedef struct {
     scl_concurrent_trie_node_t *root;
     size_t value_size;
-    atomic_size_t count;
+    atomic_size_t count SCL_CACHE_ALIGNED;
 } scl_concurrent_trie_t;
 
 scl_error_t scl_ctrie_init(scl_allocator_t *SCL_RESTRICT alloc, scl_concurrent_trie_t *SCL_RESTRICT trie, size_t value_size) SCL_WARN_UNUSED;

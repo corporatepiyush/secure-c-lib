@@ -19,7 +19,7 @@ typedef struct {
     size_t element_size;
     atomic_size_t count;
     scl_cmp_func_t cmp;
-    scl_spinlock_t lock;
+    scl_spinlock_t lock SCL_CACHE_ALIGNED;
 } scl_concurrent_bst_t;
 
 scl_error_t scl_cbst_init(scl_allocator_t *alloc, scl_concurrent_bst_t *tree, size_t element_size,
