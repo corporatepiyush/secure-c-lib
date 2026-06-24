@@ -120,6 +120,39 @@ static inline bool scl_mul_overflow(size_t a, size_t b, size_t *out) {
     return false;
 }
 
+static inline bool scl_sub_overflow(size_t a, size_t b, size_t *out) {
+    if (scl_unlikely(b > a)) return true;
+    *out = a - b;
+    return false;
+}
+
+/* ── Untrusted-input bounds checking ────────────────────────────
+ * Generalization of the bounds bugs found across the docparse parsers:
+ * any length/offset/count taken from external data must be validated to
+ * lie within the real buffer *before* it is used to index or copy. These
+ * helpers do the check in an overflow-safe way so call sites can't be
+ * fooled by `off + n` wrapping around SIZE_MAX. Prefer these over hand-
+ * rolled `p + n <= end` pointer math (which is itself UB on overflow). */
+
+/* True iff the byte range [off, off+n) lies fully within a buffer of
+ * `total` bytes. Overflow-safe: a wrapping off+n is rejected, not accepted. */
+static inline bool scl_range_in_bounds(size_t total, size_t off, size_t n) {
+    if (scl_unlikely(off > total)) return false;
+    return n <= total - off;          /* total - off cannot underflow here */
+}
+
+/* Largest length, starting at `off`, that still fits in `total` bytes.
+ * Use to clamp an attacker-supplied length down to what is actually present. */
+static inline size_t scl_clamp_len(size_t total, size_t off, size_t want) {
+    if (scl_unlikely(off >= total)) return 0;
+    size_t avail = total - off;
+    return want < avail ? want : avail;
+}
+
+/* min/max for size_t without the double-evaluation hazard of the macros. */
+static inline size_t scl_min_sz(size_t a, size_t b) { return a < b ? a : b; }
+static inline size_t scl_max_sz(size_t a, size_t b) { return a > b ? a : b; }
+
 /* Secure memory zero — prevents compiler from eliding the wipe. */
 void scl_secure_zero(void *ptr, size_t len);
 

@@ -62,8 +62,12 @@ static int pdf_parse_xref(scl_parse_pdf_t *parser) {
 
     char *xoff_str = startxref + 10;
     while (*xoff_str && (unsigned char)*xoff_str <= ' ') xoff_str++;
-    parser->xref_offset = (size_t)scl_atoll(xoff_str);
+    long long xoff = scl_atoll(xoff_str);
+    if (xoff < 0 || (size_t)xoff >= parser->buf_size) return -1;
+    parser->xref_offset = (size_t)xoff;
 
+    /* The buffer is NUL-terminated (see pdf_read_file), so the scanning loops
+     * below are bounded by the terminator once xref_ptr is in-bounds. */
     char *xref_ptr = (char *)parser->buf + parser->xref_offset;
     if (scl_strncmp(xref_ptr, "xref", 4) != 0) return -1;
 

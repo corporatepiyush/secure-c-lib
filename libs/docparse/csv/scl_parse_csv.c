@@ -24,8 +24,11 @@ scl_error_t scl_parse_csv_init(scl_allocator_t *alloc, scl_parse_csv_t *parser) 
 
 static int csv_ensure_buf(scl_parse_csv_t *parser, size_t needed) {
     if (needed <= parser->buffer_cap) return 0;
-    size_t new_cap = parser->buffer_cap * 2;
-    while (new_cap < needed) new_cap *= 2;
+    size_t new_cap = parser->buffer_cap;
+    while (new_cap < needed) {
+        if (new_cap > SIZE_MAX / 2) { new_cap = needed; break; }
+        new_cap *= 2;
+    }
     char *nb = (char *)scl_realloc(parser->alloc, parser->buffer, parser->buffer_cap, new_cap, _Alignof(max_align_t));
     if (!nb) return -1;
     parser->buffer = nb;
@@ -37,7 +40,11 @@ scl_error_t scl_parse_csv_feed(scl_parse_csv_t *parser, const char *data, size_t
     if (scl_unlikely(!parser)) return SCL_ERR_NULL_PTR;
     if (scl_unlikely(!data && len > 0)) return SCL_ERR_NULL_PTR;
 
-    if (csv_ensure_buf(parser, parser->buffer_len + len + 1) != 0)
+    size_t need;
+    if (scl_add_overflow(parser->buffer_len, len, &need) ||
+        scl_add_overflow(need, 1, &need))
+        return SCL_ERR_SIZE_OVERFLOW;
+    if (csv_ensure_buf(parser, need) != 0)
         return SCL_ERR_OUT_OF_MEMORY;
 
     scl_memcpy(parser->buffer + parser->buffer_len, data, len);

@@ -119,4 +119,58 @@ typedef struct {
     void *user_data;
 } scl_test_thread_arg_t;
 
+/* Record an assertion onto a concurrent counter set (thread-safe). */
+#define SCL_CC_EXPECT(cc, cond) \
+    scl_test_cc_record((cc), !!(cond), __FILE__, __LINE__, #cond)
+
+/* ── One-call concurrent test driver ───────────────────────────
+ * Spawns `nthreads` running `body`, each receiving an scl_test_thread_arg_t
+ * with a shared barrier (so they can rendezvous before the hot section),
+ * shared concurrent counters, its own thread_id, and `user_data`. Joins all
+ * threads and merges the pass/fail counts into the runner. The body should
+ * use SCL_CC_EXPECT(arg->cc, ...) for its assertions and may call
+ * scl_test_barrier_wait(arg->barrier) to maximize contention.
+ *
+ * Returns the number of threads that failed to spawn (0 on full success). */
+static inline int scl_test_run_concurrent(scl_test_runner_t *tr, int nthreads,
+                                          void *(*body)(void *), void *user_data) {
+    if (nthreads < 1) nthreads = 1;
+    if (nthreads > 1024) nthreads = 1024;
+
+    scl_test_concurrent_counters_t cc;
+    scl_test_barrier_t barrier;
+    scl_test_cc_init(&cc);
+    scl_test_barrier_init(&barrier, nthreads);
+
+    pthread_t *threads = (pthread_t *)calloc((size_t)nthreads, sizeof(pthread_t));
+    scl_test_thread_arg_t *args =
+        (scl_test_thread_arg_t *)calloc((size_t)nthreads, sizeof(scl_test_thread_arg_t));
+    if (!threads || !args) {
+        free(threads); free(args);
+        tr->failed++;   /* infrastructure failure counts against the suite */
+        return nthreads;
+    }
+
+    int spawned = 0;
+    for (int i = 0; i < nthreads; i++) {
+        args[i].thread_id = i;
+        args[i].nthreads  = nthreads;
+        args[i].barrier   = &barrier;
+        args[i].cc        = &cc;
+        args[i].user_data = user_data;
+        if (pthread_create(&threads[i], NULL, body, &args[i]) == 0)
+            spawned++;
+        else
+            threads[i] = (pthread_t)0;
+    }
+
+    for (int i = 0; i < nthreads; i++)
+        if (threads[i]) pthread_join(threads[i], NULL);
+
+    scl_test_cc_merge(tr, &cc);
+    free(threads);
+    free(args);
+    return nthreads - spawned;
+}
+
 #endif

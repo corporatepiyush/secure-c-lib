@@ -52,6 +52,7 @@ static char *json_parse_string(scl_allocator_t *alloc, const char **p) {
         if (**p == '\\') {
             (*p)++;
             char c = **p;
+            if (c == '\0') break;   /* lone trailing backslash: stop before NUL */
             switch (c) {
             case '"':  case '\\': case '/':
                 s[len++] = c;
@@ -63,7 +64,10 @@ static char *json_parse_string(scl_allocator_t *alloc, const char **p) {
             case 't':  s[len++] = '\t'; break;
             case 'u': {
                 char hex[5] = {0};
-                for (int i = 0; i < 4; i++) { (*p)++; hex[i] = **p; }
+                int n = 0;
+                /* Stop at NUL so a truncated \u escape cannot read past
+                 * the end of the input string. */
+                while (n < 4 && (*p)[1] != '\0') { (*p)++; hex[n++] = **p; }
                 unsigned long cp = scl_strtoul(hex, NULL, 16);
                 if (cp < 128) { s[len++] = (char)cp; }
                 else { s[len++] = '?'; }

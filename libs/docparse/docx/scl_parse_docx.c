@@ -41,13 +41,12 @@ static int docx_zip_find_file(scl_parse_docx_t *parser, const char *name, unsign
 
         if ((size_t)name_len == scl_strlen(name) &&
             scl_memcmp(buf + pos + ZIP_LOCAL_HDR_SZ, name, name_len) == 0) {
-            if (comp_method != 0) {
-                *out = buf + hdr_end;
-                *out_len = comp_sz;
-                return 0;
-            }
+            /* Clamp to bytes actually present so a forged size header cannot
+             * drive an out-of-bounds read of the entry payload. */
+            size_t avail = sz - hdr_end;
+            size_t want = (comp_method != 0) ? comp_sz : uncomp_sz;
             *out = buf + hdr_end;
-            *out_len = uncomp_sz;
+            *out_len = (want <= avail) ? want : avail;
             return 0;
         }
 

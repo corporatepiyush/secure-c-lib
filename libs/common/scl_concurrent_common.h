@@ -58,42 +58,13 @@ static inline scl_tagged_ptr_t scl_tagged_make(void *ptr, uintptr_t tag) {
     return tp;
 }
 
-/* ── Lock-free Treiber stack (ABA-safe via tagged ptr) ────── */
-typedef scl_tagged_ptr_t scl_treiber_stack_t;
-
-static inline void scl_treiber_init(scl_treiber_stack_t *stack) {
-    stack->raw = 0;
-}
-static inline bool scl_treiber_empty(scl_treiber_stack_t *stack) {
-    return stack->ptr == NULL;
-}
-static inline void scl_treiber_push(scl_treiber_stack_t *stack,
-                                    scl_tagged_ptr_t node,
-                                    volatile uintptr_t *next_field) {
-    scl_tagged_ptr_t old;
-    old.raw = __atomic_load_n(&stack->raw, __ATOMIC_RELAXED);
-    do {
-        node.ptr = (void *)((uintptr_t)node.ptr & ~(uintptr_t)3);
-        __atomic_store_n(next_field, (uintptr_t)old.ptr, __ATOMIC_RELEASE);
-        old.tag++;
-    } while (!__atomic_compare_exchange_n(&stack->raw, &old.raw,
-                 (scl_tagged_ptr_t){.ptr = node.ptr, .tag = old.tag}.raw,
-                 false, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED));
-}
-static inline scl_tagged_ptr_t scl_treiber_pop(scl_treiber_stack_t *stack,
-                                                volatile uintptr_t *next_field) {
-    scl_tagged_ptr_t old;
-    old.raw = __atomic_load_n(&stack->raw, __ATOMIC_RELAXED);
-    void *next;
-    do {
-        if (!old.ptr) return scl_tagged_make(NULL, 0);
-        next = (void *)__atomic_load_n(next_field, __ATOMIC_ACQUIRE);
-        old.tag++;
-    } while (!__atomic_compare_exchange_n(&stack->raw, &old.raw,
-                 (scl_tagged_ptr_t){.ptr = (void *)((uintptr_t)next & ~(uintptr_t)3), .tag = old.tag}.raw,
-                 false, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED));
-    return scl_tagged_make(old.ptr, old.tag - 1);
-}
+/* ── Lock-free data structures (moved) ─────────────────────────
+ * The lock-free stack and MPMC queue now live under structures/:
+ *   structures/lfstack/scl_concurrent_lfstack.h  (scl_lfstack)
+ *   structures/mpmc/scl_concurrent_mpmc.h        (scl_mpmc_queue)
+ * This header keeps only the shared concurrency *primitives*
+ * (spinlock, tagged pointer). Include the structure headers directly
+ * where you need those containers. */
 
 /* ── CAS helpers ────────────────────────────────────────────── */
 #define SCL_CAS(ptr, old, new) \

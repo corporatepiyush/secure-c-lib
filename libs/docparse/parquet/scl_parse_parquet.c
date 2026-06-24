@@ -8,17 +8,23 @@
 
 #define PARQUET_MAGIC "PAR1"
 
-static uint64_t parquet_read_varint(const unsigned char **p) {
+/* Bounds-checked varint reader: never reads at or past `end`. */
+static uint64_t parquet_read_varint(const unsigned char **p, const unsigned char *end) {
     uint64_t v = 0;
     int shift = 0;
-    while (1) {
-        if (shift >= 64) break;
+    while (*p < end && shift < 64) {
         unsigned char b = *(*p)++;
         v |= (uint64_t)(b & 0x7F) << shift;
         shift += 7;
         if (!(b & 0x80)) return v;
     }
     return v;
+}
+
+/* Advance `p` by `n` bytes, clamped so it never moves past `end`. */
+static const unsigned char *parquet_clamp(const unsigned char *p, uint64_t n,
+                                          const unsigned char *end) {
+    return (n <= (uint64_t)(end - p)) ? p + n : end;
 }
 
 static int parquet_parse_footer(scl_parse_parquet_t *parser) {
@@ -51,21 +57,30 @@ static int parquet_parse_footer(scl_parse_parquet_t *parser) {
         ft = ft & 0x03;
         switch (ft) {
         case 0:
-            parquet_read_varint(&fp);
+            parquet_read_varint(&fp, fend);
             break;
         case 1:
-            fp += 8;
+            fp = parquet_clamp(fp, 8, fend);
             break;
         case 2:
         {
-            uint64_t len = parquet_read_varint(&fp);
+            uint64_t len = parquet_read_varint(&fp, fend);
             if (id == 2) {
-                const unsigned char *list_end = fp + len;
-                uint64_t elem_count = parquet_read_varint(&fp);
+                const unsigned char *list_end = parquet_clamp(fp, len, fend);
+                uint64_t elem_count = parquet_read_varint(&fp, list_end);
+                /* Cap allocation to what the buffer could possibly describe
+                 * (one byte minimum per element) to reject absurd counts. */
+                if (elem_count > (uint64_t)(list_end - fp)) elem_count = (uint64_t)(list_end - fp);
                 parser->num_columns = (int)elem_count;
                 parser->column_names = (char **)scl_calloc(parser->alloc, (size_t)elem_count, sizeof(char *), _Alignof(max_align_t));
                 parser->column_types = (int *)scl_calloc(parser->alloc, (size_t)elem_count, sizeof(int), _Alignof(max_align_t));
-                if (!parser->column_types) { scl_free(parser->alloc, parser->column_names); return SCL_ERR_OUT_OF_MEMORY; }
+                if (elem_count > 0 && (!parser->column_names || !parser->column_types)) {
+                    scl_free(parser->alloc, parser->column_names);
+                    scl_free(parser->alloc, parser->column_types);
+                    parser->column_names = NULL; parser->column_types = NULL;
+                    parser->num_columns = 0;
+                    return SCL_ERR_OUT_OF_MEMORY;
+                }
 
                 for (uint64_t ci = 0; ci < elem_count && fp < list_end; ci++) {
                     while (fp < list_end) {
@@ -74,31 +89,30 @@ static int parquet_parse_footer(scl_parse_parquet_t *parser) {
                         int64_t sid = (sft >> 2) & 0x0F;
                         int stype = sft & 0x03;
                         if (stype == 2 && sid == 1 && ci < elem_count) {
-                            uint64_t nlen = parquet_read_varint(&fp);
-                            if (fp + nlen <= list_end) {
+                            uint64_t nlen = parquet_read_varint(&fp, list_end);
+                            if (nlen <= (uint64_t)(list_end - fp)) {
                                 parser->column_names[ci] = (char *)scl_alloc(parser->alloc, (size_t)nlen + 1, _Alignof(max_align_t));
                                 if (parser->column_names[ci]) {
                                     scl_memcpy(parser->column_names[ci], fp, (size_t)nlen);
                                     parser->column_names[ci][nlen] = '\0';
                                 }
                                 fp += nlen;
+                            } else {
+                                fp = list_end;
                             }
                         } else if (stype == 0) {
-                            parquet_read_varint(&fp);
+                            parquet_read_varint(&fp, list_end);
                         } else if (stype == 2) {
-                            uint64_t slen = parquet_read_varint(&fp);
-                            fp += slen;
+                            uint64_t slen = parquet_read_varint(&fp, list_end);
+                            fp = parquet_clamp(fp, slen, list_end);
                         } else {
                             break;
                         }
                     }
                 }
                 fp = list_end;
-            } else if (id == 3) {
-                const unsigned char *old = fp;
-                fp = old + len;
             } else {
-                fp += len;
+                fp = parquet_clamp(fp, len, fend);
             }
             break;
         }
@@ -123,19 +137,23 @@ static int parquet_parse_footer(scl_parse_parquet_t *parser) {
         unsigned char ft = *fp++;
         if (ft == 0x00) break;
         if ((ft & 3) == 0) {
-            int64_t val = (int64_t)parquet_read_varint(&fp);
+            int64_t val = (int64_t)parquet_read_varint(&fp, fend);
             int64_t fid = (ft >> 2) & 0x0F;
             if (fid == 3) {
                 parser->num_rows = val;
             }
         } else if ((ft & 3) == 1) {
-            if (((ft >> 2) & 0x0F) == 3) {
-                scl_memcpy(&parser->num_rows, fp, 8);
+            if ((uint64_t)(fend - fp) >= 8) {
+                if (((ft >> 2) & 0x0F) == 3) {
+                    scl_memcpy(&parser->num_rows, fp, 8);
+                }
+                fp += 8;
+            } else {
+                fp = fend;
             }
-            fp += 8;
         } else if ((ft & 3) == 2) {
-            uint64_t len = parquet_read_varint(&fp);
-            fp += len;
+            uint64_t len = parquet_read_varint(&fp, fend);
+            fp = parquet_clamp(fp, len, fend);
         } else if ((ft & 3) == 3) {
             int depth = 1;
             while (depth > 0 && fp < fend) {

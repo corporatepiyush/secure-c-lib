@@ -82,6 +82,7 @@ scl_error_t scl_parse_icelake_open(scl_allocator_t *alloc, scl_parse_icelake_t *
         if (manifests && manifests->type == SCL_JSON_ARRAY) {
             parser->num_manifest_files = (int)manifests->child_count;
             parser->manifest_files = (char **)scl_calloc(alloc, (size_t)parser->num_manifest_files, sizeof(char *), _Alignof(max_align_t));
+            if (!parser->manifest_files) parser->num_manifest_files = 0;
             for (int i = 0; i < parser->num_manifest_files && i < (int)manifests->child_count; i++) {
                 scl_parse_json_value_t *mf = manifests->children[i];
                 if (mf && mf->type == SCL_JSON_OBJECT) {
@@ -97,6 +98,7 @@ scl_error_t scl_parse_icelake_open(scl_allocator_t *alloc, scl_parse_icelake_t *
         if (entries && entries->type == SCL_JSON_ARRAY) {
             parser->num_data_files = (int)entries->child_count;
             parser->data_files = (char **)scl_calloc(alloc, (size_t)parser->num_data_files, sizeof(char *), _Alignof(max_align_t));
+            if (!parser->data_files) parser->num_data_files = 0;
             for (int i = 0; i < parser->num_data_files && i < (int)entries->child_count; i++) {
                 scl_parse_json_value_t *ent = entries->children[i];
                 if (ent && ent->type == SCL_JSON_OBJECT) {

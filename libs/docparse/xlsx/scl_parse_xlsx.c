@@ -30,8 +30,11 @@ static int xlsx_zip_find_file(const unsigned char *buf, size_t sz, const char *n
         if (hdr_end > sz) break;
         if ((size_t)name_len == scl_strlen(name) &&
             scl_memcmp(buf + pos + ZIP_LOCAL_HDR_SZ, name, name_len) == 0) {
+            /* Clamp the reported length to bytes actually present in the buffer
+             * so a forged uncomp_sz cannot drive an out-of-bounds read. */
+            size_t avail = sz - hdr_end;
             *out = (unsigned char *)(buf + hdr_end);
-            *out_len = uncomp_sz;
+            *out_len = (uncomp_sz <= avail) ? uncomp_sz : avail;
             return 0;
         }
         pos = hdr_end + comp_sz;
@@ -195,7 +198,8 @@ scl_error_t scl_parse_xlsx_open(scl_allocator_t *alloc, scl_parse_xlsx_t *parser
     }
 
     unsigned char *s1_data = NULL; size_t s1_len = 0;
-    if (xlsx_zip_find_file(parser->zip_buf, parser->zip_size, "xl/worksheets/sheet1.xml",
+    if (parser->sheet_data && parser->sheet_count > 0 &&
+        xlsx_zip_find_file(parser->zip_buf, parser->zip_size, "xl/worksheets/sheet1.xml",
                            &s1_data, &s1_len) == 0) {
         parser->sheet_data[0] = (char *)scl_alloc(alloc, s1_len + 1, _Alignof(max_align_t));
         if (parser->sheet_data[0]) {
