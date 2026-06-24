@@ -10,8 +10,10 @@
  *   3. Dispatches connections to worker threads via an MPMC queue.
  *   4. Parses HTTP/1.1 request lines and headers (in-place, on the connection's
  *      read buffer — no extra per-request malloc).
- *   5. Responds with static files (from a docroot) or dynamic handler output.
- *   6. Supports keep-alive, Content-Length, path-traversal defence, and
+ *   5. Reads request bodies (Content-Length and chunked transfer).
+ *   6. Parses multipart/form-data for file uploads.
+ *   7. Responds with static files (from a docroot) or dynamic handler output.
+ *   8. Supports keep-alive, Content-Length, path-traversal defence, and
  *      percent-decoding.
  *
  * ── Security design (first priority) ────────────────────────────────────────
@@ -19,9 +21,9 @@
  * HTTP servers are exposed to untrusted input on every request. The following
  * attacks are specifically defended against:
  *
- *   • Request smuggling: We reject any Transfer-Encoding header (RFC 7230
- *     §3.3.1 mandates that Content-Length MUST be ignored when Transfer-
- *     Encoding is present). No chunked decoding => no TE.TE or CL.TE vectors.
+ *   • Request smuggling: If Transfer-Encoding is present, Content-Length is
+ *     ignored (per RFC 7230 §3.3.1). We read the body exactly once using the
+ *     chosen framing — no ambiguity.
  *   • Path traversal: Percent-decode the path, reject ".." segments before
  *     touching the filesystem, then validate via realpath() containment.
  *   • Encoded NUL (%00): Explicitly rejected in url_decode_path().
@@ -29,15 +31,6 @@
  *     and target length are capped; per-connection read buffer is bounded.
  *   • Response splitting: No user-controlled data appears in format strings.
  *   • Information disclosure: Connection buffers are zeroed on release.
- *
- * ── Threading model ─────────────────────────────────────────────────────────
- *
- *   • 1 acceptor thread: poll() -> accept() -> acquire slot -> post to MPMC
- *   • N worker threads: condvar wait -> get from MPMC -> handle -> release
- *
- * The data path (acquire/post/get/release) is lock-free (Treiber stack +
- * Vyukov MPMC). A condvar semaphore parks idle workers only — not on the
- * data path, so there is no mutex contention under load.
  */
 
 #if defined(__GNUC__) && !defined(__clang__)
@@ -61,9 +54,11 @@
 #include <time.h>
 #include <sys/stat.h>
 #include <sys/socket.h>
+#include <ctype.h>
 
 #define SCL_HTTP_MAX_TARGET  8190
 #define SCL_HTTP_SEND_CHUNK  (64 * 1024)
+#define SCL_HTTP_MAX_BODY_DEFAULT (1024 * 1024) /* 1MB */
 
 /*
  * ── Server object ──────────────────────────────────────────────────────
@@ -101,8 +96,8 @@ struct scl_http_server {
     scl_cond_t         sem_c;
     int                sem_count;
 
-    atomic_bool        running;
-    atomic_bool        started;
+    atomic_bool        running SCL_CACHE_ALIGNED;
+    atomic_bool        started SCL_CACHE_ALIGNED;
 };
 
 /* ── MIME table ─────────────────────────────────────────────── */
@@ -174,6 +169,8 @@ static const char *mime_for_path(const char *path) {
 static const char *status_text(int code) {
     switch (code) {
     case 200: return "OK";
+    case 201: return "Created";
+    case 204: return "No Content";
     case 206: return "Partial Content";
     case 400: return "Bad Request";
     case 403: return "Forbidden";
@@ -191,6 +188,17 @@ static const char *status_text(int code) {
 }
 
 /* ── Header lookup (case-insensitive) ───────────────────────── */
+/* Compare up to prefix_len bytes of 'full' against 'expected' (case-insensitive) */
+static int ci_prefix(const char *full, size_t prefix_len, const char *expected) {
+    for (size_t i = 0; i < prefix_len; i++) {
+        if (expected[i] == '\0')
+            return 0;
+        if (scl_tolower((unsigned char)full[i]) != scl_tolower((unsigned char)expected[i]))
+            return 0;
+    }
+    return expected[prefix_len] == '\0';
+}
+
 static int ci_equal(const char *a, const char *b) {
     while (scl_likely(*a && *b)) {
         if (scl_unlikely(scl_tolower((unsigned char)*a) != scl_tolower((unsigned char)*b)))
@@ -209,7 +217,6 @@ const char *scl_http_request_header(const scl_http_request_t *req, const char *n
 }
 
 static int ci_contains_token(const char *haystack, const char *token) {
-    /* crude case-insensitive substring (header values are short) */
     if (!haystack) return 0;
     size_t tl = scl_strlen(token);
     for (const char *p = haystack; *p; p++) {
@@ -217,7 +224,11 @@ static int ci_contains_token(const char *haystack, const char *token) {
         while (i < tl && p[i] &&
                scl_tolower((unsigned char)p[i]) == scl_tolower((unsigned char)token[i]))
             i++;
-        if (i == tl) return 1;
+        if (i == tl) {
+            char c = p[i];
+            if (c == '\0' || c == ' ' || c == ',' || c == '\t' || c == '\r' || c == ';')
+                return 1;
+        }
     }
     return 0;
 }
@@ -227,27 +238,11 @@ static void http_date(char *out, size_t cap) {
     time_t now = time(NULL);
     struct tm tmv;
     gmtime_r(&now, &tmv);
-    /* RFC 7231 IMF-fixdate, e.g. "Tue, 24 Jun 2026 05:10:00 GMT" */
     strftime(out, cap, "%a, %d %b %Y %H:%M:%S GMT", &tmv);
 }
 
 /*
  * ── Percent-decoding ────────────────────────────────────────────────────
- *
- * URL percent-decoding is a notorious source of parser differential bugs.
- * The classic attack: the server's URL router sees "/safe%2f..%2fsecret"
- * but the filesystem layer (which auto-decodes) sees "/safe/../secret".
- * We decode FIRST, then check for ".." — no differential possible.
- *
- * Security checks in this function:
- *   1. Reject truncated escapes ("%X" at end of string).
- *   2. Reject invalid hex digits in escapes.
- *   3. Reject encoded NUL (%00) — this is a parser differential favourite.
- *      A server that decodes after a strcmp() sees "/foo%00bar" differently
- *      from one that decodes before, and some C str* functions terminate
- *      at the NUL.
- *   4. Reject raw NUL in the source (not just encoded).
- *   5. Bounds-check output buffer — no overflow.
  */
 static int hexval(int c) {
     if (c >= '0' && c <= '9') return c - '0';
@@ -256,7 +251,6 @@ static int hexval(int c) {
     return -1;
 }
 
-/* Returns decoded length, or -1 on malformed input / embedded NUL. */
 static long url_decode_path(const char *src, size_t srclen, char *dst, size_t dstcap) {
     size_t o = 0;
     for (size_t i = 0; i < srclen; i++) {
@@ -267,12 +261,12 @@ static long url_decode_path(const char *src, size_t srclen, char *dst, size_t ds
             int lo = hexval((unsigned char)src[i + 2]);
             if (hi < 0 || lo < 0) return -1;
             int v = (hi << 4) | lo;
-            if (v == 0) return -1;                 /* reject %00 */
+            if (v == 0) return -1;
             c = (char)v;
             i += 2;
         }
         if (c == '\0') return -1;
-        if (o + 1 >= dstcap) return -1;            /* too long */
+        if (o + 1 >= dstcap) return -1;
         dst[o++] = c;
     }
     dst[o] = '\0';
@@ -281,46 +275,12 @@ static long url_decode_path(const char *src, size_t srclen, char *dst, size_t ds
 
 /*
  * ── Path-traversal-safe resolution within docroot ────────────────────
- *
- * Given a decoded request path, resolve it to an absolute path within the
- * docroot. Returns 0 on success or an HTTP error code (400/403/404/414).
- *
- * The defence has THREE layers (belt-and-suspenders):
- *
- *   Layer 1 — Static ".." scan: Before touching the filesystem, we scan
- *   for "/../" or leading "../" patterns and reject them. This is fast
- *   and catches the common case without overhead.
- *
- *   Layer 2 — realpath() containment: We concatenate docroot_real + path,
- *   then call realpath() on the candidate (which resolves all symlinks,
- *   ".." components, etc.). The result MUST have docroot_real as a prefix
- *   and MUST be followed by '/' or end-of-string. This prevents symlink
- *   escapes: if the docroot contains a symlink to "/etc", realpath()
- *   resolves it and the prefix check catches it.
- *
- *   Layer 3 — Only Layer 2 for the ".." case too: Even if Layer 1 is
- *   bypassed (e.g. via Unicode normalization tricks), Layer 2 catches
- *   it because realpath() resolves ".." and the prefix check fails.
- *
- * ── Why not just realpath()? ──────────────────────────────────────────
- *
- * Layer 1 exists because realpath() is an expensive syscall (it walks the
- * directory tree in the kernel). For a simple request like GET /index.html,
- * the static scan is virtually free and the realpath() call confirms it.
- * For an attack request like GET /../../../etc/passwd, we fail fast in
- * Layer 1 before ever calling realpath().
- *
- * ── Error codes returned instead of scl_error_t ───────────────────────
- * This function returns HTTP status codes directly because its caller
- * (serve_static / handle_connection) needs to send an error response.
- * Returning 404 vs 403 lets us distinguish "file not found" from
- * "forbidden traversal attempt" in logs. */
+ */
 static int resolve_in_docroot(const scl_http_server_t *srv, const char *decoded_path,
                               char *resolved, size_t cap) {
     if (srv->docroot_real_len == 0) return 404;
     if (decoded_path[0] != '/') return 400;
 
-    /* Defensive reject of any ".." path segment before touching the FS. */
     for (const char *p = decoded_path; *p; ) {
         if (p[0] == '.' && p[1] == '.' &&
             (p[2] == '/' || p[2] == '\0') &&
@@ -336,9 +296,8 @@ static int resolve_in_docroot(const scl_http_server_t *srv, const char *decoded_
     if (n < 0 || (size_t)n >= sizeof(candidate)) return 414;
 
     char real[SCL_PATH_MAX];
-    if (!realpath(candidate, real)) return 404;    /* nonexistent or unreadable */
+    if (!realpath(candidate, real)) return 404;
 
-    /* Containment: real must be docroot_real itself or live beneath it. */
     size_t rl = scl_strlen(real);
     if (rl < srv->docroot_real_len) return 403;
     if (scl_memcmp(real, srv->docroot_real, srv->docroot_real_len) != 0) return 403;
@@ -351,17 +310,6 @@ static int resolve_in_docroot(const scl_http_server_t *srv, const char *decoded_
 
 /*
  * ── Response helpers ──────────────────────────────────────────────
- *
- * These functions construct and send HTTP responses. The key invariant:
- * response headers are built with snprintf into fixed-size stack buffers,
- * so even if a caller passes an enormous body or content_type, we never
- * overflow a heap buffer — we either truncate or return SCL_ERR_IO.
- *
- * Security note: The response format string contains %d and %s for the
- * status code/reason and content_type/date/server_name. NONE of these
- * contain user-controlled data (the date is generated locally, the server
- * name is configured by the operator, content_type is from our own MIME
- * table or the application handler). This prevents HTTP response splitting.
  */
 static scl_error_t send_simple(const scl_http_server_t *srv, int fd, int status,
                                const char *content_type, const void *body,
@@ -389,7 +337,6 @@ static scl_error_t send_simple(const scl_http_server_t *srv, int fd, int status,
     return err;
 }
 
-/* Canned error page (also serves as the body). */
 static scl_error_t send_error(const scl_http_server_t *srv, int fd, int status,
                               bool head_only, bool close_conn) {
     char body[128];
@@ -401,7 +348,6 @@ static scl_error_t send_error(const scl_http_server_t *srv, int fd, int status,
                        body, bn < 0 ? 0 : (size_t)bn, head_only, close_conn);
 }
 
-/* Stream a static file from docroot. */
 static scl_error_t serve_static(const scl_http_server_t *srv, int fd,
                                 const scl_http_request_t *req, bool head_only,
                                 bool close_conn) {
@@ -413,7 +359,6 @@ static scl_error_t serve_static(const scl_http_server_t *srv, int fd,
     if (stat(resolved, &st) != 0)
         return send_error(srv, fd, 404, head_only, close_conn);
 
-    /* Directory => try an index.html below it. */
     if (S_ISDIR(st.st_mode)) {
         char idx[SCL_PATH_MAX];
         char dpath[SCL_PATH_MAX];
@@ -467,6 +412,308 @@ static scl_error_t serve_static(const scl_http_server_t *srv, int fd,
 }
 
 /*
+ * ── Chunked transfer decoding ───────────────────────────────────────
+ *
+ * Reads and decodes a chunked transfer body from fd. Returns the
+ * reassembled body in *out (allocated via alloc) and its length in
+ * *out_len. On error, returns an HTTP status code (0 on success).
+ */
+static int read_chunked_body(scl_allocator_t *alloc, int fd,
+                             unsigned char *SCL_RESTRICT rbuf,
+                             size_t *SCL_RESTRICT rbuf_len, size_t rbuf_cap,
+                             size_t max_body,
+                             void *SCL_RESTRICT *SCL_RESTRICT out,
+                             size_t *SCL_RESTRICT out_len) {
+    size_t cap = 4096;
+    unsigned char *buf = (unsigned char *)scl_alloc(alloc, cap, _Alignof(max_align_t));
+    if (!buf) return 500;
+    size_t len = 0;
+
+    /* Consume any data already in rbuf after the header block */
+    size_t offset = 0;
+
+    /* Read until we have a full line (chunk-size) */
+    while (1) {
+        size_t i;
+        for (i = offset; i + 1 < *rbuf_len; i++)
+            if (rbuf[i] == '\r' && rbuf[i+1] == '\n') break;
+
+        if (i + 1 < *rbuf_len) {
+            /* Found CRLF — parse chunk-size line */
+            rbuf[i] = '\0';
+            char *end = NULL;
+            long long chunk_sz = scl_strtoll((const char *)rbuf + offset, &end, 16);
+            if (end == (char *)rbuf + offset) { scl_free(alloc, buf); return 400; }
+            if (chunk_sz < 0) { scl_free(alloc, buf); return 400; }
+
+            offset = i + 2; /* skip past CRLF */
+
+            if (chunk_sz == 0) {
+                /* Last chunk — read trailer headers until blank line */
+                while (1) {
+                    /* Need data */
+                    while (offset + 1 >= *rbuf_len) {
+                        ssize_t n = recv(fd, rbuf + *rbuf_len,
+                                         rbuf_cap - *rbuf_len, 0);
+                        if (n > 0) { *rbuf_len += (size_t)n; }
+                        else if (n == 0) { scl_free(alloc, buf); return 400; }
+                        else if (errno == EINTR) continue;
+                        else { scl_free(alloc, buf); return 500; }
+                    }
+                    size_t j;
+                    for (j = offset; j + 1 < *rbuf_len; j++)
+                        if (rbuf[j] == '\r' && rbuf[j+1] == '\n') break;
+                    if (j + 1 < *rbuf_len) {
+                        if (j == offset) {
+                            /* Blank line — end of trailers.
+                             * Compact trailing CRLF, keep pipelined bytes. */
+                            offset += 2;
+                            if (offset < *rbuf_len) {
+                                memmove(rbuf, rbuf + offset, *rbuf_len - offset);
+                                *rbuf_len -= offset;
+                            } else {
+                                *rbuf_len = 0;
+                            }
+                            *out = buf;
+                            *out_len = len;
+                            return 0;
+                        }
+                        offset = j + 2;
+                    } else {
+                        /* Need more data — rbuf may not have full trailer line */
+                        break;
+                    }
+                }
+                /* If we break out without finding blank line, we'll loop back
+                 * and read more. This is fine — the blank line will follow. */
+                continue;
+            }
+
+            /* Read chunk data */
+            size_t remaining = (size_t)chunk_sz;
+            while (remaining > 0) {
+                size_t avail = *rbuf_len - offset;
+                size_t to_copy = avail < remaining ? avail : remaining;
+                if (to_copy > 0) {
+                    if (len + to_copy > max_body) { scl_free(alloc, buf); return 413; }
+                    if (len + to_copy > cap) {
+                        size_t new_cap = cap * 2;
+                        while (new_cap < len + to_copy) new_cap *= 2;
+                        unsigned char *nb = (unsigned char *)scl_realloc(alloc, buf, cap, new_cap, _Alignof(max_align_t));
+                        if (!nb) { scl_free(alloc, buf); return 500; }
+                        buf = nb;
+                        cap = new_cap;
+                    }
+                    scl_memcpy(buf + len, rbuf + offset, to_copy);
+                    len += to_copy;
+                    offset += to_copy;
+                    remaining -= to_copy;
+                }
+                if (remaining > 0) {
+                    ssize_t n = recv(fd, rbuf, rbuf_cap, 0);
+                    if (n > 0) {
+                        *rbuf_len = (size_t)n;
+                        offset = 0;
+                    } else if (n == 0) { scl_free(alloc, buf); return 400; }
+                    else if (errno == EINTR) continue;
+                    else { scl_free(alloc, buf); return 500; }
+                }
+            }
+
+            /* Consume trailing CRLF */
+            while (offset + 1 >= *rbuf_len) {
+                ssize_t n = recv(fd, rbuf + *rbuf_len,
+                                 rbuf_cap - *rbuf_len, 0);
+                if (n > 0) { *rbuf_len += (size_t)n; }
+                else if (n == 0) { scl_free(alloc, buf); return 400; }
+                else if (errno == EINTR) continue;
+                else { scl_free(alloc, buf); return 500; }
+            }
+            if (rbuf[offset] == '\r' && rbuf[offset+1] == '\n') {
+                offset += 2;
+            } else {
+                scl_free(alloc, buf);
+                return 400;
+            }
+
+            /* Compact rbuf */
+            if (offset < *rbuf_len) {
+                memmove(rbuf, rbuf + offset, *rbuf_len - offset);
+                *rbuf_len -= offset;
+            } else {
+                *rbuf_len = 0;
+            }
+            offset = 0;
+        } else {
+            /* Need more data for chunk-size line */
+            ssize_t n = recv(fd, rbuf + *rbuf_len, rbuf_cap - *rbuf_len, 0);
+            if (n > 0) { *rbuf_len += (size_t)n; }
+            else if (n == 0) { scl_free(alloc, buf); return 400; }
+            else if (errno == EINTR) continue;
+            else { scl_free(alloc, buf); return 500; }
+        }
+    }
+}
+
+/*
+ * ── Multipart/form-data parser ─────────────────────────────────────
+ *
+ * Parse a multipart/form-data body (RFC 2046, RFC 7578). The body buffer
+ * is modified in-place (NUL-terminated line endings) and the upload_t
+ * entries point into it. No copying of part data.
+ */
+int scl_http_parse_multipart(const void *body, size_t body_len,
+                             const char *content_type,
+                             scl_http_upload_t *uploads, size_t *count,
+                             size_t max_count) {
+    if (!body || !content_type || !count || !uploads) return -1;
+
+    /* Extract boundary from Content-Type */
+    const char *boundary_str = scl_strstr(content_type, "boundary=");
+    if (!boundary_str) return -1;
+    boundary_str += 9; /* skip "boundary=" */
+    /* Trim possible quotes */
+    char boundary[256];
+    size_t bi = 0;
+    if (*boundary_str == '"') boundary_str++;
+    while (*boundary_str && *boundary_str != ';' && *boundary_str != '"' && *boundary_str != ' ') {
+        if (bi >= sizeof(boundary) - 1) return -1;
+        boundary[bi++] = *boundary_str++;
+    }
+    boundary[bi] = '\0';
+    if (bi == 0) return -1;
+
+    /* Delimiter markers */
+    char delim[512];
+    char end_delim[512];
+    snprintf(delim, sizeof(delim), "--%s", boundary);
+    snprintf(end_delim, sizeof(end_delim), "--%s--", boundary);
+    size_t dlen = scl_strlen(delim);
+
+    unsigned char *ptr = (unsigned char *)body;
+    size_t remaining = body_len;
+    size_t parsed = 0;
+
+    while (remaining > 0 && *count < max_count) {
+        /* Skip leading whitespace / CRLF before delimiter */
+        while (remaining > 0 && (*ptr == '\r' || *ptr == '\n')) {
+            ptr++; remaining--;
+        }
+        if (remaining < dlen) break;
+
+        /* Check if this is the end delimiter */
+        if (scl_memcmp(ptr, end_delim, scl_strlen(end_delim)) == 0) break;
+        if (scl_memcmp(ptr, delim, dlen) != 0) break;
+
+        ptr += dlen;
+        remaining -= dlen;
+
+        /* Skip CRLF after delimiter */
+        if (remaining >= 2 && ptr[0] == '\r' && ptr[1] == '\n') {
+            ptr += 2; remaining -= 2;
+        } else if (remaining >= 1 && ptr[0] == '\n') {
+            ptr += 1; remaining -= 1;
+        }
+
+        /* Parse part headers until blank line */
+        const char *part_content_type = NULL;
+        const char *name = NULL;
+        const char *filename = NULL;
+
+        while (remaining > 0) {
+            /* Find end of this header line */
+            size_t hdr_end = 0;
+            bool found = false;
+            for (size_t i = 0; i + 1 < remaining; i++) {
+                if (ptr[i] == '\r' && ptr[i+1] == '\n') {
+                    hdr_end = i;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) break;
+
+            if (hdr_end == 0) {
+                /* Blank line — end of headers */
+                ptr += 2; remaining -= 2; /* skip CRLF */
+                break;
+            }
+
+            /* Locate colon separating header name from value */
+            size_t colon_pos = 0;
+            for (size_t i = 0; i < hdr_end; i++) {
+                if (ptr[i] == ':') { colon_pos = i; break; }
+            }
+            if (colon_pos == 0 || colon_pos >= hdr_end) goto next_hdr;
+
+            const unsigned char *hdr_value_p = ptr + colon_pos + 1;
+            while ((size_t)(hdr_value_p - ptr) < hdr_end && *hdr_value_p == ' ')
+                hdr_value_p++;
+
+            /* Compare header name case-insensitively by scanning to colon */
+#define CI_HDR_EQ(expected) ci_prefix((const char *)ptr, colon_pos, expected)
+            /* Content-Disposition: form-data; name="field"; filename="file.txt" */
+            if (CI_HDR_EQ("Content-Disposition")) {
+                for (const char *p = (const char *)hdr_value_p; p < (const char *)ptr + hdr_end; p++) {
+                    if ((size_t)((const char *)ptr + hdr_end - p) >= 6 &&
+                        scl_memcmp(p, "name=\"", 6) == 0) {
+                        name = p + 6;
+                    }
+                    if ((size_t)((const char *)ptr + hdr_end - p) >= 10 &&
+                        scl_memcmp(p, "filename=\"", 10) == 0) {
+                        filename = p + 10;
+                    }
+                }
+            }
+
+            if (CI_HDR_EQ("Content-Type")) {
+                part_content_type = (const char *)hdr_value_p;
+            }
+#undef CI_HDR_EQ
+
+next_hdr:
+            ptr += hdr_end + 2; /* skip CRLF */
+            remaining -= (hdr_end + 2);
+        }
+
+        /* Remaining bytes until next delimiter are part body */
+        /* Find next "--boundary" or "--boundary--" */
+        size_t part_end = remaining;
+        for (size_t i = 0; i + dlen < remaining; i++) {
+            if (ptr[i] == '\r' && ptr[i+1] == '\n' &&
+                (size_t)i + 2 + dlen <= remaining &&
+                scl_memcmp(ptr + i + 2, delim, dlen) == 0) {
+                part_end = (size_t)i;
+                break;
+            }
+            if (ptr[i] == '\r' && ptr[i+1] == '\n' &&
+                (size_t)i + 2 + dlen + 2 <= remaining &&
+                scl_memcmp(ptr + i + 2, end_delim, scl_strlen(end_delim)) == 0) {
+                part_end = (size_t)i;
+                break;
+            }
+        }
+
+        if (part_end > remaining) part_end = remaining;
+
+        if (*count < max_count) {
+            uploads[*count].name = name;
+            uploads[*count].filename = filename;
+            uploads[*count].content_type = part_content_type;
+            uploads[*count].data = ptr;
+            uploads[*count].data_len = part_end;
+            (*count)++;
+        }
+
+        ptr += part_end;
+        remaining -= part_end;
+        parsed++;
+    }
+
+    return (int)parsed;
+}
+
+/*
  * ── Request parsing ─────────────────────────────────────────────────
  *
  * Parses an HTTP/1.x request from a NUL-terminated buffer by replacing
@@ -474,29 +721,10 @@ static scl_error_t serve_static(const scl_http_server_t *srv, int fd,
  * at the right offsets within the original buffer. This is ZERO-COPY:
  * we don't allocate or copy any part of the request — we just NUL-
  * terminate each piece in place.
- *
- * ── Security invariants checked during parsing ──────────────────────
- *
- *   • Method is uppercase-alpha only (no injection characters).
- *   • Target begins with '/' and contains no control characters.
- *   • Target length is bounded (414 if exceeded).
- *   • Version is exactly "HTTP/1.0" or "HTTP/1.1" (505 otherwise).
- *   • Header line count is bounded (excess silently dropped).
- *   • Each header line must contain ':' (RFC 7230 §3.2.4).
- *   • Transfer-Encoding is rejected later (501), NOT here — we must
- *     parse headers to detect it.
- *
- * Returns 0 on success, or an HTTP error status to send.
- *
- * ── Note on connection-close-after-body ─────────────────────────────
- * We reject request bodies with force_close because we don't read them
- * off the wire. If we allowed keep-alive after a request with a body,
- * the unconsumed body bytes would be interpreted as the next request's
- * start — a textbook request-smuggling vector. */
+ */
 static int parse_request(char *buf, size_t hdr_len, scl_http_request_t *req) {
     (void)scl_memset(req, 0, sizeof(*req));
 
-    /* Split header block into CRLF-terminated lines (NUL-terminate each). */
     char *line = buf;
     char *block_end = buf + hdr_len;
 
@@ -518,13 +746,11 @@ static int parse_request(char *buf, size_t hdr_len, scl_http_request_t *req) {
     *sp2 = '\0';
     char *version = sp2 + 1;
 
-    /* method: non-empty token of uppercase letters */
     if (line[0] == '\0') return 400;
     for (char *m = line; *m; m++)
         if (*m < 'A' || *m > 'Z') return 400;
     req->method = line;
 
-    /* target: must begin with '/', bounded length, no control chars */
     size_t tlen = scl_strlen(target);
     if (tlen == 0 || target[0] != '/') return 400;
     if (tlen > SCL_HTTP_MAX_TARGET) return 414;
@@ -533,7 +759,6 @@ static int parse_request(char *buf, size_t hdr_len, scl_http_request_t *req) {
             return 400;
     req->target = target;
 
-    /* version */
     if (scl_strcmp(version, "HTTP/1.1") == 0)      req->version_minor = 1;
     else if (scl_strcmp(version, "HTTP/1.0") == 0) req->version_minor = 0;
     else return 505;
@@ -570,13 +795,69 @@ static int parse_request(char *buf, size_t hdr_len, scl_http_request_t *req) {
     return 0;
 }
 
-/* Locate end of header block ("\r\n\r\n"); returns offset past it or 0. */
 static size_t find_header_end(const unsigned char *buf, size_t len) {
     if (scl_unlikely(len < 4)) return 0;
     for (size_t i = 0; i + 3 < len; i++)
         if (scl_likely(buf[i] == '\r' && buf[i+1] == '\n' &&
                        buf[i+2] == '\r' && buf[i+3] == '\n'))
             return i + 4;
+    return 0;
+}
+
+/*
+ * ── Body reading for Content-Length ─────────────────────────────────
+ *
+ * Reads exactly `cl` bytes from the connection. Uses any bytes already
+ * in rbuf (after the header block). Returns 0 on success or HTTP error.
+ */
+static int read_body_fixed(scl_allocator_t *alloc, int fd,
+                           unsigned char *SCL_RESTRICT rbuf,
+                           size_t *SCL_RESTRICT rbuf_len, size_t hend,
+                           long long cl, size_t max_body,
+                           void *SCL_RESTRICT *SCL_RESTRICT out,
+                           size_t *SCL_RESTRICT out_len) {
+    if (cl == 0) { *out = NULL; *out_len = 0; return 0; }
+    if ((unsigned long long)cl > max_body) return 413;
+
+    size_t need = (size_t)cl;
+    unsigned char *buf = (unsigned char *)scl_alloc(alloc, need, _Alignof(max_align_t));
+    if (!buf) return 500;
+    size_t got = 0;
+
+    /* Copy data already in rbuf after header end */
+    size_t avail = *rbuf_len > hend ? *rbuf_len - hend : 0;
+    if (avail > 0) {
+        size_t copy = avail < need ? avail : need;
+        scl_memcpy(buf, rbuf + hend, copy);
+        got = copy;
+    }
+
+    while (got < need) {
+        ssize_t n = recv(fd, buf + got, need - got, 0);
+        if (scl_likely(n > 0)) {
+            got += (size_t)n;
+        } else if (scl_unlikely(n == 0)) {
+            scl_free(alloc, buf);
+            return 400;
+        } else if (errno == EINTR) {
+            continue;
+        } else {
+            scl_free(alloc, buf);
+            return 500;
+        }
+    }
+
+    /* Compact rbuf: body bytes consumed, keep any remainder after body */
+    if (hend + need < *rbuf_len) {
+        size_t rest = *rbuf_len - (hend + need);
+        memmove(rbuf, rbuf + hend + need, rest);
+        *rbuf_len = rest;
+    } else {
+        *rbuf_len = 0;
+    }
+
+    *out = buf;
+    *out_len = need;
     return 0;
 }
 
@@ -589,29 +870,21 @@ static size_t find_header_end(const unsigned char *buf, size_t len) {
  * The loop:
  *   1. Accumulate data until we have a complete header block ("\r\n\r\n").
  *   2. Parse the request line and headers (in-place, on the rbuf).
- *   3. Validate Transfer-Encoding (reject -> 501 + close).
- *   4. Check Content-Length (non-zero => force close after response).
+ *   3. Validate Host header (required for HTTP/1.1).
+ *   4. Determine framing (CL vs chunked), read the request body.
  *   5. Decode the URL path (percent-decode) into a stack buffer.
- *   6. Dispatch to the dynamic handler (if configured) or static serving.
- *   7. On keep-alive, compact the rbuf to preserve pipelined bytes and
+ *   6. Parse multipart/form-data if content type matches.
+ *   7. Dispatch to the dynamic handler (if configured) or static serving.
+ *   8. On keep-alive, compact the rbuf to preserve pipelined bytes and
  *      continue the outer while loop.
- *
- * ── Request-smuggling defence ──────────────────────────────────────
- *
- * The critical invariant: after sending a response, we must know EXACTLY
- * where the next request begins. If we leave unconsumed body bytes in the
- * buffer, they look like the start of the next request. We handle this by:
- *
- *   • Rejecting Transfer-Encoding entirely (-> 501, close).
- *   • If Content-Length > 0, forcing connection close after the response.
- *   • On keep-alive, compacting the rbuf to preserve only the bytes AFTER
- *     the header block (if any — these are pipelined requests).
  */
 static void handle_connection(scl_http_server_t *srv, scl_tcp_conn_t *conn) {
     int fd = conn->fd;
     int served = 0;
+    scl_allocator_t *alloc = srv->alloc;
+    size_t max_body = srv->cfg.max_body_size > 0 ? srv->cfg.max_body_size : SCL_HTTP_MAX_BODY_DEFAULT;
 
-    while (atomic_load_explicit(&srv->running, memory_order_relaxed) &&
+    while (atomic_load_explicit(&srv->running, memory_order_acquire) &&
            served < srv->cfg.keep_alive_max) {
 
         /* Read until we have a full header block (or hit a limit/timeout). */
@@ -642,37 +915,150 @@ static void handle_connection(scl_http_server_t *srv, scl_tcp_conn_t *conn) {
         scl_http_request_t req;
         int status = parse_request((char *)conn->rbuf, hend, &req);
         bool head_only = false;
-        bool force_close = false;
+        bool will_close = false;
+        bool body_allocated = false;
 
         if (status != 0) {
             send_error(srv, fd, status, false, true);
-            return;                                        /* malformed: close */
-        }
-
-        /* Reject request bodies and chunked framing: we serve no body methods,
-         * and unconsumed bytes would desync keep-alive (smuggling). Any body
-         * forces connection close after the response. */
-        if (scl_http_request_header(&req, "Transfer-Encoding")) {
-            send_error(srv, fd, 501, false, true);
             return;
         }
-        const char *clen = scl_http_request_header(&req, "Content-Length");
-        if (clen) {
-            char *end = NULL;
-            long long cl = scl_strtoll(clen, &end, 10);
-            if (!end || *end != '\0' || cl < 0) {
+
+        /* HTTP/1.1 requires Host header (RFC 7230 §5.4) */
+        if (req.version_minor == 1) {
+            const char *host = scl_http_request_header(&req, "Host");
+            if (!host || host[0] == '\0') {
                 send_error(srv, fd, 400, false, true);
                 return;
             }
-            if (cl > 0) force_close = true;                /* don't reframe */
+        }
+
+        /* Store Content-Type for handler convenience */
+        req.content_type = scl_http_request_header(&req, "Content-Type");
+
+        /* ── Determine request body framing ──────────────────── */
+        bool is_chunked = false;
+        long long content_length = 0;
+        bool valid_cl = false;
+
+        /* Collect all Transfer-Encoding headers, concatenate (RFC 7230 §3.2.2) */
+        char te_buf[256];
+        size_t te_len = 0;
+        te_buf[0] = '\0';
+        for (size_t _i = 0; _i < req.header_count; _i++) {
+            if (ci_equal(req.headers[_i].name, "Transfer-Encoding")) {
+                size_t vlen = scl_strlen(req.headers[_i].value);
+                if (vlen >= sizeof(te_buf)) {
+                    send_error(srv, fd, 431, false, true); return;
+                }
+                if (te_len > 0) {
+                    if (te_len + 2 + vlen >= sizeof(te_buf)) {
+                        send_error(srv, fd, 431, false, true); return;
+                    }
+                    te_buf[te_len++] = ','; te_buf[te_len++] = ' ';
+                }
+                scl_memcpy(te_buf + te_len, req.headers[_i].value, vlen);
+                te_len += vlen;
+            }
+        }
+        te_buf[te_len] = '\0';
+
+        /* Validate Content-Length: reject duplicates with differing values (RFC 7230 §3.3.2) */
+        int cl_count = 0;
+        long long first_cl = -1;
+        for (size_t _i = 0; _i < req.header_count; _i++) {
+            if (ci_equal(req.headers[_i].name, "Content-Length")) {
+                char *end = NULL;
+                long long val = scl_strtoll(req.headers[_i].value, &end, 10);
+                if (!end || *end != '\0' || val < 0) {
+                    send_error(srv, fd, 400, false, true); return;
+                }
+                if (cl_count == 0) first_cl = val;
+                else if (val != first_cl) {
+                    send_error(srv, fd, 400, false, true); return;
+                }
+                cl_count++;
+            }
+        }
+
+        const char *te = te_len > 0 ? te_buf : NULL;
+
+        if (te) {
+            /* Transfer-Encoding takes precedence (RFC 7230 §3.3.1).
+             * Find the last encoding token (after the final comma). */
+            const char *last_te = te_buf;
+            for (const char *_p = te_buf; _p < te_buf + te_len; _p++)
+                if (*_p == ',') last_te = _p + 1;
+            while (*last_te == ' ' || *last_te == '\t') last_te++;
+
+            if (ci_contains_token(last_te, "chunked")) {
+                is_chunked = true;
+            } else if (ci_contains_token(te_buf, "chunked")) {
+                /* chunked present but not the final encoding — read until close */
+                send_error(srv, fd, 501, false, true);
+                return;
+            } else {
+                send_error(srv, fd, 501, false, true);
+                return;
+            }
+        }
+
+        if (!is_chunked && cl_count > 0) {
+            content_length = first_cl;
+            valid_cl = true;
+        }
+
+        /* Handle Expect: 100-continue (RFC 7231 §5.1.1) */
+        const char *expect = scl_http_request_header(&req, "Expect");
+        if (expect) {
+            if (ci_contains_token(expect, "100-continue")) {
+                static const char _cont[] = "HTTP/1.1 100 Continue\r\n\r\n";
+                scl_tcp_send_all(fd, _cont, sizeof(_cont) - 1);
+            } else {
+                send_error(srv, fd, 417, false, true);
+                return;
+            }
+        }
+
+        /* Read body */
+        void *body_buf = NULL;
+        size_t body_len = 0;
+
+        if (is_chunked) {
+            status = read_chunked_body(alloc, fd, conn->rbuf, &conn->rbuf_len,
+                                       conn->rbuf_cap,
+                                       max_body, &body_buf, &body_len);
+            if (status != 0) {
+                send_error(srv, fd, status, false, true);
+                return;
+            }
+            body_allocated = true;
+        } else if (valid_cl && content_length > 0) {
+            status = read_body_fixed(alloc, fd, conn->rbuf, &conn->rbuf_len, hend,
+                                     content_length, max_body, &body_buf, &body_len);
+            if (status != 0) {
+                send_error(srv, fd, status, false, true);
+                return;
+            }
+            body_allocated = true;
+        }
+
+        req.body = body_buf;
+        req.body_len = body_len;
+
+        /* Parse multipart/form-data if applicable */
+        if (body_len > 0 && req.content_type &&
+            scl_strstr(req.content_type, "multipart/form-data")) {
+            size_t upcount = 0;
+            scl_http_parse_multipart(req.body, req.body_len, req.content_type,
+                                     req.uploads, &upcount, SCL_HTTP_MAX_UPLOADS);
+            req.upload_count = upcount;
         }
 
         bool is_get  = scl_strcmp(req.method, "GET") == 0;
         bool is_head = scl_strcmp(req.method, "HEAD") == 0;
         head_only = is_head;
 
-        bool will_close = force_close || !req.keep_alive ||
-                          (served + 1 >= srv->cfg.keep_alive_max);
+        will_close = !req.keep_alive || (served + 1 >= srv->cfg.keep_alive_max);
 
         /* Decode path into a stack buffer; point req.path at it. */
         char pathbuf[SCL_PATH_MAX];
@@ -681,7 +1067,8 @@ static void handle_connection(scl_http_server_t *srv, scl_tcp_conn_t *conn) {
         long dl = url_decode_path(req.target, rawlen, pathbuf, sizeof(pathbuf));
         if (dl < 0) {
             send_error(srv, fd, 400, head_only, true);
-            return;                                        /* malformed target: close */
+            if (body_allocated) scl_free(alloc, body_buf);
+            return;
         }
         req.path = pathbuf;
 
@@ -699,45 +1086,35 @@ static void handle_connection(scl_http_server_t *srv, scl_tcp_conn_t *conn) {
             will_close = true;
         }
 
+        /* Free body buffer if allocated */
+        if (body_allocated) scl_free(alloc, body_buf);
+
         if (serr != SCL_OK || will_close) return;
 
-        /* Preserve any pipelined bytes that follow this request. */
-        if (conn->rbuf_len > hend)
-            scl_memmove(conn->rbuf, conn->rbuf + hend, conn->rbuf_len - hend);
-        conn->rbuf_len -= hend;
+        /* Compact consumed bytes from rbuf.
+         *
+         * read_body_fixed already compacts body bytes (head-offset = hend+4+cl).
+         * read_chunked_body also compacts — both preserve any pipelined bytes.
+         * Only no-body requests still have headers (hend+4) in rbuf that must
+         * be removed now so the next iteration sees a fresh request at index 0.
+         */
+        if (!body_allocated) {
+            size_t hdr_sz = hend + 4;
+            if (conn->rbuf_len > hdr_sz) {
+                scl_memmove(conn->rbuf, conn->rbuf + hdr_sz,
+                            conn->rbuf_len - hdr_sz);
+                conn->rbuf_len -= hdr_sz;
+            } else {
+                conn->rbuf_len = 0;
+            }
+        }
+        /* else: read_body_fixed already compacted — do nothing */
         served++;
     }
 }
 
 /*
  * ── Worker / acceptor threads ─────────────────────────────────────
- *
- * The acceptor thread (acceptor_main) polls the listen fd, accepts new
- * connections into pool slots, posts them to the ready queue, and wakes
- * a worker via the condvar semaphore.
- *
- * Each worker thread (worker_main) waits on the condvar semaphore, pulls
- * a connection from the ready queue, services it (handle_connection),
- * and returns the slot to the free list.
- *
- * The condvar semaphore (sem_wait_or_stop / sem_post) parks idle workers
- * so they don't busy-spin on an empty queue. When the server stops, the
- * broadcast wakes all workers, they see !running, and exit.
- *
- * ── Back-pressure ─────────────────────────────────────────────────
- *
- * If acquire() fails (pool at capacity), the acceptor just closes the new
- * fd — the kernel's listen backlog absorbs the overflow. If post_ready()
- * fails (MPMC queue full), the acceptor releases the slot and closes the
- * fd. Either way, excess connections are dropped at the acceptor level,
- * never queued indefinitely.
- *
- * ── Shutdown sequence ─────────────────────────────────────────────
- *
- *   1. Set running = false (atomic store).
- *   2. Broadcast the condvar (wakes all workers).
- *   3. Join the acceptor thread (it exits on next poll timeout).
- *   4. Join all worker threads (they exit after sem_wait_or_stop returns).
  */
 static bool sem_wait_or_stop(scl_http_server_t *srv) {
     scl_mutex_lock(&srv->sem_m);
@@ -759,7 +1136,7 @@ static void sem_post(scl_http_server_t *srv) {
 
 static void *worker_main(void *arg) {
     scl_http_server_t *srv = (scl_http_server_t *)arg;
-    while (atomic_load_explicit(&srv->running, memory_order_relaxed)) {
+    while (atomic_load_explicit(&srv->running, memory_order_acquire)) {
         if (!sem_wait_or_stop(srv)) break;
         scl_tcp_conn_t *conn = scl_tcp_pool_get_ready(&srv->pool);
         if (!conn) continue;
@@ -773,19 +1150,19 @@ static void *acceptor_main(void *arg) {
     scl_http_server_t *srv = (scl_http_server_t *)arg;
     struct pollfd pfd = { .fd = srv->listen_fd, .events = POLLIN, .revents = 0 };
 
-    while (atomic_load_explicit(&srv->running, memory_order_relaxed)) {
+    while (atomic_load_explicit(&srv->running, memory_order_acquire)) {
         int pr = poll(&pfd, 1, 200);
-        if (pr <= 0) continue;                 /* timeout / EINTR: recheck running */
+        if (pr <= 0) continue;
 
-        for (;;) {                             /* drain the accept backlog */
+        for (;;) {
             scl_tcp_conn_t tmp;
             tmp.fd = -1;
             scl_error_t aerr = scl_tcp_accept(srv->listen_fd, &tmp);
-            if (aerr == SCL_ERR_TIMEOUT) break;    /* would-block: done for now */
+            if (aerr == SCL_ERR_TIMEOUT) break;
             if (aerr != SCL_OK) break;
 
             scl_tcp_conn_t *conn = scl_tcp_pool_acquire(&srv->pool);
-            if (!conn) { close(tmp.fd); continue; }   /* at capacity: drop */
+            if (!conn) { close(tmp.fd); continue; }
 
             conn->fd       = tmp.fd;
             conn->peer     = tmp.peer;
@@ -794,7 +1171,7 @@ static void *acceptor_main(void *arg) {
             scl_tcp_set_recv_timeout(conn->fd, srv->cfg.recv_timeout_ms);
 
             if (!scl_tcp_pool_post_ready(&srv->pool, conn)) {
-                scl_tcp_pool_release(&srv->pool, conn);   /* queue full: drop */
+                scl_tcp_pool_release(&srv->pool, conn);
                 continue;
             }
             sem_post(srv);
@@ -808,6 +1185,7 @@ static void apply_defaults(scl_http_config_t *c) {
     if (c->num_workers   <= 0) c->num_workers   = 4;
     if (c->pool_capacity == 0) c->pool_capacity = 256;
     if (c->conn_buf_cap  == 0) c->conn_buf_cap  = 64 * 1024;
+    if (c->max_body_size == 0) c->max_body_size = SCL_HTTP_MAX_BODY_DEFAULT;
     if (c->recv_timeout_ms == 0) c->recv_timeout_ms = 15000;
     if (c->keep_alive_max <= 0) c->keep_alive_max = 100;
     if (c->backlog       <= 0) c->backlog       = 128;
@@ -819,7 +1197,7 @@ scl_error_t scl_http_server_init(scl_allocator_t *alloc, scl_http_server_t **out
     if (scl_unlikely(!alloc || !out || !cfg)) return SCL_ERR_NULL_PTR;
     *out = NULL;
 
-    scl_net_init();   /* ignore SIGPIPE */
+    scl_net_init();
 
     scl_http_server_t *srv = (scl_http_server_t *)scl_calloc(alloc, 1,
                                 sizeof(scl_http_server_t), _Alignof(scl_http_server_t));
@@ -850,7 +1228,6 @@ scl_error_t scl_http_server_init(scl_allocator_t *alloc, scl_http_server_t **out
         return err;
     }
 
-    /* Resolve the actual bound port (supports port 0). */
     struct sockaddr_storage ss;
     socklen_t slen = sizeof(ss);
     if (getsockname(srv->listen_fd, (struct sockaddr *)&ss, &slen) == 0) {
@@ -887,12 +1264,11 @@ scl_error_t scl_http_server_start(scl_http_server_t *srv) {
     if (scl_unlikely(!srv)) return SCL_ERR_NULL_PTR;
     if (atomic_exchange(&srv->started, true)) return SCL_ERR_INVALID_STATE;
 
-    atomic_store(&srv->running, true);
+    atomic_store_explicit(&srv->running, true, memory_order_release);
 
     for (int i = 0; i < srv->num_workers; i++) {
         if (scl_thread_create(&srv->workers[i], worker_main, srv) != SCL_OK) {
-            atomic_store(&srv->running, false);
-            /* wake any workers already parked, then join the ones we spawned */
+            atomic_store_explicit(&srv->running, false, memory_order_release);
             scl_mutex_lock(&srv->sem_m);
             scl_cond_broadcast(&srv->sem_c);
             scl_mutex_unlock(&srv->sem_m);
@@ -910,11 +1286,10 @@ scl_error_t scl_http_server_start(scl_http_server_t *srv) {
 
 scl_error_t scl_http_server_stop(scl_http_server_t *srv) {
     if (scl_unlikely(!srv)) return SCL_ERR_NULL_PTR;
-    if (!atomic_exchange(&srv->running, false)) {
+    if (!atomic_exchange_explicit(&srv->running, false, memory_order_acq_rel)) {
         if (!atomic_load(&srv->started)) return SCL_OK;
     }
 
-    /* Wake every parked worker so they observe !running. */
     scl_mutex_lock(&srv->sem_m);
     scl_cond_broadcast(&srv->sem_c);
     scl_mutex_unlock(&srv->sem_m);

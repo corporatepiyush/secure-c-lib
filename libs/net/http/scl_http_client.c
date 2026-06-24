@@ -199,8 +199,7 @@ static bool ci_eq(const char *a, const char *b) {
 
 /* Case-insensitive check for "close" in a Connection header value. */
 static bool conn_close_token(const char *val) {
-    if (!val) return false;
-    /* Scan for "close" as a token (space/comma delimited). */
+    if (scl_unlikely(!val)) return false;
     while (*val) {
         if ((*val == 'c' || *val == 'C') &&
             (val[1] == 'l' || val[1] == 'L') &&
@@ -516,11 +515,10 @@ static long find_hdrend(const unsigned char *buf, size_t buf_len) {
 static scl_error_t parse_status_line(const char *line,
                                      int *out_status,
                                      char *reason_buf, size_t reason_cap) {
-    /* Expect "HTTP/1.x DDD ..." */
     int ver = 0;
     int st  = 0;
     int n = sscanf(line, "HTTP/%*d.%d %d", &ver, &st);
-    if (n < 2 || st < 100 || st > 599)
+    if (scl_unlikely(n < 2 || st < 100 || st > 599))
         return SCL_ERR_PARSE;
 
     *out_status = st;

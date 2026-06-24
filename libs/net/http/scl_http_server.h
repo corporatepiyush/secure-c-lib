@@ -27,6 +27,7 @@
 #include <stdint.h>
 
 #define SCL_HTTP_MAX_HEADERS 64
+#define SCL_HTTP_MAX_UPLOADS 16
 
 /* ── Parsed request (valid only inside a handler call) ─────────── */
 typedef struct {
@@ -35,13 +36,30 @@ typedef struct {
 } scl_http_header_t;
 
 typedef struct {
-    const char       *method;       /* e.g. "GET" */
-    const char       *target;       /* raw request-target incl. query */
-    const char       *path;         /* percent-decoded path, no query */
-    int               version_minor;/* 0 => HTTP/1.0, 1 => HTTP/1.1 */
+    const char *name;         /* form field name */
+    const char *filename;     /* original filename, or NULL */
+    const char *content_type; /* part Content-Type, or NULL */
+    const void *data;         /* part body bytes (points into body buffer) */
+    size_t      data_len;
+} scl_http_upload_t;
+
+typedef struct {
+    const char       *method;        /* e.g. "GET" */
+    const char       *target;        /* raw request-target incl. query */
+    const char       *path;          /* percent-decoded path, no query */
+    int               version_minor; /* 0 => HTTP/1.0, 1 => HTTP/1.1 */
     bool              keep_alive;
     size_t            header_count;
     scl_http_header_t headers[SCL_HTTP_MAX_HEADERS];
+
+    /* Request body (allocated, freed after handler call) */
+    const void       *body;         /* NULL if no body */
+    size_t            body_len;
+    const char       *content_type; /* Content-Type header value, or NULL */
+
+    /* Uploaded files (parsed from multipart/form-data body) */
+    size_t            upload_count;
+    scl_http_upload_t uploads[SCL_HTTP_MAX_UPLOADS];
 } scl_http_request_t;
 
 /* Case-insensitive header lookup; returns NULL if absent. */
@@ -69,6 +87,7 @@ typedef struct {
     int         num_workers;      /* worker threads (default 4) */
     size_t      pool_capacity;    /* max concurrent connections (default 256) */
     size_t      conn_buf_cap;     /* per-conn buffer / max request bytes (default 64K) */
+    size_t      max_body_size;    /* max request body (default 1MB) */
     int64_t     recv_timeout_ms;  /* idle/recv timeout (default 15000) */
     int         backlog;          /* listen backlog (default SOMAXCONN) */
     int         keep_alive_max;   /* max requests per connection (default 100) */
@@ -96,5 +115,13 @@ void scl_http_server_destroy(scl_http_server_t *srv);
 
 /* Extension -> MIME type (e.g. "html" -> "text/html"). Never NULL. */
 const char *scl_http_mime_for_ext(const char *ext);
+
+/* Parse multipart/form-data body. Returns number of parts parsed or < 0 on
+ * error. Caller must NOT free the parts — they point into the body buffer.
+ * body must be valid for the lifetime of the request. */
+int scl_http_parse_multipart(const void *body, size_t body_len,
+                             const char *content_type,
+                             scl_http_upload_t *uploads, size_t *count,
+                             size_t max_count);
 
 #endif /* SCL_HTTP_SERVER_H */
