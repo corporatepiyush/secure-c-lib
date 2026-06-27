@@ -1,37 +1,20 @@
 /*
- * scl_http_server.c — HTTP/1.1 server implementation.
+ * Copyright 2026 Piyush Katariya
  *
- * ── What this file does ─────────────────────────────────────────────────────
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This is the companion server to scl_http_client.c. It:
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- *   1. Binds a TCP port and listens for connections.
- *   2. Accepts connections into a lock-free pool of pre-allocated slots.
- *   3. Dispatches connections to worker threads via an MPMC queue.
- *   4. Parses HTTP/1.1 request lines and headers (in-place, on the connection's
- *      read buffer — no extra per-request malloc).
- *   5. Reads request bodies (Content-Length and chunked transfer).
- *   6. Parses multipart/form-data for file uploads.
- *   7. Responds with static files (from a docroot) or dynamic handler output.
- *   8. Supports keep-alive, Content-Length, path-traversal defence, and
- *      percent-decoding.
- *
- * ── Security design (first priority) ────────────────────────────────────────
- *
- * HTTP servers are exposed to untrusted input on every request. The following
- * attacks are specifically defended against:
- *
- *   • Request smuggling: If Transfer-Encoding is present, Content-Length is
- *     ignored (per RFC 7230 §3.3.1). We read the body exactly once using the
- *     chosen framing — no ambiguity.
- *   • Path traversal: Percent-decode the path, reject ".." segments before
- *     touching the filesystem, then validate via realpath() containment.
- *   • Encoded NUL (%00): Explicitly rejected in url_decode_path().
- *   • Buffer overflow: All parsing operates on bounded buffers. Header count
- *     and target length are capped; per-connection read buffer is bounded.
- *   • Response splitting: No user-controlled data appears in format strings.
- *   • Information disclosure: Connection buffers are zeroed on release.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
+
+/* HTTP/1.1 server. Lock-free TCP pool, path-traversal defence (.., %00), request-smuggling guards, MIME detection, Keep-Alive. */
 
 #if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC optimize ("O2")
