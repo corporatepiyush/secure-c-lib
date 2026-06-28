@@ -288,6 +288,25 @@ int main(void) {
         SCL_EXPECT_EQ_I(&tr, r.status, 400);
     else SCL_EXPECT_TRUE(&tr, 0);
 
+    /* Oversized header block fills the connection buffer with no end-of-headers
+     * and must yield 431. This also exercises send_error()'s longest reason
+     * phrase ("Request Header Fields Too Large") — under ASan it proves the
+     * error-body length is clamped to the buffer (no stack over-read). */
+    scl_test_group("HTTP: oversized headers -> 431 (no over-read)");
+    {
+        size_t big = 128 * 1024;
+        char *raw = (char *)malloc(big + 64);
+        if (raw) {
+            int hn = snprintf(raw, 64, "GET / HTTP/1.1\r\nX: ");
+            memset(raw + hn, 'a', big);          /* no terminating CRLFCRLF */
+            raw[hn + big] = '\0';
+            if (do_request(port, raw, &r, 0) == 0)
+                SCL_EXPECT_EQ_I(&tr, r.status, 431);
+            else SCL_EXPECT_TRUE(&tr, 0);
+            free(raw);
+        }
+    }
+
     scl_test_group("HTTP: HEAD returns headers, no body");
     if (do_request(port, "HEAD /hello.txt HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n", &r, 1) == 0) {
         SCL_EXPECT_EQ_I(&tr, r.status, 200);

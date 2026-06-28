@@ -322,13 +322,21 @@ static scl_error_t send_simple(const scl_http_server_t *srv, int fd, int status,
 
 static scl_error_t send_error(const scl_http_server_t *srv, int fd, int status,
                               bool head_only, bool close_conn) {
-    char body[128];
+    char body[256];
     int bn = snprintf(body, sizeof(body),
         "<html><head><title>%d %s</title></head>"
         "<body><h1>%d %s</h1></body></html>\n",
         status, status_text(status), status, status_text(status));
+    /* snprintf returns the length it WOULD have written; on truncation that
+     * exceeds the buffer. Clamp to what is actually present so we never send
+     * (read) past `body` — otherwise a status with a long reason phrase (e.g.
+     * 431) would leak adjacent stack bytes into the response. */
+    size_t blen;
+    if (bn < 0) blen = 0;
+    else if ((size_t)bn >= sizeof(body)) blen = sizeof(body) - 1;
+    else blen = (size_t)bn;
     return send_simple(srv, fd, status, "text/html; charset=utf-8",
-                       body, bn < 0 ? 0 : (size_t)bn, head_only, close_conn);
+                       body, blen, head_only, close_conn);
 }
 
 static scl_error_t serve_static(const scl_http_server_t *srv, int fd,
