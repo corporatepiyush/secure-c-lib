@@ -35,6 +35,7 @@ scl_error_t scl_parse_tsv_init(scl_allocator_t *alloc, scl_parse_tsv_t *parser) 
     parser->buffer_cap = TSV_INIT_BUF;
     parser->buffer_len = 0;
     parser->pos = 0;
+    parser->row_started = 0;
     parser->eof = 0;
     return SCL_OK;
 }
@@ -70,54 +71,86 @@ scl_error_t scl_parse_tsv_feed(scl_parse_tsv_t *parser, const char *data, size_t
     return SCL_OK;
 }
 
-scl_error_t scl_parse_tsv_next_field(scl_parse_tsv_t *parser, const char **out, size_t *out_len) {
-    if (scl_unlikely(!parser)) return SCL_ERR_NULL_PTR;
-    if (scl_unlikely(!out)) return SCL_ERR_NULL_PTR;
+/*
+ * Iteration contract mirrors the CSV parser:
+ *
+ *   do {
+ *       while (scl_parse_tsv_next_field(&p, &f, &n) == SCL_OK) { use f[0..n) }
+ *   } while (scl_parse_tsv_next_row(&p) == SCL_OK);
+ *
+ * Backslash escapes inside a field are decoded in place per the IANA
+ * text/tab-separated-values convention: \t \n \r \\ -> TAB LF CR backslash.
+ */
 
+/* Parse one field at parser->pos, decoding backslash escapes in place. Leaves
+ * pos at the terminator (TAB, CR, LF or EOF) without consuming it. */
+static void tsv_parse_field(scl_parse_tsv_t *p, const char **out, size_t *out_len) {
+    char *buf = p->buffer;
+    size_t len = p->buffer_len;
+    size_t pos = p->pos;
+    size_t start = pos, w = pos;            /* w <= pos: decoding only shrinks */
+
+    while (pos < len) {
+        char c = buf[pos];
+        if (c == '\t' || c == '\n' || c == '\r') break;
+        if (c == '\\' && pos + 1 < len) {
+            char dec = 0;
+            switch (buf[pos + 1]) {
+            case 't': dec = '\t'; break;
+            case 'n': dec = '\n'; break;
+            case 'r': dec = '\r'; break;
+            case '\\': dec = '\\'; break;
+            default: break;
+            }
+            if (dec) { buf[w++] = dec; pos += 2; continue; }
+        }
+        buf[w++] = c;
+        pos++;
+    }
+    *out = buf + start;
+    *out_len = w - start;
+    p->pos = pos;
+}
+
+scl_error_t scl_parse_tsv_next_field(scl_parse_tsv_t *parser, const char **out, size_t *out_len) {
+    if (scl_unlikely(!parser || !out || !out_len)) return SCL_ERR_NULL_PTR;
     if (parser->pos >= parser->buffer_len) return SCL_ERR_EMPTY;
 
-    size_t start = parser->pos;
-    while (parser->pos < parser->buffer_len) {
-        char c = parser->buffer[parser->pos];
-        if (c == '\t' || c == '\n' || c == '\r') break;
-        parser->pos++;
+    char c = parser->buffer[parser->pos];
+
+    if (!parser->row_started) {
+        if (c == '\r' || c == '\n') return SCL_ERR_EMPTY;   /* empty line */
+        parser->row_started = 1;
+        tsv_parse_field(parser, out, out_len);
+        return SCL_OK;
     }
 
-    *out = &parser->buffer[start];
-    *out_len = parser->pos - start;
-
-    if (parser->pos < parser->buffer_len) {
-        if (parser->buffer[parser->pos] == '\t') {
-            parser->state = SCL_TSV_STATE_FIELD;
-            parser->pos++;
-        }
-    }
+    if (c == '\r' || c == '\n') return SCL_ERR_EMPTY;        /* record exhausted */
+    if (c == '\t') parser->pos++;                            /* consume delimiter */
+    tsv_parse_field(parser, out, out_len);
     return SCL_OK;
 }
 
 scl_error_t scl_parse_tsv_next_row(scl_parse_tsv_t *parser) {
     if (scl_unlikely(!parser)) return SCL_ERR_NULL_PTR;
+    char *buf = parser->buffer;
+    size_t len = parser->buffer_len;
 
-    while (parser->pos < parser->buffer_len) {
-        char c = parser->buffer[parser->pos];
-        if (c == '\n') {
-            parser->pos++;
-            parser->state = SCL_TSV_STATE_FIELD_START;
-            return SCL_OK;
-        }
-        if (c == '\r') {
-            parser->state = SCL_TSV_STATE_CR;
-            parser->pos++;
-            return SCL_OK;
-        }
+    while (parser->pos < len && buf[parser->pos] != '\r' && buf[parser->pos] != '\n')
         parser->pos++;
-    }
 
-    if (parser->state == SCL_TSV_STATE_CR && parser->pos < parser->buffer_len && parser->buffer[parser->pos] == '\n') {
+    if (parser->pos >= len) return SCL_ERR_EMPTY;
+
+    if (buf[parser->pos] == '\r') {
         parser->pos++;
+        if (parser->pos < len && buf[parser->pos] == '\n') parser->pos++;   /* CRLF */
+    } else {
+        parser->pos++;                                                       /* LF */
     }
     parser->state = SCL_TSV_STATE_FIELD_START;
-    return SCL_ERR_EMPTY;
+    parser->row_started = 0;
+    /* A terminator at the very end of input is not a new record. */
+    return parser->pos < len ? SCL_OK : SCL_ERR_EMPTY;
 }
 
 scl_error_t scl_parse_tsv_destroy(scl_parse_tsv_t *parser) {

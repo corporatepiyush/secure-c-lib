@@ -97,7 +97,7 @@ static int parquet_parse_footer(scl_parse_parquet_t *parser) {
                     scl_free(parser->alloc, parser->column_types);
                     parser->column_names = NULL; parser->column_types = NULL;
                     parser->num_columns = 0;
-                    return SCL_ERR_OUT_OF_MEMORY;
+                    return -1;   /* this function reports 0/-1, not scl_error_t */
                 }
 
                 for (uint64_t ci = 0; ci < elem_count && fp < list_end; ci++) {

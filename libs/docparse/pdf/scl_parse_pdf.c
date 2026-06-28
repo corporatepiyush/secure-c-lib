@@ -155,7 +155,7 @@ static int pdf_count_pages(scl_parse_pdf_t *parser) {
     if (!pages_ref) return 0;
     char *p = pages_ref + 6;
     while (*p && (unsigned char)*p <= ' ') p++;
-    int pages_obj = scl_atoi(p + 1);
+    int pages_obj = scl_atoi(p);   /* p already points at the object number */
 
     len = 0;
     char *pages_str = pdf_get_obj_str(parser, pages_obj, &len);
@@ -214,6 +214,7 @@ scl_error_t scl_parse_pdf_get_info(scl_parse_pdf_t *parser, const char *key, cha
     if (scl_unlikely(!parser)) return SCL_ERR_NULL_PTR;
     if (scl_unlikely(!key)) return SCL_ERR_NULL_PTR;
     if (scl_unlikely(!out)) return SCL_ERR_NULL_PTR;
+    if (scl_unlikely(!out_len || *out_len == 0)) return SCL_ERR_INVALID_ARG;
 
     if (!parser->info_obj) return SCL_ERR_NOT_FOUND;
 

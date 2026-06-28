@@ -71,143 +71,113 @@ scl_error_t scl_parse_csv_feed(scl_parse_csv_t *parser, const char *data, size_t
     return SCL_OK;
 }
 
-scl_error_t scl_parse_csv_next_field(scl_parse_csv_t *parser, const char **out, size_t *out_len) {
-    if (scl_unlikely(!parser)) return SCL_ERR_NULL_PTR;
-    if (scl_unlikely(!out)) return SCL_ERR_NULL_PTR;
+/*
+ * Iteration contract
+ * ──────────────────
+ *   do {
+ *       while (scl_parse_csv_next_field(&p, &f, &n) == SCL_OK) { use f[0..n) }
+ *   } while (scl_parse_csv_next_row(&p) == SCL_OK);
+ *
+ * next_field returns one field of the current record and SCL_ERR_EMPTY once the
+ * record is exhausted; next_row consumes the record terminator and returns
+ * SCL_ERR_EMPTY at end of input. Field pointers alias the parser's buffer and
+ * stay valid until the next feed()/destroy(). For records that contain quoted
+ * fields with embedded newlines, drain the fields with next_field before
+ * calling next_row (next_row's terminator scan does not look inside quotes).
+ */
 
-    if (parser->pos >= parser->buffer_len) return SCL_ERR_EMPTY;
+/* Parse one field starting at parser->pos. Quoted fields are unescaped in
+ * place ("" -> a single "). Leaves pos at the terminator (',', CR, LF or EOF)
+ * without consuming it. The output always lies within [original_start, pos),
+ * so it can never point past the populated buffer. */
+static void csv_parse_field(scl_parse_csv_t *p, const char **out, size_t *out_len) {
+    char *buf = p->buffer;
+    size_t len = p->buffer_len;
+    size_t pos = p->pos;
 
-    size_t start = parser->pos;
-    size_t field_start = parser->pos;
-
-    switch (parser->state) {
-    case SCL_CSV_STATE_FIELD_START:
-        if (parser->buffer[parser->pos] == '"') {
-            parser->state = SCL_CSV_STATE_QUOTED;
-            parser->pos++;
-            start = parser->pos;
-            field_start = parser->pos;
-            while (parser->pos < parser->buffer_len) {
-                if (parser->buffer[parser->pos] == '"') {
-                    if (parser->pos + 1 < parser->buffer_len && parser->buffer[parser->pos + 1] == '"') {
-                        scl_memmove(&parser->buffer[field_start], &parser->buffer[start], parser->pos - start);
-                        field_start += parser->pos - start;
-                        parser->pos += 2;
-                        start = parser->pos;
-                    } else {
-                        parser->state = SCL_CSV_STATE_QUOTE_END;
-                        parser->pos++;
-                        goto done_quoted;
-                    }
+    if (pos < len && buf[pos] == '"') {
+        pos++;                                  /* skip opening quote */
+        size_t content0 = pos, w = pos, run = pos;
+        int closed = 0;
+        while (pos < len) {
+            if (buf[pos] == '"') {
+                if (pos + 1 < len && buf[pos + 1] == '"') {
+                    if (pos > run) { scl_memmove(buf + w, buf + run, pos - run); w += pos - run; }
+                    buf[w++] = '"';             /* "" collapses to one quote */
+                    pos += 2;
+                    run = pos;
                 } else {
-                    parser->pos++;
-                }
-            }
-            scl_memmove(&parser->buffer[field_start], &parser->buffer[start], parser->pos - start);
-            field_start += parser->pos - start;
-            start = parser->pos;
-            *out = &parser->buffer[field_start];
-            *out_len = parser->pos - start;
-            return SCL_OK;
-        }
-        parser->state = SCL_CSV_STATE_UNQUOTED;
-
-    case SCL_CSV_STATE_UNQUOTED:
-        while (parser->pos < parser->buffer_len) {
-            char c = parser->buffer[parser->pos];
-            if (c == ',' || c == '\n' || c == '\r') {
-                break;
-            }
-            parser->pos++;
-        }
-        *out = &parser->buffer[start];
-        *out_len = parser->pos - start;
-        return SCL_OK;
-
-    case SCL_CSV_STATE_QUOTED:
-        while (parser->pos < parser->buffer_len) {
-            if (parser->buffer[parser->pos] == '"') {
-                if (parser->pos + 1 < parser->buffer_len && parser->buffer[parser->pos + 1] == '"') {
-                    scl_memmove(&parser->buffer[field_start], &parser->buffer[start], parser->pos - start);
-                    field_start += parser->pos - start;
-                    parser->pos += 2;
-                    start = parser->pos;
-                } else {
-                    parser->state = SCL_CSV_STATE_QUOTE_END;
-                    parser->pos++;
-                    goto done_quoted;
+                    if (pos > run) { scl_memmove(buf + w, buf + run, pos - run); w += pos - run; }
+                    pos++;                      /* consume closing quote */
+                    closed = 1;
+                    break;
                 }
             } else {
-                parser->pos++;
+                pos++;
             }
         }
-        scl_memmove(&parser->buffer[field_start], &parser->buffer[start], parser->pos - start);
-        field_start += parser->pos - start;
-        *out = &parser->buffer[field_start];
-        *out_len = 0;
+        if (!closed && pos > run) { scl_memmove(buf + w, buf + run, pos - run); w += pos - run; }
+        /* Skip any stray bytes between a closing quote and the terminator. */
+        if (closed)
+            while (pos < len && buf[pos] != ',' && buf[pos] != '\r' && buf[pos] != '\n') pos++;
+        *out = buf + content0;
+        *out_len = w - content0;
+        p->pos = pos;
+        return;
+    }
+
+    size_t start = pos;
+    while (pos < len && buf[pos] != ',' && buf[pos] != '\r' && buf[pos] != '\n') pos++;
+    *out = buf + start;
+    *out_len = pos - start;
+    p->pos = pos;
+}
+
+scl_error_t scl_parse_csv_next_field(scl_parse_csv_t *parser, const char **out, size_t *out_len) {
+    if (scl_unlikely(!parser || !out || !out_len)) return SCL_ERR_NULL_PTR;
+    if (parser->pos >= parser->buffer_len) return SCL_ERR_EMPTY;
+
+    char c = parser->buffer[parser->pos];
+
+    if (!parser->row_started) {
+        /* Start of a record: a bare line terminator means an empty line, which
+         * carries no fields. */
+        if (c == '\r' || c == '\n') return SCL_ERR_EMPTY;
+        parser->row_started = 1;
+        csv_parse_field(parser, out, out_len);
         return SCL_OK;
-
-    case SCL_CSV_STATE_QUOTE_END:
-    case SCL_CSV_STATE_CR:
-        break;
     }
 
-    *out = &parser->buffer[start];
-    *out_len = 0;
-    return SCL_OK;
-
-done_quoted:
-    scl_memmove(&parser->buffer[field_start], &parser->buffer[start], parser->pos - start);
-    field_start += parser->pos - start;
-
-    if (parser->state == SCL_CSV_STATE_QUOTE_END) {
-        if (parser->pos < parser->buffer_len) {
-            if (parser->buffer[parser->pos] == ',') {
-                parser->state = SCL_CSV_STATE_FIELD_START;
-                parser->pos++;
-            } else if (parser->buffer[parser->pos] == '\r') {
-                parser->state = SCL_CSV_STATE_CR;
-                parser->pos++;
-            } else if (parser->buffer[parser->pos] == '\n') {
-                parser->state = SCL_CSV_STATE_FIELD_START;
-                parser->pos++;
-                parser->row_started = 0;
-            }
-        }
-    }
-
-    *out = &parser->buffer[field_start];
-    *out_len = parser->pos - start;
+    /* Mid record. A line terminator ends the record; a delimiter introduces
+     * the next field (which may be empty). */
+    if (c == '\r' || c == '\n') return SCL_ERR_EMPTY;
+    if (c == ',') parser->pos++;
+    csv_parse_field(parser, out, out_len);
     return SCL_OK;
 }
 
 scl_error_t scl_parse_csv_next_row(scl_parse_csv_t *parser) {
     if (scl_unlikely(!parser)) return SCL_ERR_NULL_PTR;
+    char *buf = parser->buffer;
+    size_t len = parser->buffer_len;
 
-    parser->row_started = 1;
-
-    if (parser->state == SCL_CSV_STATE_CR) {
-        if (parser->pos < parser->buffer_len && parser->buffer[parser->pos] == '\n')
-            parser->pos++;
-        parser->state = SCL_CSV_STATE_FIELD_START;
-        return SCL_OK;
-    }
-
-    while (parser->pos < parser->buffer_len) {
-        char c = parser->buffer[parser->pos];
-        if (c == '\n') {
-            parser->pos++;
-            parser->state = SCL_CSV_STATE_FIELD_START;
-            return SCL_OK;
-        }
-        if (c == '\r') {
-            parser->state = SCL_CSV_STATE_CR;
-            parser->pos++;
-            return SCL_OK;
-        }
+    /* Skip to the current record's terminator (the caller is expected to have
+     * drained the fields already, in which case pos is already there). */
+    while (parser->pos < len && buf[parser->pos] != '\r' && buf[parser->pos] != '\n')
         parser->pos++;
+
+    if (parser->pos >= len) return SCL_ERR_EMPTY;   /* no terminator: end of input */
+
+    if (buf[parser->pos] == '\r') {
+        parser->pos++;
+        if (parser->pos < len && buf[parser->pos] == '\n') parser->pos++;   /* CRLF */
+    } else {
+        parser->pos++;                                                       /* LF */
     }
-    return SCL_ERR_EMPTY;
+    parser->state = SCL_CSV_STATE_FIELD_START;
+    parser->row_started = 0;
+    /* A terminator at the very end of input is not a new record. */
+    return parser->pos < len ? SCL_OK : SCL_ERR_EMPTY;
 }
 
 scl_error_t scl_parse_csv_destroy(scl_parse_csv_t *parser) {

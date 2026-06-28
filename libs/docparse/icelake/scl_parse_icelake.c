@@ -91,9 +91,14 @@ scl_error_t scl_parse_icelake_open(scl_allocator_t *alloc, scl_parse_icelake_t *
 
     if (root && root->type == SCL_JSON_OBJECT) {
         scl_parse_json_value_t *snap = scl_parse_json_object_get(root, "snapshot-id");
-        if (snap && snap->type == SCL_JSON_STRING) {
-            char *end = NULL;
-            parser->snapshot_id = scl_strtoll(snap->string_val, &end, 10);
+        if (snap) {
+            /* Iceberg metadata stores snapshot-id as a JSON number; tolerate a
+             * quoted string form too. */
+            if (snap->type == SCL_JSON_INT64) {
+                parser->snapshot_id = snap->int64_val;
+            } else if (snap->type == SCL_JSON_STRING && snap->string_val) {
+                parser->snapshot_id = scl_strtoll(snap->string_val, NULL, 10);
+            }
         }
 
         scl_parse_json_value_t *manifests = scl_parse_json_object_get(root, "manifests");

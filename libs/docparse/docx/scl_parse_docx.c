@@ -159,9 +159,14 @@ scl_error_t scl_parse_docx_open(scl_allocator_t *alloc, scl_parse_docx_t *parser
 
     if (xml_data) {
         parser->text_buf = (char *)scl_alloc(alloc, 4096, _Alignof(max_align_t));
-        parser->text_cap = 4096;
-        parser->text_len = 0;
-        docx_extract_text_from_xml(parser, xml_data, xml_len);
+        if (parser->text_buf) {
+            parser->text_cap = 4096;
+            parser->text_len = 0;
+            parser->text_buf[0] = '\0';
+            docx_extract_text_from_xml(parser, xml_data, xml_len);
+        } else {
+            parser->text_cap = 0;   /* keep cap consistent so append() won't deref NULL */
+        }
     }
 
     return SCL_OK;

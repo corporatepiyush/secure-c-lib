@@ -39,6 +39,7 @@ typedef struct {
     size_t buffer_cap;
     size_t buffer_len;
     size_t pos;
+    int row_started;
     int eof;
 } scl_parse_tsv_t;
 
