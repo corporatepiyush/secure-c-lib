@@ -635,22 +635,36 @@ int scl_http_parse_multipart(const void *body, size_t body_len,
 
             /* Compare header name case-insensitively by scanning to colon */
 #define CI_HDR_EQ(expected) ci_prefix((const char *)ptr, colon_pos, expected)
-            /* Content-Disposition: form-data; name="field"; filename="file.txt" */
+            /* Content-Disposition: form-data; name="field"; filename="file.txt"
+             *
+             * Each parameter token ("name=", "filename=") must begin at the
+             * start of the value or right after a parameter separator. Without
+             * this boundary check, the "name=" substring embedded inside
+             * "filename=" would match and clobber the real field name. We also
+             * NUL-terminate each quoted value in place at its closing quote so
+             * the values are usable as C strings (an unterminated pointer into
+             * the body would over-read past the part — an info-leak risk). */
             if (CI_HDR_EQ("Content-Disposition")) {
-                for (const char *p = (const char *)hdr_value_p; p < (const char *)ptr + hdr_end; p++) {
-                    if ((size_t)((const char *)ptr + hdr_end - p) >= 6 &&
-                        scl_memcmp(p, "name=\"", 6) == 0) {
-                        name = p + 6;
-                    }
-                    if ((size_t)((const char *)ptr + hdr_end - p) >= 10 &&
-                        scl_memcmp(p, "filename=\"", 10) == 0) {
-                        filename = p + 10;
+                char *vend = (char *)ptr + hdr_end;   /* points at the CR */
+                for (char *p = (char *)hdr_value_p; p < vend; p++) {
+                    bool at_param = (p == (char *)hdr_value_p) ||
+                                    p[-1] == ' ' || p[-1] == ';' || p[-1] == '\t';
+                    if (!at_param) continue;
+                    if ((size_t)(vend - p) >= 10 && scl_memcmp(p, "filename=\"", 10) == 0) {
+                        char *v = p + 10;
+                        char *q = (char *)scl_memchr(v, '"', (size_t)(vend - v));
+                        if (q) { *q = '\0'; filename = v; p = q; }
+                    } else if ((size_t)(vend - p) >= 6 && scl_memcmp(p, "name=\"", 6) == 0) {
+                        char *v = p + 6;
+                        char *q = (char *)scl_memchr(v, '"', (size_t)(vend - v));
+                        if (q) { *q = '\0'; name = v; p = q; }
                     }
                 }
             }
 
             if (CI_HDR_EQ("Content-Type")) {
                 part_content_type = (const char *)hdr_value_p;
+                ((char *)ptr)[hdr_end] = '\0';   /* terminate value at CR */
             }
 #undef CI_HDR_EQ
 
@@ -870,17 +884,32 @@ static void handle_connection(scl_http_server_t *srv, scl_tcp_conn_t *conn) {
     while (atomic_load_explicit(&srv->running, memory_order_acquire) &&
            served < srv->cfg.keep_alive_max) {
 
-        /* Read until we have a full header block (or hit a limit/timeout). */
+        /* Read until we have a full header block (or hit a limit/timeout).
+         *
+         * SO_RCVTIMEO bounds each individual recv(), but a slowloris client
+         * defeats that by dribbling one byte just inside every timeout window,
+         * holding the slot for days while rbuf creeps toward its cap. Defend
+         * with an ABSOLUTE deadline on the whole header phase, armed once the
+         * first byte of the request arrives (so genuine keep-alive idle, which
+         * SO_RCVTIMEO already caps, isn't penalised). */
         size_t hend = find_header_end(conn->rbuf, conn->rbuf_len);
+        const int64_t hdr_timeout = srv->cfg.recv_timeout_ms > 0
+                                    ? srv->cfg.recv_timeout_ms : 15000;
+        int64_t hdr_deadline = conn->rbuf_len > 0 ? scl_now_ms() + hdr_timeout : 0;
         while (scl_unlikely(hend == 0)) {
             if (scl_unlikely(conn->rbuf_len >= conn->rbuf_cap)) {
                 send_error(srv, fd, 431, false, true);
+                return;
+            }
+            if (scl_unlikely(hdr_deadline != 0 && scl_now_ms() >= hdr_deadline)) {
+                send_error(srv, fd, 408, false, true);
                 return;
             }
             ssize_t n = recv(fd, conn->rbuf + conn->rbuf_len,
                              conn->rbuf_cap - conn->rbuf_len, 0);
             if (scl_likely(n > 0)) {
                 conn->rbuf_len += (size_t)n;
+                if (hdr_deadline == 0) hdr_deadline = scl_now_ms() + hdr_timeout;
                 hend = find_header_end(conn->rbuf, conn->rbuf_len);
             } else if (scl_unlikely(n == 0)) {
                 return;
@@ -1046,10 +1075,6 @@ static void handle_connection(scl_http_server_t *srv, scl_tcp_conn_t *conn) {
         req.body = body_buf;
         req.body_len = body_len;
 
-        bool is_get  = scl_strcmp(req.method, "GET") == 0;
-        bool is_head = scl_strcmp(req.method, "HEAD") == 0;
-        head_only = is_head;
-
         will_close = !req.keep_alive || (served + 1 >= srv->cfg.keep_alive_max);
 
         /* Parse multipart/form-data if applicable */
@@ -1130,6 +1155,8 @@ static void *worker_main(void *arg) {
         scl_tcp_conn_t *conn = scl_tcp_pool_get_ready(&srv->pool);
         if (!conn) continue;
         handle_connection(srv, conn);
+        if (srv->cfg.ddos)
+            scl_ddos_conn_closed(srv->cfg.ddos, (struct sockaddr *)&conn->peer);
         scl_tcp_pool_release(&srv->pool, conn);
     }
     return NULL;
@@ -1150,16 +1177,32 @@ static void *acceptor_main(void *arg) {
             if (aerr == SCL_ERR_TIMEOUT) break;
             if (aerr != SCL_OK) break;
 
+            /* DDoS gate: reject rate-limited / banned peers before they can
+             * occupy a pool slot or a worker thread. Cheapest possible drop. */
+            if (srv->cfg.ddos &&
+                !scl_ddos_check(srv->cfg.ddos, (struct sockaddr *)&tmp.peer)) {
+                close(tmp.fd);
+                continue;
+            }
+
             scl_tcp_conn_t *conn = scl_tcp_pool_acquire(&srv->pool);
-            if (!conn) { close(tmp.fd); continue; }
+            if (!conn) {
+                if (srv->cfg.ddos)
+                    scl_ddos_conn_closed(srv->cfg.ddos, (struct sockaddr *)&tmp.peer);
+                close(tmp.fd);
+                continue;
+            }
 
             conn->fd       = tmp.fd;
             conn->peer     = tmp.peer;
             conn->peer_len = tmp.peer_len;
             conn->rbuf_len = 0;
             scl_tcp_set_recv_timeout(conn->fd, srv->cfg.recv_timeout_ms);
+            scl_tcp_set_send_timeout(conn->fd, srv->cfg.recv_timeout_ms);
 
             if (!scl_tcp_pool_post_ready(&srv->pool, conn)) {
+                if (srv->cfg.ddos)
+                    scl_ddos_conn_closed(srv->cfg.ddos, (struct sockaddr *)&conn->peer);
                 scl_tcp_pool_release(&srv->pool, conn);
                 continue;
             }

@@ -39,6 +39,7 @@
 
 #include "scl_common.h"
 #include "scl_tcp_pool.h"
+#include "scl_net_ddos.h"
 
 #include <stddef.h>
 #include <stdbool.h>
@@ -112,6 +113,12 @@ typedef struct {
     const char *server_name;      /* Server: header (default "scl-httpd") */
     scl_http_handler_fn handler;  /* optional dynamic handler */
     void       *handler_user;     /* passed to handler */
+
+    /* Optional DDoS mitigation. When non-NULL, every accepted connection is
+     * checked at the accept boundary (per-IP rate limit + concurrency cap +
+     * ban list) and dropped before it can consume a worker. The server does
+     * NOT take ownership — the caller inits and destroys it. */
+    scl_ddos_t *ddos;
 } scl_http_config_t;
 
 typedef struct scl_http_server scl_http_server_t;

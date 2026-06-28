@@ -477,7 +477,8 @@ int main(void) {
         SCL_EXPECT_OK(&tr, e);
         SCL_EXPECT_NOT_NULL(&tr, u.host);
         if (u.host) {
-            SCL_EXPECT_EQ_STR(&tr, u.host, "[::1]");
+            /* Brackets are stripped so the host is usable with getaddrinfo. */
+            SCL_EXPECT_EQ_STR(&tr, u.host, "::1");
         }
         SCL_EXPECT_EQ_I(&tr, u.port, 8080);
         if (u.path) SCL_EXPECT_EQ_STR(&tr, u.path, "/path");

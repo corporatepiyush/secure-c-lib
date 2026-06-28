@@ -430,6 +430,15 @@ scl_error_t scl_tcp_set_recv_timeout(int fd, int64_t ms) {
     return SCL_OK;
 }
 
+scl_error_t scl_tcp_set_send_timeout(int fd, int64_t ms) {
+    struct timeval tv;
+    tv.tv_sec  = (long)(ms / 1000);
+    tv.tv_usec = (long)((ms % 1000) * 1000);
+    if (setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv)) < 0)
+        return SCL_ERR_IO;
+    return SCL_OK;
+}
+
 /*
  * Write the entire buffer to a socket, retrying short writes.
  *
@@ -451,7 +460,10 @@ scl_error_t scl_tcp_send_all(int fd, const void *buf, size_t len) {
         ssize_t n = send(fd, p + sent, len - sent, 0);
         if (n > 0) { sent += (size_t)n; continue; }
         if (n < 0 && (errno == EINTR)) continue;
-        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) continue;
+        /* With SO_SNDTIMEO set, EAGAIN/EWOULDBLOCK means the peer stalled past
+         * the send deadline. Do NOT spin forever (that pins the worker on a
+         * slow-read DoS) — surface a timeout so the caller closes the conn. */
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return SCL_ERR_TIMEOUT;
         return SCL_ERR_IO;
     }
     return SCL_OK;

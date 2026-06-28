@@ -62,6 +62,7 @@
 #include "scl_stdlib.h"
 #include "scl_time.h"
 #include "scl_atomic.h"
+#include "scl_concurrent_common.h"   /* scl_spinlock_t */
 
 #include <string.h>
 #include <stdio.h>
@@ -75,7 +76,10 @@
 /* ── Per-IP state slot ────────────────────────────────────────────
  * 56 bytes per slot; with 1024 slots = 56 KB. */
 typedef struct {
-    /* IP address. For IPv4: addr64[0] = 0, addr32 = ip. For IPv6: full. */
+    /* Normalized key: IPv4 = 4 bytes; IPv6 = /64 prefix (first 8 bytes,
+     * remainder zeroed). Tracking IPv6 per /64 prevents an attacker who
+     * controls a routed prefix from trivially evading per-IP limits by
+     * cycling through 2^64 distinct /128 addresses. */
     union {
         struct in_addr  v4;
         struct in6_addr v6;
@@ -86,11 +90,12 @@ typedef struct {
     /* Token bucket */
     unsigned long tokens;       /* current token count (fixed-point) */
     int64_t       last_refill;  /* last refill timestamp (ms) */
+    int64_t       last_seen;    /* last activity (ms) — drives LRU eviction */
     unsigned int  conn_count;   /* current concurrent connections */
     unsigned long total_drops;  /* total drops for this IP */
 
     /* Ban state */
-    int64_t  ban_until;        /* 0 = not banned */
+    int64_t  ban_until;        /* 0 = not banned, INT64_MAX = manual blacklist */
     bool     whitelisted;      /* bypass all checks */
 } scl_ddos_slot_t;
 
@@ -102,80 +107,111 @@ struct scl_ddos {
     scl_ddos_slot_t   *slots;
     unsigned int       slot_count;
 
-    /* Stats */
-    unsigned long      total_allowed;
-    unsigned long      total_dropped;
+    /* Serializes all table mutation. The acceptor calls check() while workers
+     * call conn_closed(); without this lock those races corrupt conn_count and
+     * the token buckets. The fast path is uncontended (single acceptor). */
+    scl_spinlock_t     lock;
 
-    /* For LRU replacement when table is full. */
-    unsigned int       next_victim;
+    /* Stats (relaxed; read without the lock). */
+    scl_atomic_size_t  total_allowed;
+    scl_atomic_size_t  total_dropped;
 };
 
-/* ── Hash function (djb2 on IP bytes) ───────────────────────────── */
-static uint32_t ip_hash(int family, const void *addr) {
-    size_t len;
-    unsigned char buf[16];
-
-    if (family == AF_INET) {
-        scl_memcpy(buf, addr, 4);
-        len = 4;
+/* Normalize a raw address into the table key: IPv4 keeps all 4 bytes; IPv6 is
+ * collapsed to its /64 prefix (first 8 bytes, rest zeroed). `klen` receives the
+ * significant key length. */
+static void ip_key(int family, const void *addr, unsigned char out[16], size_t *klen) {
+    if (scl_likely(family == AF_INET)) {
+        scl_memcpy(out, addr, 4);
+        *klen = 4;
     } else {
-        scl_memcpy(buf, addr, 16);
-        len = 16;
+        scl_memcpy(out, addr, 8);
+        scl_memset(out + 8, 0, 8);   /* mask off the host portion of the /64 */
+        *klen = 16;
     }
+}
 
+/* ── Hash function (djb2 on the normalized key) ─────────────────── */
+static uint32_t ip_hash(const unsigned char *key, size_t klen) {
     uint32_t h = 5381;
-    for (size_t i = 0; i < len; i++)
-        h = ((h << 5) + h) + buf[i];
+    for (size_t i = 0; i < klen; i++)
+        h = ((h << 5) + h) + key[i];
     return h;
 }
 
-/* Compare two IP addresses for equality. */
-static bool ip_eq(int family_a, const void *addr_a,
-                  int family_b, const void *addr_b) {
-    if (scl_unlikely(family_a != family_b)) return false;
-    if (scl_likely(family_a == AF_INET))
-        return scl_memcmp(addr_a, addr_b, 4) == 0;
-    return scl_memcmp(addr_a, addr_b, 16) == 0;
+/* A slot is evictable only if it holds no live connections and is not a pinned
+ * (whitelisted or manually blacklisted) entry — evicting those would silently
+ * drop an operator's policy. */
+static bool slot_evictable(const scl_ddos_slot_t *s) {
+    return s->conn_count == 0 && !s->whitelisted && s->ban_until != INT64_MAX;
 }
 
-/* Find or allocate a slot for an IP. Returns slot index or UINT32_MAX. */
+static void slot_init(scl_ddos_slot_t *s, const scl_ddos_t *ddos, int family,
+                      uint32_t h, const unsigned char *key, size_t klen,
+                      int64_t now) {
+    s->family      = family;
+    s->hash        = h;
+    s->tokens      = ddos->cfg.burst_size;
+    s->last_refill = now;
+    s->last_seen   = now;
+    s->conn_count  = 0;
+    s->total_drops = 0;
+    s->ban_until   = 0;
+    s->whitelisted = false;
+    scl_memcpy(&s->ip, key, klen);
+}
+
+/*
+ * Find or allocate a slot for a normalized key. Returns slot index or
+ * UINT32_MAX.
+ *
+ * On a full table we do NOT fail open: we evict the least-recently-seen
+ * evictable slot and reuse it. This is the crux of the module's value — an
+ * attacker spraying many distinct source addresses must not be able to fill
+ * the table and thereby disable rate limiting for everyone. Eviction-by-
+ * replacement keeps the slot occupied, so open-addressing probe chains for
+ * surviving keys stay intact.
+ */
 static unsigned int find_slot(scl_ddos_t *ddos, int family,
-                              const void *addr, bool alloc_if_missing) {
-    uint32_t h = ip_hash(family, addr);
+                              const unsigned char *key, size_t klen,
+                              bool alloc_if_missing, int64_t now) {
+    uint32_t h = ip_hash(key, klen);
     unsigned int mask = ddos->slot_count - 1;
     unsigned int idx = h & mask;
 
-    /* Linear probing. */
+    unsigned int victim = UINT32_MAX;
+    int64_t      victim_seen = INT64_MAX;
+
+    /* Single full sweep: locate an exact match or an empty slot, while also
+     * tracking the best eviction candidate in case the table is full. */
     for (unsigned int i = 0; i < ddos->slot_count; i++) {
         unsigned int probe = (idx + i) & mask;
         scl_ddos_slot_t *s = &ddos->slots[probe];
 
         if (scl_unlikely(s->family < 0)) {
-            /* Empty slot. */
             if (scl_unlikely(!alloc_if_missing)) return UINT32_MAX;
-            s->family = family;
-            s->hash = h;
-            s->tokens = ddos->cfg.burst_size;
-            s->last_refill = 0;
-            s->conn_count = 0;
-            s->total_drops = 0;
-            s->ban_until = 0;
-            s->whitelisted = false;
-            if (scl_likely(family == AF_INET))
-                scl_memcpy(&s->ip.v4, addr, 4);
-            else
-                scl_memcpy(&s->ip.v6, addr, 16);
+            slot_init(s, ddos, family, h, key, klen, now);
             return probe;
         }
 
-        if (scl_likely(ip_eq(s->family, &s->ip, family, addr))) {
-            /* Found existing slot. */
+        if (scl_likely(s->hash == h && (size_t)(family == AF_INET ? 4 : 16) == klen &&
+                       scl_memcmp(&s->ip, key, klen) == 0)) {
             return probe;
+        }
+
+        if (alloc_if_missing && slot_evictable(s) && s->last_seen < victim_seen) {
+            victim_seen = s->last_seen;
+            victim = probe;
         }
     }
 
-    if (!alloc_if_missing) return UINT32_MAX;
-    return UINT32_MAX; /* table full */
+    if (!alloc_if_missing || victim == UINT32_MAX)
+        return UINT32_MAX;  /* table full and nothing safe to evict */
+
+    /* Reclaim the LRU victim for this key. */
+    scl_secure_zero(&ddos->slots[victim], sizeof(ddos->slots[victim]));
+    slot_init(&ddos->slots[victim], ddos, family, h, key, klen, now);
+    return victim;
 }
 
 /* ── Public API ─────────────────────────────────────────────────── */
@@ -221,6 +257,10 @@ scl_error_t scl_ddos_init(scl_allocator_t *alloc, scl_ddos_t **out,
     for (unsigned int i = 0; i < pow2; i++)
         ddos->slots[i].family = -1;
 
+    scl_spinlock_init(&ddos->lock);
+    atomic_init(&ddos->total_allowed, 0);
+    atomic_init(&ddos->total_dropped, 0);
+
     *out = ddos;
     return SCL_OK;
 }
@@ -235,51 +275,74 @@ void scl_ddos_destroy(scl_ddos_t *ddos) {
     scl_free(ddos->alloc, ddos);
 }
 
+/* Extract the address pointer for a sockaddr; returns -1 for unknown families. */
+static int sockaddr_ip(const struct sockaddr *addr, const void **out) {
+    int family = addr->sa_family;
+    if (scl_likely(family == AF_INET))
+        *out = &((const struct sockaddr_in *)addr)->sin_addr;
+    else if (family == AF_INET6)
+        *out = &((const struct sockaddr_in6 *)addr)->sin6_addr;
+    else
+        return -1;
+    return family;
+}
+
+static void bump_dropped(scl_ddos_t *ddos) {
+    atomic_fetch_add_explicit(&ddos->total_dropped, 1, memory_order_relaxed);
+}
+static void bump_allowed(scl_ddos_t *ddos) {
+    atomic_fetch_add_explicit(&ddos->total_allowed, 1, memory_order_relaxed);
+}
+
 bool scl_ddos_check(scl_ddos_t *ddos, const struct sockaddr *addr) {
     if (!ddos || !addr) return false;
 
-    int family = addr->sa_family;
     const void *ip_addr;
-    if (scl_likely(family == AF_INET)) {
-        ip_addr = &((const struct sockaddr_in *)addr)->sin_addr;
-    } else if (family == AF_INET6) {
-        ip_addr = &((const struct sockaddr_in6 *)addr)->sin6_addr;
-    } else {
-        return true; /* unknown address family: allow */
-    }
+    int family = sockaddr_ip(addr, &ip_addr);
+    if (scl_unlikely(family < 0)) return true; /* unknown family: allow */
 
-    unsigned int idx = find_slot(ddos, family, ip_addr, true);
+    unsigned char key[16];
+    size_t klen;
+    ip_key(family, ip_addr, key, &klen);
+
+    int64_t now = scl_now_ms();
+    bool allow;
+
+    scl_spinlock_lock(&ddos->lock);
+
+    unsigned int idx = find_slot(ddos, family, key, klen, true, now);
     if (scl_unlikely(idx >= ddos->slot_count)) {
-        /* Table full — allow (can't track all IPs under attack).
-         * The LRU scheme could replace here, but for simplicity
-         * we let it through. */
-        ddos->total_allowed++;
-        return true;
+        /* Table is full of currently-active IPs and nothing is evictable.
+         * Fail closed: every slot is an in-flight connection, so this is the
+         * server already at capacity — dropping is correct back-pressure. */
+        scl_spinlock_unlock(&ddos->lock);
+        bump_dropped(ddos);
+        return false;
     }
 
     scl_ddos_slot_t *s = &ddos->slots[idx];
+    s->last_seen = now;
 
-    /* Check whitelist. */
+    /* Whitelist bypasses everything. */
     if (scl_unlikely(s->whitelisted)) {
         s->conn_count++;
-        ddos->total_allowed++;
+        scl_spinlock_unlock(&ddos->lock);
+        bump_allowed(ddos);
         return true;
     }
 
-    /* Check ban. */
+    /* Active ban? */
     if (scl_unlikely(s->ban_until > 0)) {
-        int64_t now = scl_now_ms();
         if (scl_unlikely(now < s->ban_until)) {
-            ddos->total_dropped++;
+            scl_spinlock_unlock(&ddos->lock);
+            bump_dropped(ddos);
             return false;
         }
-        /* Ban expired. */
-        s->ban_until = 0;
+        s->ban_until = 0;     /* expired */
         s->total_drops = 0;
     }
 
-    /* Token bucket refill. */
-    int64_t now = scl_now_ms();
+    /* Token-bucket refill. */
     if (scl_likely(now > s->last_refill)) {
         unsigned long elapsed = (unsigned long)(now - s->last_refill);
         unsigned long add = (elapsed * ddos->cfg.rate_per_sec) / 1000;
@@ -292,51 +355,43 @@ bool scl_ddos_check(scl_ddos_t *ddos, const struct sockaddr *addr) {
         }
     }
 
-    /* Check concurrent connections limit. */
-    if (scl_unlikely(s->conn_count >= ddos->cfg.max_conn_per_ip)) {
+    /* Concurrent-connection cap or empty bucket => drop (and maybe ban). */
+    if (scl_unlikely(s->conn_count >= ddos->cfg.max_conn_per_ip || s->tokens == 0)) {
         s->total_drops++;
-        ddos->total_dropped++;
-        s->total_drops++;
-        if (scl_unlikely(s->total_drops >= ddos->cfg.ban_threshold)) {
+        if (scl_unlikely(s->total_drops >= ddos->cfg.ban_threshold))
             s->ban_until = now + ddos->cfg.ban_duration_ms;
-        }
+        scl_spinlock_unlock(&ddos->lock);
+        bump_dropped(ddos);
         return false;
     }
 
-    /* Check token bucket. */
-    if (scl_unlikely(s->tokens == 0)) {
-        s->total_drops++;
-        ddos->total_dropped++;
-        if (scl_unlikely(s->total_drops >= ddos->cfg.ban_threshold)) {
-            s->ban_until = now + ddos->cfg.ban_duration_ms;
-        }
-        return false;
-    }
-
-    /* Consume a token. */
+    /* Admit: consume a token, count the connection. */
     s->tokens--;
     s->conn_count++;
-    ddos->total_allowed++;
-    return true;
+    allow = true;
+    scl_spinlock_unlock(&ddos->lock);
+    bump_allowed(ddos);
+    return allow;
 }
 
 void scl_ddos_conn_closed(scl_ddos_t *ddos, const struct sockaddr *addr) {
     if (!ddos || !addr) return;
 
-    int family = addr->sa_family;
     const void *ip_addr;
-    if (family == AF_INET)
-        ip_addr = &((const struct sockaddr_in *)addr)->sin_addr;
-    else if (family == AF_INET6)
-        ip_addr = &((const struct sockaddr_in6 *)addr)->sin6_addr;
-    else
-        return;
+    int family = sockaddr_ip(addr, &ip_addr);
+    if (family < 0) return;
 
-    unsigned int idx = find_slot(ddos, family, ip_addr, false);
-    if (idx >= ddos->slot_count) return;
+    unsigned char key[16];
+    size_t klen;
+    ip_key(family, ip_addr, key, &klen);
 
-    scl_ddos_slot_t *s = &ddos->slots[idx];
-    if (s->conn_count > 0) s->conn_count--;
+    scl_spinlock_lock(&ddos->lock);
+    unsigned int idx = find_slot(ddos, family, key, klen, false, scl_now_ms());
+    if (idx < ddos->slot_count) {
+        scl_ddos_slot_t *s = &ddos->slots[idx];
+        if (s->conn_count > 0) s->conn_count--;
+    }
+    scl_spinlock_unlock(&ddos->lock);
 }
 
 /* ── IP string helpers ──────────────────────────────────────────── */
@@ -362,51 +417,74 @@ static int parse_ip_str(const char *ip_str, void *addr_out) {
 
 scl_error_t scl_ddos_blacklist_ip(scl_ddos_t *ddos, const char *ip_str) {
     if (!ddos || !ip_str) return SCL_ERR_NULL_PTR;
-    unsigned char addr[16];
-    int family = parse_ip_str(ip_str, addr);
+    unsigned char raw[16];
+    int family = parse_ip_str(ip_str, raw);
     if (family < 0) return SCL_ERR_INVALID_ARG;
 
-    unsigned int idx = find_slot(ddos, family, addr, true);
-    if (idx >= ddos->slot_count) return SCL_ERR_FULL;
+    unsigned char key[16];
+    size_t klen;
+    ip_key(family, raw, key, &klen);
 
-    /* Set ban until far future. */
-    ddos->slots[idx].ban_until = INT64_MAX;
-    return SCL_OK;
+    scl_spinlock_lock(&ddos->lock);
+    unsigned int idx = find_slot(ddos, family, key, klen, true, scl_now_ms());
+    if (idx < ddos->slot_count) {
+        ddos->slots[idx].ban_until   = INT64_MAX;  /* pinned: never evicted */
+        ddos->slots[idx].whitelisted = false;
+    }
+    scl_spinlock_unlock(&ddos->lock);
+    return idx < ddos->slot_count ? SCL_OK : SCL_ERR_FULL;
 }
 
 scl_error_t scl_ddos_whitelist_ip(scl_ddos_t *ddos, const char *ip_str) {
     if (!ddos || !ip_str) return SCL_ERR_NULL_PTR;
-    unsigned char addr[16];
-    int family = parse_ip_str(ip_str, addr);
+    unsigned char raw[16];
+    int family = parse_ip_str(ip_str, raw);
     if (family < 0) return SCL_ERR_INVALID_ARG;
 
-    unsigned int idx = find_slot(ddos, family, addr, true);
-    if (idx >= ddos->slot_count) return SCL_ERR_FULL;
+    unsigned char key[16];
+    size_t klen;
+    ip_key(family, raw, key, &klen);
 
-    ddos->slots[idx].whitelisted = true;
-    ddos->slots[idx].ban_until = 0;
-    return SCL_OK;
+    scl_spinlock_lock(&ddos->lock);
+    unsigned int idx = find_slot(ddos, family, key, klen, true, scl_now_ms());
+    if (idx < ddos->slot_count) {
+        ddos->slots[idx].whitelisted = true;   /* pinned: never evicted */
+        ddos->slots[idx].ban_until   = 0;
+    }
+    scl_spinlock_unlock(&ddos->lock);
+    return idx < ddos->slot_count ? SCL_OK : SCL_ERR_FULL;
 }
 
 scl_error_t scl_ddos_unlist_ip(scl_ddos_t *ddos, const char *ip_str) {
     if (!ddos || !ip_str) return SCL_ERR_NULL_PTR;
-    unsigned char addr[16];
-    int family = parse_ip_str(ip_str, addr);
+    unsigned char raw[16];
+    int family = parse_ip_str(ip_str, raw);
     if (family < 0) return SCL_ERR_INVALID_ARG;
 
-    unsigned int idx = find_slot(ddos, family, addr, false);
-    if (idx >= ddos->slot_count) return SCL_ERR_NOT_FOUND;
+    unsigned char key[16];
+    size_t klen;
+    ip_key(family, raw, key, &klen);
+
+    scl_spinlock_lock(&ddos->lock);
+    unsigned int idx = find_slot(ddos, family, key, klen, false, scl_now_ms());
+    if (idx >= ddos->slot_count) {
+        scl_spinlock_unlock(&ddos->lock);
+        return SCL_ERR_NOT_FOUND;
+    }
 
     /* Mark slot as empty. */
     scl_secure_zero(&ddos->slots[idx], sizeof(scl_ddos_slot_t));
     ddos->slots[idx].family = -1;
+    scl_spinlock_unlock(&ddos->lock);
     return SCL_OK;
 }
 
 unsigned long scl_ddos_total_dropped(const scl_ddos_t *ddos) {
-    return ddos ? ddos->total_dropped : 0;
+    return ddos ? (unsigned long)atomic_load_explicit(&ddos->total_dropped,
+                                                      memory_order_relaxed) : 0;
 }
 
 unsigned long scl_ddos_total_allowed(const scl_ddos_t *ddos) {
-    return ddos ? ddos->total_allowed : 0;
+    return ddos ? (unsigned long)atomic_load_explicit(&ddos->total_allowed,
+                                                      memory_order_relaxed) : 0;
 }

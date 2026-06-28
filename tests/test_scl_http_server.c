@@ -60,10 +60,12 @@ static long find_content_length(const char *headers) {
 static int read_response(int fd, resp_t *r, int is_head) {
     memset(r, 0, sizeof(*r));
     char buf[8192];
+    size_t total = 0;
 
     for (;;) {
-        size_t total = 0;
-        char *hdr_end = NULL;
+        /* Preserve any bytes already buffered from a prior 1xx skip — a
+         * coalesced "100 Continue" + final response can arrive in one recv. */
+        char *hdr_end = (total > 0) ? strstr(buf, "\r\n\r\n") : NULL;
 
         while (!hdr_end && total < sizeof(buf) - 1) {
             ssize_t n = recv(fd, buf + total, sizeof(buf) - 1 - total, 0);
@@ -102,7 +104,10 @@ static int read_response(int fd, resp_t *r, int is_head) {
             if (total > consumed) {
                 memmove(buf, buf + consumed, total - consumed);
                 total -= consumed;
+            } else {
+                total = 0;
             }
+            buf[total] = '\0';
             continue;
         }
 
@@ -162,11 +167,12 @@ static bool health_handler(const scl_http_request_t *req, scl_http_response_t *r
                         "{\"uploads\":%zu,", req->upload_count);
         for (size_t i = 0; i < req->upload_count && pos < sizeof(infobuf); i++) {
             const scl_http_upload_t *u = &req->uploads[i];
-            pos += snprintf(infobuf + pos, sizeof(infobuf) - pos,
-                            "\"name%zu\":\"%s\",", i, u->name ? u->name : "");
             if (u->filename)
                 pos += snprintf(infobuf + pos, sizeof(infobuf) - pos,
-                                "\"file%zu\":\"%s\",", i, u->filename);
+                                "\"%s\":\"%s\",", u->name ? u->name : "", u->filename);
+            else
+                pos += snprintf(infobuf + pos, sizeof(infobuf) - pos,
+                                "\"name%zu\":\"%s\",", i, u->name ? u->name : "");
         }
         if (pos > 0 && pos < sizeof(infobuf)) infobuf[pos - 1] = '}';
         resp->status = 200;

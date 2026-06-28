@@ -157,6 +157,11 @@ scl_error_t scl_tcp_accept(int listen_fd, scl_tcp_conn_t *conn);
 scl_error_t scl_tcp_set_nonblocking(int fd, bool on);
 scl_error_t scl_tcp_set_recv_timeout(int fd, int64_t ms);
 
+/* Bound how long a blocking send() may stall before returning (SO_SNDTIMEO).
+ * Without this a single slow-reading peer can pin a worker thread forever in
+ * scl_tcp_send_all — a trivial slow-read DoS. ms <= 0 disables the timeout. */
+scl_error_t scl_tcp_set_send_timeout(int fd, int64_t ms);
+
 /* send() the whole buffer, retrying short writes. Returns SCL_OK or SCL_ERR_IO. */
 scl_error_t scl_tcp_send_all(int fd, const void *buf, size_t len);
 

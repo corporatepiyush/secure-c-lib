@@ -342,11 +342,14 @@ scl_error_t scl_http_client_connect(scl_http_client_t *c,
     scl_error_t err = tcp_connect_to(host, port, &fd);
     if (err != SCL_OK) return err;
 
-    /* Set receive timeout (same approach as scl_http_server.c). */
+    /* Set receive AND send timeouts (same approach as scl_http_server.c).
+     * The send timeout stops a wedged/blackholing server from blocking us
+     * forever inside send() while the kernel write buffer stays full. */
     struct timeval tv;
     tv.tv_sec  = SCL_HTTP_CLIENT_DEFAULT_TIMEOUT_MS / 1000;
     tv.tv_usec = (SCL_HTTP_CLIENT_DEFAULT_TIMEOUT_MS % 1000) * 1000;
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 
     c->fd = fd;
     c->conn_port = port;
@@ -976,14 +979,19 @@ scl_error_t scl_http_client_request(scl_http_client_t *c,
     const char *scheme_sep = scl_strstr(url, "://");
     if (scheme_sep) hstart = scheme_sep + 3;
 
-    const char *hend = hstart;
-    /* IPv6 addresses are bracketed: skip past the closing ']'. */
-    if (*hend == '[') {
-        hend = scl_strchr(hend, ']');
+    const char *hend;
+    /* IPv6 addresses are bracketed in the URL ("[::1]") but getaddrinfo wants
+     * the bare address ("::1"). Strip the brackets so the host we resolve
+     * matches what scl_http_parse_url produced — otherwise every IPv6 request
+     * fails name resolution. */
+    if (*hstart == '[') {
+        hstart++;                        /* skip '[' */
+        hend = scl_strchr(hstart, ']');  /* host ends before ']' */
         if (!hend) return SCL_ERR_INVALID_ARG;
-        hend++; /* point past ']' */
+    } else {
+        hend = hstart;
+        while (*hend && *hend != ':' && *hend != '/' && *hend != '?') hend++;
     }
-    while (*hend && *hend != ':' && *hend != '/' && *hend != '?') hend++;
     size_t host_len = (size_t)(hend - hstart);
     if (host_len == 0) return SCL_ERR_INVALID_ARG;
 
