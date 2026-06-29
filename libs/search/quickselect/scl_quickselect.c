@@ -31,9 +31,30 @@ static void swap_elements(void *a, void *b, size_t elem_size)
     }
 }
 
+/*
+ * Choose the median of base[lo], base[mid], base[hi] and move it to `hi` to use
+ * as the pivot. A fixed last-element pivot makes quickselect degrade to O(n^2)
+ * on sorted, reverse-sorted, or organ-pipe inputs — an algorithmic-complexity
+ * DoS for any caller that selects over attacker-influenced data. Median-of-three
+ * keeps those common adversarial shapes near the O(n) expected case.
+ */
+static void median_of_three(unsigned char *bytes, size_t lo, size_t hi, size_t elem_size, scl_cmp_func_t cmp)
+{
+    size_t mid = lo + (hi - lo) / 2;
+    void *a = bytes + lo * elem_size;
+    void *b = bytes + mid * elem_size;
+    void *c = bytes + hi * elem_size;
+    /* Sort the three so the median ends up at `mid`, then swap median to hi. */
+    if (cmp(a, b) > 0) swap_elements(a, b, elem_size);
+    if (cmp(b, c) > 0) swap_elements(b, c, elem_size);
+    if (cmp(a, b) > 0) swap_elements(a, b, elem_size);
+    swap_elements(b, c, elem_size);   /* median (now at mid) -> hi */
+}
+
 static size_t partition(void *base, size_t lo, size_t hi, size_t elem_size, scl_cmp_func_t cmp)
 {
     unsigned char *bytes = (unsigned char *)base;
+    if (hi - lo >= 2) median_of_three(bytes, lo, hi, elem_size, cmp);
     void *pivot = bytes + hi * elem_size;
     size_t i = lo;
     for (size_t j = lo; j < hi; j++) {

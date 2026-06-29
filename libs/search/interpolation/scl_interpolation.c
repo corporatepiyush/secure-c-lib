@@ -39,7 +39,13 @@ scl_error_t scl_search_interpolation_search(const int64_t * arr, size_t count, i
             break;
         }
         if (arr[hi] == arr[lo]) break;
-        size_t pos = lo + (size_t)((double)(key - arr[lo]) * (double)(hi - lo) / (double)(arr[hi] - arr[lo]));
+        /* Compute the interpolation fraction in floating point: subtracting two
+         * int64 values directly (key-arr[lo], arr[hi]-arr[lo]) overflows — and
+         * is undefined behaviour — for adversarial ranges like {INT64_MIN,
+         * INT64_MAX}. Widening to double first cannot overflow. */
+        double frac = ((double)key - (double)arr[lo]) / ((double)arr[hi] - (double)arr[lo]);
+        if (frac < 0.0) frac = 0.0; else if (frac > 1.0) frac = 1.0;
+        size_t pos = lo + (size_t)(frac * (double)(hi - lo));
         if (pos < lo) pos = lo;
         if (pos > hi) pos = hi;
 

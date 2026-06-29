@@ -27,30 +27,29 @@ scl_error_t scl_search_sentinel_linear_search(scl_allocator_t * alloc, const voi
     if (scl_unlikely(out_index == NULL)) return SCL_ERR_NULL_PTR;
     if (scl_unlikely(count == 0)) return SCL_ERR_EMPTY;
 
-    unsigned char *buf = (unsigned char *)scl_alloc(alloc, elem_size, alignof(max_align_t));
-    if (scl_unlikely(buf == NULL)) return SCL_ERR_OUT_OF_MEMORY;
-    scl_memcpy(buf, key, elem_size);
+    if (scl_unlikely(elem_size == 0)) return SCL_ERR_INVALID_ARG;
 
+    /*
+     * The sentinel technique: copy the array with ONE extra slot, write the key
+     * into that trailing slot, then scan with no per-iteration bounds check —
+     * the copy of the key at index `count` guarantees the loop terminates. The
+     * previous implementation kept an `if (i < count)` test inside the loop,
+     * which defeats the whole point (and never actually placed a sentinel). We
+     * need a writable buffer because `base` is const, so size is (count+1).
+     */
     size_t bytes;
-    if (scl_mul_overflow(count, elem_size, &bytes)) { scl_free(alloc, buf); return SCL_ERR_SIZE_OVERFLOW; }
+    if (scl_mul_overflow(count + 1, elem_size, &bytes)) return SCL_ERR_SIZE_OVERFLOW;
     unsigned char *copy = (unsigned char *)scl_alloc(alloc, bytes, alignof(max_align_t));
-    if (scl_unlikely(copy == NULL)) { scl_free(alloc, buf); return SCL_ERR_OUT_OF_MEMORY; }
-    scl_memcpy(copy, base, bytes);
+    if (scl_unlikely(copy == NULL)) return SCL_ERR_OUT_OF_MEMORY;
+    scl_memcpy(copy, base, count * elem_size);
+    scl_memcpy(copy + count * elem_size, key, elem_size);   /* sentinel */
 
     size_t i = 0;
-    while (1) {
-        if (i < count) {
-            int r = cmp(copy + i * elem_size, buf);
-            if (r == 0) break;
-        }
-        i++;
-        if (i > count) break;
-    }
+    while (cmp(copy + i * elem_size, key) != 0) i++;          /* no bounds check */
 
-    scl_free(alloc, buf);
     scl_free(alloc, copy);
 
-    if (i < count) {
+    if (i < count) {            /* a real element matched, not the sentinel */
         *out_index = i;
         return SCL_OK;
     }

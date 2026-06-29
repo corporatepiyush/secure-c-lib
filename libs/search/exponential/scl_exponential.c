@@ -59,6 +59,7 @@ scl_error_t scl_search_exponential_search(const void * base, size_t count, size_
             if (hi >= count) hi = count - 1;
             return binary_search_range(base, bound / 2, hi, elem_size, key, cmp, out_index);
         }
+        if (bound > (SIZE_MAX >> 1)) break;     /* overflow-safe doubling */
         bound *= 2;
     }
     return binary_search_range(base, bound / 2, count - 1, elem_size, key, cmp, out_index);

@@ -48,6 +48,7 @@ scl_error_t scl_search_unbounded_binary_search(scl_cmp_func_t cmp, const void * 
         }
         if (r > 0) break;
         lo = hi;
+        if (hi > (SIZE_MAX >> 1)) { hi = max_count; break; }   /* overflow-safe doubling */
         hi *= 2;
     }
     if (hi >= max_count) hi = max_count - 1;

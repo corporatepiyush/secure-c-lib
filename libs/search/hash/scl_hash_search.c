@@ -60,22 +60,50 @@ scl_error_t scl_search_ht_insert(scl_search_ht_t * ht, const char * key, void * 
     if (scl_unlikely(key == NULL)) return SCL_ERR_NULL_PTR;
     if (ht->count >= ht->capacity / 2) return SCL_ERR_FULL;
 
+    /*
+     * Probe to the first never-occupied slot, remembering the first tombstone
+     * seen. A key must be updated in place if it already exists, so we cannot
+     * stop at the first tombstone — doing so would insert a DUPLICATE ahead of
+     * the live entry and leave stale-value lookups behind. Insert at the
+     * earliest tombstone (or the empty slot) only once we've confirmed the key
+     * is absent (i.e. reached an empty slot or scanned the whole table).
+     */
     size_t idx = hash_str(key, ht->mask);
+    bool have_tomb = false;
+    size_t tomb = 0;
     for (size_t i = 0; i < ht->capacity; i++) {
-        size_t probe = (idx + i)  & ht->mask;
-        if (!ht->entries[probe].occupied || ht->entries[probe].deleted) {
-            ht->entries[probe].key = str_dup(ht->alloc, key);
-            if (!ht->entries[probe].key) return SCL_ERR_OUT_OF_MEMORY;
-            ht->entries[probe].value = value;
-            ht->entries[probe].occupied = true;
-            ht->entries[probe].deleted = false;
+        size_t probe = (idx + i) & ht->mask;
+        scl_search_ht_entry_t *e = &ht->entries[probe];
+        if (!e->occupied) {                 /* never used: key is absent */
+            size_t dst = have_tomb ? tomb : probe;
+            ht->entries[dst].key = str_dup(ht->alloc, key);
+            if (!ht->entries[dst].key) return SCL_ERR_OUT_OF_MEMORY;
+            ht->entries[dst].value = value;
+            ht->entries[dst].occupied = true;
+            ht->entries[dst].deleted = false;
             ht->count++;
             return SCL_OK;
         }
-        if (strcmp(ht->entries[probe].key, key) == 0) {
-            ht->entries[probe].value = value;
+        if (e->deleted) {                   /* tombstone: remember the first */
+            if (!have_tomb) { have_tomb = true; tomb = probe; }
+            continue;
+        }
+        if (strcmp(e->key, key) == 0) {     /* live match: update in place */
+            e->value = value;
             return SCL_OK;
         }
+    }
+
+    /* No empty slot found (table is dense with live entries + tombstones), but
+     * the key was not present — reuse the first tombstone if there was one. */
+    if (have_tomb) {
+        ht->entries[tomb].key = str_dup(ht->alloc, key);
+        if (!ht->entries[tomb].key) return SCL_ERR_OUT_OF_MEMORY;
+        ht->entries[tomb].value = value;
+        ht->entries[tomb].occupied = true;
+        ht->entries[tomb].deleted = false;
+        ht->count++;
+        return SCL_OK;
     }
     return SCL_ERR_FULL;
 }

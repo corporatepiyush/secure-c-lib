@@ -27,6 +27,7 @@ static scl_error_t binary_string_range(const char **strs, size_t lo, size_t hi, 
 {
     while (lo <= hi) {
         size_t mid = lo + (hi - lo) / 2;
+        if (scl_unlikely(!strs[mid])) return SCL_ERR_INVALID_ARG;   /* guard NULL element */
         int r = strcmp(strs[mid], key);
         if (r == 0) { *idx = mid; return SCL_OK; }
         if (r < 0) lo = mid + 1;
@@ -42,14 +43,17 @@ scl_error_t scl_search_exponential_string(const char **SCL_RESTRICT strs, size_t
     if (scl_unlikely(idx == NULL)) return SCL_ERR_NULL_PTR;
     if (scl_unlikely(count == 0)) return SCL_ERR_EMPTY;
 
+    if (scl_unlikely(!strs[0])) return SCL_ERR_INVALID_ARG;
     if (strcmp(strs[0], key) == 0) { *idx = 0; return SCL_OK; }
     if (count == 1) return SCL_ERR_NOT_FOUND;
 
     size_t bound = 1;
     while (bound < count) {
+        if (scl_unlikely(!strs[bound])) return SCL_ERR_INVALID_ARG;
         int r = strcmp(strs[bound], key);
         if (r >= 0)
             return binary_string_range(strs, bound / 2, bound, key, idx);
+        if (bound > (SIZE_MAX >> 1)) break;     /* overflow-safe doubling */
         bound *= 2;
     }
     return binary_string_range(strs, bound / 2, count - 1, key, idx);
