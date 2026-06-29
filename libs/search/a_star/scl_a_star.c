@@ -19,9 +19,8 @@
 #include "scl_a_star.h"
 #include <limits.h>
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
-
-#define A_STAR_MAX_OPEN 4096
 
 typedef struct {
     int x, y;
@@ -31,6 +30,33 @@ typedef struct {
 static int heuristic(int x1, int y1, int x2, int y2)
 {
     return abs(x1 - x2) + abs(y1 - y2);
+}
+
+/* Binary min-heap (by f) for the open set. The previous open set was a
+ * fixed 4096-entry array searched linearly for the minimum — O(N) per pop, and
+ * worse, once it filled it SILENTLY DROPPED new nodes, so A* could return
+ * "not found" on a solvable map. A heap sized to the relaxation bound removes
+ * both problems and matches the documented "binary-heap open set". */
+static void as_sift_up(a_star_node_t *h, size_t i)
+{
+    while (i > 0) {
+        size_t p = (i - 1) / 2;
+        if (h[p].f <= h[i].f) break;
+        a_star_node_t t = h[p]; h[p] = h[i]; h[i] = t;
+        i = p;
+    }
+}
+
+static void as_sift_down(a_star_node_t *h, size_t n, size_t i)
+{
+    for (;;) {
+        size_t l = 2 * i + 1, r = 2 * i + 2, m = i;
+        if (l < n && h[l].f < h[m].f) m = l;
+        if (r < n && h[r].f < h[m].f) m = r;
+        if (m == i) break;
+        a_star_node_t t = h[m]; h[m] = h[i]; h[i] = t;
+        i = m;
+    }
 }
 
 scl_error_t scl_search_a_star(scl_allocator_t * alloc, int sx, int sy, int gx, int gy, int **SCL_RESTRICT grid, int w, int h, int * px, int * py, size_t * plen, size_t maxplen)
@@ -45,13 +71,23 @@ scl_error_t scl_search_a_star(scl_allocator_t * alloc, int sx, int sy, int gx, i
 
     if (grid[sy][sx] != 0 || grid[gy][gx] != 0) return SCL_ERR_INVALID_ARG;
 
-    size_t cell_count = (size_t)(w * h);
-    int *g_score = (int *)scl_alloc(alloc, cell_count * sizeof(int), alignof(max_align_t));
-    int *f_score = (int *)scl_alloc(alloc, cell_count * sizeof(int), alignof(max_align_t));
-    int *came_from_x = (int *)scl_alloc(alloc, cell_count * sizeof(int), alignof(max_align_t));
-    int *came_from_y = (int *)scl_alloc(alloc, cell_count * sizeof(int), alignof(max_align_t));
+    /* (size_t)(w * h) computes w*h in int first — undefined overflow for large
+     * grids and an under-sized allocation. Multiply as size_t with a guard. */
+    size_t W = (size_t)w, H = (size_t)h;
+    size_t cell_count, ibytes, cap, obytes;
+    if (scl_unlikely(scl_mul_overflow(W, H, &cell_count))) return SCL_ERR_SIZE_OVERFLOW;
+    if (scl_unlikely(scl_mul_overflow(cell_count, sizeof(int), &ibytes))) return SCL_ERR_SIZE_OVERFLOW;
+    /* Open-set bound: at most 4 relaxations (neighbours) per cell, plus start. */
+    if (scl_unlikely(scl_mul_overflow(cell_count, 4, &cap) || scl_add_overflow(cap, 1, &cap)))
+        return SCL_ERR_SIZE_OVERFLOW;
+    if (scl_unlikely(scl_mul_overflow(cap, sizeof(a_star_node_t), &obytes))) return SCL_ERR_SIZE_OVERFLOW;
+
+    int *g_score = (int *)scl_alloc(alloc, ibytes, alignof(max_align_t));
+    int *f_score = (int *)scl_alloc(alloc, ibytes, alignof(max_align_t));
+    int *came_from_x = (int *)scl_alloc(alloc, ibytes, alignof(max_align_t));
+    int *came_from_y = (int *)scl_alloc(alloc, ibytes, alignof(max_align_t));
     bool *closed = (bool *)scl_calloc(alloc, cell_count, sizeof(bool), alignof(max_align_t));
-    a_star_node_t *open = (a_star_node_t *)scl_alloc(alloc, (size_t)A_STAR_MAX_OPEN * sizeof(a_star_node_t), alignof(max_align_t));
+    a_star_node_t *open = (a_star_node_t *)scl_alloc(alloc, obytes, alignof(max_align_t));
 
     if (!g_score || !f_score || !came_from_x || !came_from_y || !closed || !open) {
         scl_free(alloc, g_score); scl_free(alloc, f_score);
@@ -67,30 +103,24 @@ scl_error_t scl_search_a_star(scl_allocator_t * alloc, int sx, int sy, int gx, i
         came_from_y[i] = -1;
     }
 
-    g_score[sy * w + sx] = 0;
-    f_score[sy * w + sx] = heuristic(sx, sy, gx, gy);
+    size_t sidx = (size_t)sy * W + (size_t)sx;
+    g_score[sidx] = 0;
+    f_score[sidx] = heuristic(sx, sy, gx, gy);
 
-    int open_count = 1;
-    open[0].x = sx;
-    open[0].y = sy;
-    open[0].g = 0;
-    open[0].f = f_score[sy * w + sx];
+    size_t hn = 0;
+    open[hn].x = sx; open[hn].y = sy; open[hn].g = 0; open[hn].f = f_score[sidx]; hn++;
 
     const int dx[] = {1, -1, 0, 0};
     const int dy[] = {0, 0, 1, -1};
 
     scl_error_t result = SCL_ERR_NOT_FOUND;
 
-    while (open_count > 0) {
-        int best_idx = 0;
-        for (int i = 1; i < open_count; i++) {
-            if (open[i].f < open[best_idx].f)
-                best_idx = i;
-        }
-        a_star_node_t cur = open[best_idx];
-        open[best_idx] = open[--open_count];
+    while (hn > 0) {
+        a_star_node_t cur = open[0];
+        open[0] = open[--hn];
+        as_sift_down(open, hn, 0);
 
-        int cidx = cur.y * w + cur.x;
+        size_t cidx = (size_t)cur.y * W + (size_t)cur.x;
         if (closed[cidx]) continue;
         closed[cidx] = true;
 
@@ -101,7 +131,7 @@ scl_error_t scl_search_a_star(scl_allocator_t * alloc, int sx, int sy, int gx, i
                 px[path_len] = cx;
                 py[path_len] = cy;
                 path_len++;
-                int nidx = cy * w + cx;
+                size_t nidx = (size_t)cy * W + (size_t)cx;
                 int nx = came_from_x[nidx];
                 int ny = came_from_y[nidx];
                 cx = nx; cy = ny;
@@ -124,7 +154,7 @@ scl_error_t scl_search_a_star(scl_allocator_t * alloc, int sx, int sy, int gx, i
             if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
             if (grid[ny][nx] != 0) continue;
 
-            int nidx = ny * w + nx;
+            size_t nidx = (size_t)ny * W + (size_t)nx;
             if (closed[nidx]) continue;
 
             int tentative_g = cur.g + 1;
@@ -134,12 +164,10 @@ scl_error_t scl_search_a_star(scl_allocator_t * alloc, int sx, int sy, int gx, i
                 g_score[nidx] = tentative_g;
                 int f = tentative_g + heuristic(nx, ny, gx, gy);
                 f_score[nidx] = f;
-                if (open_count < A_STAR_MAX_OPEN) {
-                    open[open_count].x = nx;
-                    open[open_count].y = ny;
-                    open[open_count].g = tentative_g;
-                    open[open_count].f = f;
-                    open_count++;
+                if (scl_likely(hn < cap)) {        /* bound holds; defensive */
+                    open[hn].x = nx; open[hn].y = ny; open[hn].g = tentative_g; open[hn].f = f;
+                    as_sift_up(open, hn);
+                    hn++;
                 }
             }
         }

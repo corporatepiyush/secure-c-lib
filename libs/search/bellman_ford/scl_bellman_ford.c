@@ -44,15 +44,19 @@ scl_error_t scl_search_bellman_ford(const scl_graph_t * graph, int start, int64_
         bool updated = false;
         for (size_t u = 0; u < n; u++) {
             if (dist[u] == INT64_MAX) continue;
-            scl_adj_node_t *node = graph->adj[u];
-            while (node) {
-                int64_t nd = dist[u] + (int64_t)node->weight;
-                if (nd < dist[node->to]) {
-                    dist[node->to] = nd;
-                    prev[node->to] = (int)u;
+            const scl_adj_list_t *l = &graph->adj[u];
+            for (size_t ei = 0; ei < l->count; ei++) {
+                size_t to = l->edges[ei].to;
+                int64_t nd;
+                /* Saturating add: with negative weights dist[u] can be very
+                 * negative, so dist[u]+weight may overflow int64 (signed
+                 * overflow is UB). Skip the relaxation if it would overflow. */
+                if (!__builtin_add_overflow(dist[u], (int64_t)l->edges[ei].weight, &nd) &&
+                    nd < dist[to]) {
+                    dist[to] = nd;
+                    prev[to] = (int)u;
                     updated = true;
                 }
-                node = node->next;
             }
         }
         if (!updated) break;
@@ -60,12 +64,12 @@ scl_error_t scl_search_bellman_ford(const scl_graph_t * graph, int start, int64_
 
     for (size_t u = 0; u < n; u++) {
         if (dist[u] == INT64_MAX) continue;
-        scl_adj_node_t *node = graph->adj[u];
-        while (node) {
-            int64_t nd = dist[u] + (int64_t)node->weight;
-            if (nd < dist[node->to])
+        const scl_adj_list_t *l = &graph->adj[u];
+        for (size_t ei = 0; ei < l->count; ei++) {
+            int64_t nd;
+            if (!__builtin_add_overflow(dist[u], (int64_t)l->edges[ei].weight, &nd) &&
+                nd < dist[l->edges[ei].to])
                 return SCL_ERR_INVALID_STATE;
-            node = node->next;
         }
     }
     return SCL_OK;

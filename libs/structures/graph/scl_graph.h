@@ -26,8 +26,6 @@
 #pragma GCC diagnostic ignored "-Wpedantic"
 #endif
 
-typedef scl_adj_node_t scl_graph_edge_t;
-
 scl_error_t scl_graph_init(scl_allocator_t *SCL_RESTRICT alloc, scl_graph_t *SCL_RESTRICT g, size_t vertex_count) SCL_WARN_UNUSED;
 void        scl_graph_destroy(scl_allocator_t *SCL_RESTRICT alloc, scl_graph_t *SCL_RESTRICT g);
 scl_error_t scl_graph_add_edge(scl_allocator_t *SCL_RESTRICT alloc, scl_graph_t *SCL_RESTRICT g, size_t from, size_t to, int weight) SCL_WARN_UNUSED;

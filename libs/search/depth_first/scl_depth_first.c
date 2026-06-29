@@ -27,21 +27,30 @@ scl_error_t scl_search_depth_first_search(scl_allocator_t * alloc, const scl_gra
     if (scl_unlikely(graph->vertex_count == 0)) return SCL_ERR_EMPTY;
 
     size_t n = graph->vertex_count;
-    int *stack = (int *)scl_alloc(alloc, n * sizeof(int), alignof(max_align_t));
+    size_t bytes;
+    if (scl_unlikely(scl_mul_overflow(n, sizeof(int), &bytes))) return SCL_ERR_SIZE_OVERFLOW;
+    int *stack = (int *)scl_alloc(alloc, bytes, alignof(max_align_t));
     if (scl_unlikely(stack == NULL)) return SCL_ERR_OUT_OF_MEMORY;
 
+    /* Mark vertices as they are PUSHED, not when popped. The previous version
+     * marked on pop, so a vertex with k in-edges could be pushed k times before
+     * being popped — the V-sized stack then overflowed for any graph with more
+     * edges than vertices (a heap buffer overflow). Marking on push guarantees
+     * each vertex is pushed at most once, bounding the stack to V. The set of
+     * reachable vertices reported in `visited` is identical. */
     int sp = 0;
+    visited[start] = true;
     stack[sp++] = start;
 
     while (sp > 0) {
         int v = stack[--sp];
-        if (visited[v]) continue;
-        visited[v] = true;
-        scl_adj_node_t *node = graph->adj[v];
-        while (node) {
-            if (!visited[node->to])
-                stack[sp++] = (int)node->to;
-            node = node->next;
+        const scl_adj_list_t *l = &graph->adj[v];
+        for (size_t i = 0; i < l->count; i++) {
+            size_t to = l->edges[i].to;
+            if (!visited[to]) {
+                visited[to] = true;
+                stack[sp++] = (int)to;
+            }
         }
     }
 

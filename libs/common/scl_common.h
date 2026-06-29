@@ -289,16 +289,30 @@ typedef void (*scl_visit_func_t)(void *data, void *ctx);
 /* ── Graph types ────────────────────────────────────────────── */
 #ifndef SCL_GRAPH_TYPES_DEFINED
 #define SCL_GRAPH_TYPES_DEFINED
-typedef struct scl_adj_node {
+/* One adjacency entry: a directed edge endpoint and its weight. */
+typedef struct {
     size_t to;
-    int weight;
-    struct scl_adj_node *next;
-} scl_adj_node_t;
+    int    weight;
+} scl_adj_entry_t;
+
+/* Per-vertex adjacency "shard": a contiguous, growable array of outgoing edges.
+ * This replaces the former per-edge-malloc'd singly linked list. Contiguous
+ * storage gives much better cache locality on traversal (the hot path for every
+ * graph algorithm) and removes one heap allocation per edge. Iterate as:
+ *
+ *     const scl_adj_list_t *l = &g->adj[v];
+ *     for (size_t i = 0; i < l->count; i++) { l->edges[i].to; l->edges[i].weight; }
+ */
+typedef struct {
+    scl_adj_entry_t *edges;
+    size_t           count;
+    size_t           cap;
+} scl_adj_list_t;
 
 typedef struct {
-    scl_adj_node_t **adj;
-    size_t vertex_count;
-    size_t edge_count;
+    scl_adj_list_t *adj;          /* one shard per vertex (vertex_count shards) */
+    size_t          vertex_count;
+    size_t          edge_count;
 } scl_graph_t;
 
 typedef struct {

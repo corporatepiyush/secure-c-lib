@@ -28,7 +28,9 @@ scl_error_t scl_search_breadth_first_search(scl_allocator_t * alloc, const scl_g
     if (scl_unlikely(graph->vertex_count == 0)) return SCL_ERR_EMPTY;
 
     size_t n = graph->vertex_count;
-    int *queue = (int *)scl_alloc(alloc, n * sizeof(int), alignof(max_align_t));
+    size_t bytes;
+    if (scl_unlikely(scl_mul_overflow(n, sizeof(int), &bytes))) return SCL_ERR_SIZE_OVERFLOW;
+    int *queue = (int *)scl_alloc(alloc, bytes, alignof(max_align_t));
     if (scl_unlikely(queue == NULL)) return SCL_ERR_OUT_OF_MEMORY;
 
     int front = 0, back = 0;
@@ -37,13 +39,13 @@ scl_error_t scl_search_breadth_first_search(scl_allocator_t * alloc, const scl_g
 
     while (front < back) {
         int v = queue[front++];
-        scl_adj_node_t *node = graph->adj[v];
-        while (node) {
-            if (!visited[node->to]) {
-                visited[node->to] = true;
-                queue[back++] = (int)node->to;
+        const scl_adj_list_t *l = &graph->adj[v];
+        for (size_t i = 0; i < l->count; i++) {
+            size_t to = l->edges[i].to;
+            if (!visited[to]) {
+                visited[to] = true;
+                queue[back++] = (int)to;
             }
-            node = node->next;
         }
     }
     scl_free(alloc, queue);
