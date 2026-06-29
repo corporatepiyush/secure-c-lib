@@ -14,7 +14,8 @@
  * limitations under the License.
  */
 
-/* Mergesort. O(N log N). Stable. Top-down or bottom-up. O(N) auxiliary space. */
+/* Mergesort. O(N log N). Stable. Top-down or bottom-up. O(N) auxiliary space.
+ * Also provides a multithreaded variant (parallel divide-and-conquer). */
 
 #ifndef SCL_SORT_MERGE_SORT_H
 #define SCL_SORT_MERGE_SORT_H
@@ -27,6 +28,26 @@
 #include "scl_common.h"
 
 scl_error_t scl_sort_merge_sort(scl_allocator_t *alloc, void * base, size_t count, size_t element_size, scl_cmp_func_t cmp) SCL_WARN_UNUSED;
+
+/*
+ * Multithreaded (parallel) mergesort. Same contract and stable ordering as
+ * scl_sort_merge_sort, but the divide-and-conquer recursion runs across worker
+ * threads.
+ *
+ *   max_threads  upper bound on threads to use. 0 => auto-detect the online
+ *                CPU count. Internally clamped to [1, SCL_SORT_MERGE_MAX_THREADS];
+ *                a value of 1 (or a small array) runs fully sequentially.
+ *
+ * Security / robustness:
+ *   - Thread count is bounded (no unbounded thread creation regardless of input).
+ *   - A single O(N) temp buffer is shared and partitioned by disjoint index
+ *     range per subtask, so there are no data races (clean under TSan).
+ *   - Overflow-safe sizing (scl_mul_overflow on count*element_size).
+ *   - Falls back to sequential sorting for any subrange whose thread cannot be
+ *     created, so the sort always completes correctly under thread exhaustion.
+ */
+#define SCL_SORT_MERGE_MAX_THREADS 128u
+scl_error_t scl_sort_merge_sort_mt(scl_allocator_t *alloc, void * base, size_t count, size_t element_size, scl_cmp_func_t cmp, unsigned int max_threads) SCL_WARN_UNUSED;
 
 #ifdef __GNUC__
 #pragma GCC diagnostic pop
