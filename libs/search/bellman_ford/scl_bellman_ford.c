@@ -21,6 +21,7 @@
 #endif
 
 #include "scl_bellman_ford.h"
+#include "scl_graph.h"
 #include <stdlib.h>
 #include <limits.h>
 
@@ -29,7 +30,7 @@ scl_error_t scl_search_bellman_ford(const scl_graph_t * graph, int start, int64_
     if (scl_unlikely(graph == NULL)) return SCL_ERR_NULL_PTR;
     if (scl_unlikely(dist == NULL)) return SCL_ERR_NULL_PTR;
     if (scl_unlikely(prev == NULL)) return SCL_ERR_NULL_PTR;
-    if (scl_unlikely(!graph->adj)) return SCL_ERR_INVALID_ARG;
+    if (scl_unlikely(!graph->nodes.shards)) return SCL_ERR_INVALID_ARG;
     if (scl_unlikely(start < 0 || (size_t)start >= graph->vertex_count)) return SCL_ERR_INVALID_INDEX;
     if (scl_unlikely(graph->vertex_count == 0)) return SCL_ERR_EMPTY;
 
@@ -44,19 +45,19 @@ scl_error_t scl_search_bellman_ford(const scl_graph_t * graph, int start, int64_
         bool updated = false;
         for (size_t u = 0; u < n; u++) {
             if (dist[u] == INT64_MAX) continue;
-            const scl_adj_list_t *l = &graph->adj[u];
-            for (size_t ei = 0; ei < l->count; ei++) {
-                size_t to = l->edges[ei].to;
+            for (size_t e = scl_graph_adj_head(graph, u); e != SCL_GRAPH_NIL; ) {
+                const scl_graph_edge_t *ed = scl_graph_edge(graph, e);
                 int64_t nd;
                 /* Saturating add: with negative weights dist[u] can be very
                  * negative, so dist[u]+weight may overflow int64 (signed
                  * overflow is UB). Skip the relaxation if it would overflow. */
-                if (!__builtin_add_overflow(dist[u], (int64_t)l->edges[ei].weight, &nd) &&
-                    nd < dist[to]) {
-                    dist[to] = nd;
-                    prev[to] = (int)u;
+                if (!__builtin_add_overflow(dist[u], (int64_t)ed->weight, &nd) &&
+                    nd < dist[ed->to]) {
+                    dist[ed->to] = nd;
+                    prev[ed->to] = (int)u;
                     updated = true;
                 }
+                e = ed->next;
             }
         }
         if (!updated) break;
@@ -64,12 +65,13 @@ scl_error_t scl_search_bellman_ford(const scl_graph_t * graph, int start, int64_
 
     for (size_t u = 0; u < n; u++) {
         if (dist[u] == INT64_MAX) continue;
-        const scl_adj_list_t *l = &graph->adj[u];
-        for (size_t ei = 0; ei < l->count; ei++) {
+        for (size_t e = scl_graph_adj_head(graph, u); e != SCL_GRAPH_NIL; ) {
+            const scl_graph_edge_t *ed = scl_graph_edge(graph, e);
             int64_t nd;
-            if (!__builtin_add_overflow(dist[u], (int64_t)l->edges[ei].weight, &nd) &&
-                nd < dist[l->edges[ei].to])
+            if (!__builtin_add_overflow(dist[u], (int64_t)ed->weight, &nd) &&
+                nd < dist[ed->to])
                 return SCL_ERR_INVALID_STATE;
+            e = ed->next;
         }
     }
     return SCL_OK;

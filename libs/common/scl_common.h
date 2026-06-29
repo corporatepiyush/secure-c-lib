@@ -286,34 +286,64 @@ typedef int (*scl_cmp_func_t)(const void *, const void *);
 
 typedef void (*scl_visit_func_t)(void *data, void *ctx);
 
+/* ── Sharded (segmented) dynamic array ──────────────────────────
+ *
+ * A growable array whose elements live in a directory of fixed-size "shards".
+ * Element indices are stable for the array's lifetime and growth is LINEAR —
+ * when the current shard fills, exactly one new shard is allocated; existing
+ * elements are never copied. The shard length is caller-chosen so it can be
+ * sized to the target CPU's cache. The operations live in
+ * structures/sharded_array/scl_sharded_array.{h,c}. */
+#ifndef SCL_SHARDED_ARRAY_TYPE_DEFINED
+#define SCL_SHARDED_ARRAY_TYPE_DEFINED
+typedef struct {
+    scl_allocator_t *alloc;
+    unsigned char  **shards;      /* directory of shard data blocks */
+    size_t           shard_count; /* shards allocated */
+    size_t           dir_cap;     /* slots in shards[] */
+    size_t           elem_size;   /* bytes per element */
+    size_t           shard_len;   /* elements per shard */
+    size_t           count;       /* elements appended */
+} scl_sharded_array_t;
+#endif
+
 /* ── Graph types ────────────────────────────────────────────── */
 #ifndef SCL_GRAPH_TYPES_DEFINED
 #define SCL_GRAPH_TYPES_DEFINED
-/* One adjacency entry: a directed edge endpoint and its weight. */
+
+/* Sentinel "no edge" / end-of-adjacency-chain index. */
+#define SCL_GRAPH_NIL ((size_t)-1)
+
+/* A vertex record: index of its first outgoing edge (or SCL_GRAPH_NIL). All
+ * vertex records are stored in the graph's `nodes` sharded array. */
+typedef struct {
+    size_t head;
+} scl_graph_node_t;
+
+/* An edge record: destination, weight, and the index of the next outgoing edge
+ * from the SAME source (an adjacency list threaded through the `edges` sharded
+ * array). All edges are stored in the graph's `edges` sharded array. */
 typedef struct {
     size_t to;
     int    weight;
-} scl_adj_entry_t;
+    size_t next;
+} scl_graph_edge_t;
 
-/* Per-vertex adjacency "shard": a contiguous, growable array of outgoing edges.
- * This replaces the former per-edge-malloc'd singly linked list. Contiguous
- * storage gives much better cache locality on traversal (the hot path for every
- * graph algorithm) and removes one heap allocation per edge. Iterate as:
+/* The graph keeps ALL nodes in one sharded array and ALL edges in another.
+ * Traverse vertex v's out-edges via the threaded chain:
  *
- *     const scl_adj_list_t *l = &g->adj[v];
- *     for (size_t i = 0; i < l->count; i++) { l->edges[i].to; l->edges[i].weight; }
+ *     for (size_t e = scl_graph_adj_head(g, v); e != SCL_GRAPH_NIL; ) {
+ *         const scl_graph_edge_t *ed = scl_graph_edge(g, e);
+ *         ... ed->to, ed->weight ...
+ *         e = ed->next;
+ *     }
  */
 typedef struct {
-    scl_adj_entry_t *edges;
-    size_t           count;
-    size_t           cap;
-} scl_adj_list_t;
-
-typedef struct {
-    scl_adj_list_t *adj;          /* one shard per vertex (vertex_count shards) */
-    size_t          vertex_count;
-    size_t          edge_count;
-    size_t          shard_cap;    /* initial edges allocated per shard (cache tuning) */
+    scl_sharded_array_t nodes;    /* vertex_count node records */
+    scl_sharded_array_t edges;    /* all edge records (incl. freed slots) */
+    size_t              vertex_count;
+    size_t              edge_count;
+    size_t              free_head; /* free-list of removed edge slots, or NIL */
 } scl_graph_t;
 
 typedef struct {

@@ -14,7 +14,8 @@
  * limitations under the License.
  */
 
-/* graph data structure. */
+/* Graph data structure. All nodes and all edges are kept in two sharded arrays;
+ * adjacency is an index chain threaded through the edge array. */
 
 #include "scl_graph.h"
 #include <string.h>
@@ -23,64 +24,75 @@
 #pragma GCC optimize ("O3", "unroll-loops", "tree-vectorize", "inline")
 #endif
 
-scl_error_t scl_graph_init_ex(scl_allocator_t *alloc, scl_graph_t *g, size_t vertex_count, size_t shard_cap)
+scl_error_t scl_graph_init_ex(scl_allocator_t *alloc, scl_graph_t *g, size_t vertex_count, size_t shard_len)
 {
     if (scl_unlikely(!g)) return SCL_ERR_NULL_PTR;
     if (scl_unlikely(vertex_count == 0)) return SCL_ERR_INVALID_ARG;
+    if (shard_len == 0) shard_len = SCL_GRAPH_DEFAULT_SHARD_LEN;
 
-    /* One zeroed shard descriptor per vertex (edges=NULL, count=cap=0). */
-    g->adj = scl_calloc(alloc, vertex_count, sizeof(scl_adj_list_t), alignof(max_align_t));
-    if (scl_unlikely(!g->adj)) return SCL_ERR_OUT_OF_MEMORY;
+    (void)memset(g, 0, sizeof(*g));
+    scl_error_t err = scl_sharded_array_init(alloc, &g->nodes, sizeof(scl_graph_node_t), shard_len);
+    if (err != SCL_OK) return err;
+    err = scl_sharded_array_init(alloc, &g->edges, sizeof(scl_graph_edge_t), shard_len);
+    if (err != SCL_OK) { scl_sharded_array_destroy(&g->nodes); return err; }
+
+    /* Materialise one node record per vertex, each with an empty edge chain. */
+    scl_graph_node_t empty = { SCL_GRAPH_NIL };
+    for (size_t i = 0; i < vertex_count; i++) {
+        if (scl_sharded_array_append(&g->nodes, &empty, NULL) != SCL_OK) {
+            scl_sharded_array_destroy(&g->nodes);
+            scl_sharded_array_destroy(&g->edges);
+            return SCL_ERR_OUT_OF_MEMORY;
+        }
+    }
 
     g->vertex_count = vertex_count;
     g->edge_count = 0;
-    g->shard_cap = shard_cap ? shard_cap : SCL_GRAPH_DEFAULT_SHARD_CAP;
+    g->free_head = SCL_GRAPH_NIL;
     return SCL_OK;
 }
 
 scl_error_t scl_graph_init(scl_allocator_t *alloc, scl_graph_t *g, size_t vertex_count)
 {
-    return scl_graph_init_ex(alloc, g, vertex_count, SCL_GRAPH_DEFAULT_SHARD_CAP);
+    return scl_graph_init_ex(alloc, g, vertex_count, SCL_GRAPH_DEFAULT_SHARD_LEN);
 }
 
 void scl_graph_destroy(scl_allocator_t *alloc, scl_graph_t *g)
 {
+    (void)alloc;
     if (scl_unlikely(!g)) return;
-    if (g->adj) {
-        for (size_t i = 0; i < g->vertex_count; i++)
-            scl_free(alloc, g->adj[i].edges);   /* free each vertex's shard */
-        scl_free(alloc, g->adj);
-    }
-    g->adj = NULL;
+    scl_sharded_array_destroy(&g->nodes);
+    scl_sharded_array_destroy(&g->edges);
     g->vertex_count = 0;
     g->edge_count = 0;
+    g->free_head = SCL_GRAPH_NIL;
 }
 
 scl_error_t scl_graph_add_edge(scl_allocator_t *alloc, scl_graph_t *g, size_t from, size_t to, int weight)
 {
+    (void)alloc;
     if (scl_unlikely(!g)) return SCL_ERR_NULL_PTR;
     if (from >= g->vertex_count || to >= g->vertex_count)
         return SCL_ERR_INVALID_INDEX;
 
-    scl_adj_list_t *l = &g->adj[from];
-    if (l->count == l->cap) {
-        /* First edge for this vertex: allocate the caller-chosen shard size
-         * (cache-tuned); after that, double. */
-        size_t ncap = l->cap ? l->cap * 2
-                             : (g->shard_cap ? g->shard_cap : SCL_GRAPH_DEFAULT_SHARD_CAP);
-        size_t nbytes;
-        if (scl_unlikely(scl_mul_overflow(ncap, sizeof(scl_adj_entry_t), &nbytes)))
-            return SCL_ERR_SIZE_OVERFLOW;
-        scl_adj_entry_t *ne = scl_realloc(alloc, l->edges,
-                                          l->cap * sizeof(scl_adj_entry_t), nbytes,
-                                          alignof(max_align_t));
-        if (scl_unlikely(!ne)) return SCL_ERR_OUT_OF_MEMORY;
-        l->edges = ne;
-        l->cap = ncap;
+    scl_graph_node_t *src = (scl_graph_node_t *)scl_sharded_array_get(&g->nodes, from);
+    size_t idx;
+
+    if (g->free_head != SCL_GRAPH_NIL) {
+        /* Reuse a slot freed by a previous remove (no growth). */
+        idx = g->free_head;
+        scl_graph_edge_t *e = (scl_graph_edge_t *)scl_sharded_array_get(&g->edges, idx);
+        g->free_head = e->next;            /* pop the free list */
+        e->to = to; e->weight = weight; e->next = src->head;
+    } else {
+        scl_graph_edge_t e = { to, weight, src->head };
+        scl_error_t err = scl_sharded_array_append(&g->edges, &e, &idx);
+        if (err != SCL_OK) return err;
+        /* `src` points into the nodes array, which never grows after init, so
+         * it stays valid across the edges append above. */
     }
-    l->edges[l->count].to = to;
-    l->edges[l->count].weight = weight;
-    l->count++;
+
+    src->head = idx;                       /* prepend to vertex's chain */
     g->edge_count++;
     return SCL_OK;
 }
@@ -92,16 +104,20 @@ scl_error_t scl_graph_remove_edge(scl_allocator_t *alloc, scl_graph_t *g, size_t
     if (from >= g->vertex_count || to >= g->vertex_count)
         return SCL_ERR_INVALID_INDEX;
 
-    scl_adj_list_t *l = &g->adj[from];
-    for (size_t i = 0; i < l->count; i++) {
-        if (l->edges[i].to == to) {
-            /* O(1) removal: move the last entry into the hole (edge order within
-             * a vertex is not significant for any graph algorithm). */
-            l->edges[i] = l->edges[l->count - 1];
-            l->count--;
+    scl_graph_node_t *src = (scl_graph_node_t *)scl_sharded_array_get(&g->nodes, from);
+    size_t *link = &src->head;             /* slot holding the index to update */
+    size_t e = src->head;
+    while (e != SCL_GRAPH_NIL) {
+        scl_graph_edge_t *ed = (scl_graph_edge_t *)scl_sharded_array_get(&g->edges, e);
+        if (ed->to == to) {
+            *link = ed->next;              /* unlink from the adjacency chain */
+            ed->next = g->free_head;       /* recycle the slot via the free list */
+            g->free_head = e;
             g->edge_count--;
             return SCL_OK;
         }
+        link = &ed->next;
+        e = ed->next;
     }
     return SCL_ERR_NOT_FOUND;
 }
@@ -110,9 +126,11 @@ bool scl_graph_has_edge(const scl_graph_t *g, size_t from, size_t to)
 {
     if (!g || from >= g->vertex_count || to >= g->vertex_count)
         return false;
-    const scl_adj_list_t *l = &g->adj[from];
-    for (size_t i = 0; i < l->count; i++)
-        if (l->edges[i].to == to) return true;
+    for (size_t e = scl_graph_adj_head(g, from); e != SCL_GRAPH_NIL; ) {
+        const scl_graph_edge_t *ed = scl_graph_edge(g, e);
+        if (ed->to == to) return true;
+        e = ed->next;
+    }
     return false;
 }
 
@@ -136,10 +154,8 @@ scl_error_t scl_graph_dfs(scl_allocator_t *alloc, const scl_graph_t *g, size_t s
     size_t *stack = scl_alloc(alloc, stack_sz, alignof(max_align_t));
     if (!stack) { scl_free(alloc, visited); return SCL_ERR_OUT_OF_MEMORY; }
 
-    /* Mark on push so each vertex is pushed at most once — otherwise a vertex
-     * with many in-edges could be pushed more than vertex_count times and
-     * overflow the V-sized stack (a heap buffer overflow on any graph with
-     * E > V). Visit order is preorder of this push-marking traversal. */
+    /* Mark on push so each vertex is pushed at most once — the V-sized stack
+     * cannot overflow even when E > V. */
     size_t sp = 0;
     visited[start] = true;
     stack[sp++] = start;
@@ -147,13 +163,13 @@ scl_error_t scl_graph_dfs(scl_allocator_t *alloc, const scl_graph_t *g, size_t s
     while (sp > 0) {
         size_t v = stack[--sp];
         visit(v, ctx);
-        const scl_adj_list_t *l = &g->adj[v];
-        for (size_t i = 0; i < l->count; i++) {
-            size_t to = l->edges[i].to;
-            if (!visited[to]) {
-                visited[to] = true;
-                stack[sp++] = to;
+        for (size_t e = scl_graph_adj_head(g, v); e != SCL_GRAPH_NIL; ) {
+            const scl_graph_edge_t *ed = scl_graph_edge(g, e);
+            if (!visited[ed->to]) {
+                visited[ed->to] = true;
+                stack[sp++] = ed->to;
             }
+            e = ed->next;
         }
     }
 
@@ -186,13 +202,13 @@ scl_error_t scl_graph_bfs(scl_allocator_t *alloc, const scl_graph_t *g, size_t s
     while (qh < qt) {
         size_t v = queue[qh++];
         visit(v, ctx);
-        const scl_adj_list_t *l = &g->adj[v];
-        for (size_t i = 0; i < l->count; i++) {
-            size_t to = l->edges[i].to;
-            if (!visited[to]) {
-                visited[to] = true;
-                queue[qt++] = to;
+        for (size_t e = scl_graph_adj_head(g, v); e != SCL_GRAPH_NIL; ) {
+            const scl_graph_edge_t *ed = scl_graph_edge(g, e);
+            if (!visited[ed->to]) {
+                visited[ed->to] = true;
+                queue[qt++] = ed->to;
             }
+            e = ed->next;
         }
     }
 

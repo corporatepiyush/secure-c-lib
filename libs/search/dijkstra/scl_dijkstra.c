@@ -17,6 +17,7 @@
 /* Dijkstra's SSSP. O((V+E) log V). Non-negative weights. Greedy relaxation. */
 
 #include "scl_dijkstra.h"
+#include "scl_graph.h"
 #include <limits.h>
 
 /*
@@ -54,7 +55,7 @@ scl_error_t scl_search_dijkstra(scl_allocator_t * alloc, const scl_graph_t * gra
     if (scl_unlikely(graph == NULL)) return SCL_ERR_NULL_PTR;
     if (scl_unlikely(dist == NULL)) return SCL_ERR_NULL_PTR;
     if (scl_unlikely(prev == NULL)) return SCL_ERR_NULL_PTR;
-    if (scl_unlikely(!graph->adj)) return SCL_ERR_INVALID_ARG;
+    if (scl_unlikely(!graph->nodes.shards)) return SCL_ERR_INVALID_ARG;
     if (scl_unlikely(start < 0 || (size_t)start >= graph->vertex_count)) return SCL_ERR_INVALID_INDEX;
     if (scl_unlikely(graph->vertex_count == 0)) return SCL_ERR_EMPTY;
 
@@ -85,10 +86,10 @@ scl_error_t scl_search_dijkstra(scl_allocator_t * alloc, const scl_graph_t * gra
 
         if (top.d > dist[top.v]) continue;   /* stale entry: already improved */
 
-        const scl_adj_list_t *l = &graph->adj[top.v];
-        for (size_t ei = 0; ei < l->count; ei++) {
-            int w = l->edges[ei].weight;
-            size_t to = l->edges[ei].to;
+        for (size_t e = scl_graph_adj_head(graph, top.v); e != SCL_GRAPH_NIL; ) {
+            const scl_graph_edge_t *ed = scl_graph_edge(graph, e);
+            int w = ed->weight;
+            size_t to = ed->to, nxt = ed->next;
             if (scl_unlikely(w < 0)) {            /* Dijkstra needs w >= 0 */
                 result = SCL_ERR_INVALID_ARG;
                 goto done;
@@ -103,6 +104,7 @@ scl_error_t scl_search_dijkstra(scl_allocator_t * alloc, const scl_graph_t * gra
                     hn++;
                 }
             }
+            e = nxt;
         }
     }
 

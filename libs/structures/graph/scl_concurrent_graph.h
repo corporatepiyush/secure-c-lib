@@ -14,36 +14,49 @@
  * limitations under the License.
  */
 
-/* Thread-safe graph data structure. Guarded by scl_spinlock_t. */
+/* Thread-safe graph: a sharded-array graph core guarded by a spinlock. */
 
 #ifndef SCL_CONCURRENT_GRAPH_H
 #define SCL_CONCURRENT_GRAPH_H
 
 #include "scl_concurrent_common.h"
+#include "scl_graph.h"
+
+#include <stdint.h>
+#include <stdbool.h>
 
 #ifdef __GNUC__
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wpedantic"
 #endif
 
-typedef struct scl_concurrent_adj_node {
-    size_t to;
-    int weight;
-    struct scl_concurrent_adj_node *next;
-} scl_concurrent_adj_node_t;
-
+/*
+ * The concurrent graph wraps a plain scl_graph_t (the same two-sharded-array
+ * representation) behind a spinlock, so it shares the entire implementation and
+ * every graph search algorithm — no duplicated data structure or algorithms.
+ */
 typedef struct {
-    scl_concurrent_adj_node_t **adj;
-    size_t vertex_count;
-    atomic_size_t edge_count;
+    scl_graph_t    core;
     scl_spinlock_t lock SCL_CACHE_ALIGNED;
 } scl_concurrent_graph_t;
 
 scl_error_t scl_cgraph_init(scl_allocator_t *SCL_RESTRICT alloc, scl_concurrent_graph_t *SCL_RESTRICT g, size_t vertex_count) SCL_WARN_UNUSED;
+scl_error_t scl_cgraph_init_ex(scl_allocator_t *SCL_RESTRICT alloc, scl_concurrent_graph_t *SCL_RESTRICT g, size_t vertex_count, size_t shard_len) SCL_WARN_UNUSED;
 void        scl_cgraph_destroy(scl_allocator_t *SCL_RESTRICT alloc, scl_concurrent_graph_t *SCL_RESTRICT g);
 scl_error_t scl_cgraph_add_edge(scl_allocator_t *SCL_RESTRICT alloc, scl_concurrent_graph_t *SCL_RESTRICT g, size_t from, size_t to, int weight) SCL_WARN_UNUSED;
 scl_error_t scl_cgraph_remove_edge(scl_allocator_t *SCL_RESTRICT alloc, scl_concurrent_graph_t *SCL_RESTRICT g, size_t from, size_t to) SCL_WARN_UNUSED;
 bool        scl_cgraph_has_edge(const scl_concurrent_graph_t *SCL_RESTRICT g, size_t from, size_t to);
+
+/* ── Search over the concurrent graph ────────────────────────────────────────
+ * Each wrapper takes the lock, runs the corresponding scl_search_* on the core,
+ * and releases it — so every graph search works on the concurrent graph with a
+ * consistent snapshot. (Floyd-Warshall and A* don't operate on this graph type:
+ * one takes an edge list, the other a grid.) For finer control, lock the graph
+ * yourself and call scl_search_* on &g->core directly. */
+scl_error_t scl_cgraph_dijkstra(scl_allocator_t *alloc, scl_concurrent_graph_t *g, int start, int64_t *dist, int *prev) SCL_WARN_UNUSED;
+scl_error_t scl_cgraph_bellman_ford(scl_concurrent_graph_t *g, int start, int64_t *dist, int *prev) SCL_WARN_UNUSED;
+scl_error_t scl_cgraph_bfs(scl_allocator_t *alloc, scl_concurrent_graph_t *g, int start, bool *visited) SCL_WARN_UNUSED;
+scl_error_t scl_cgraph_dfs(scl_allocator_t *alloc, scl_concurrent_graph_t *g, int start, bool *visited) SCL_WARN_UNUSED;
 
 #ifdef __GNUC__
 #pragma GCC diagnostic pop

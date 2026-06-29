@@ -17,12 +17,13 @@
 /* DFS traversal. O(V+E). Stack/recursive. Topological sort, cycle detection. */
 
 #include "scl_depth_first.h"
+#include "scl_graph.h"
 
 scl_error_t scl_search_depth_first_search(scl_allocator_t * alloc, const scl_graph_t * graph, int start, bool * visited)
 {
     if (scl_unlikely(graph == NULL)) return SCL_ERR_NULL_PTR;
     if (scl_unlikely(visited == NULL)) return SCL_ERR_NULL_PTR;
-    if (scl_unlikely(!graph->adj)) return SCL_ERR_INVALID_ARG;
+    if (scl_unlikely(!graph->nodes.shards)) return SCL_ERR_INVALID_ARG;
     if (scl_unlikely(start < 0 || (size_t)start >= graph->vertex_count)) return SCL_ERR_INVALID_INDEX;
     if (scl_unlikely(graph->vertex_count == 0)) return SCL_ERR_EMPTY;
 
@@ -44,13 +45,13 @@ scl_error_t scl_search_depth_first_search(scl_allocator_t * alloc, const scl_gra
 
     while (sp > 0) {
         int v = stack[--sp];
-        const scl_adj_list_t *l = &graph->adj[v];
-        for (size_t i = 0; i < l->count; i++) {
-            size_t to = l->edges[i].to;
-            if (!visited[to]) {
-                visited[to] = true;
-                stack[sp++] = (int)to;
+        for (size_t e = scl_graph_adj_head(graph, (size_t)v); e != SCL_GRAPH_NIL; ) {
+            const scl_graph_edge_t *ed = scl_graph_edge(graph, e);
+            if (!visited[ed->to]) {
+                visited[ed->to] = true;
+                stack[sp++] = (int)ed->to;
             }
+            e = ed->next;
         }
     }
 
