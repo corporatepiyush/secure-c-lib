@@ -313,6 +313,7 @@ typedef struct {
     scl_adj_list_t *adj;          /* one shard per vertex (vertex_count shards) */
     size_t          vertex_count;
     size_t          edge_count;
+    size_t          shard_cap;    /* initial edges allocated per shard (cache tuning) */
 } scl_graph_t;
 
 typedef struct {

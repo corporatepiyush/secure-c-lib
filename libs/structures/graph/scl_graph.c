@@ -23,7 +23,7 @@
 #pragma GCC optimize ("O3", "unroll-loops", "tree-vectorize", "inline")
 #endif
 
-scl_error_t scl_graph_init(scl_allocator_t *alloc, scl_graph_t *g, size_t vertex_count)
+scl_error_t scl_graph_init_ex(scl_allocator_t *alloc, scl_graph_t *g, size_t vertex_count, size_t shard_cap)
 {
     if (scl_unlikely(!g)) return SCL_ERR_NULL_PTR;
     if (scl_unlikely(vertex_count == 0)) return SCL_ERR_INVALID_ARG;
@@ -34,7 +34,13 @@ scl_error_t scl_graph_init(scl_allocator_t *alloc, scl_graph_t *g, size_t vertex
 
     g->vertex_count = vertex_count;
     g->edge_count = 0;
+    g->shard_cap = shard_cap ? shard_cap : SCL_GRAPH_DEFAULT_SHARD_CAP;
     return SCL_OK;
+}
+
+scl_error_t scl_graph_init(scl_allocator_t *alloc, scl_graph_t *g, size_t vertex_count)
+{
+    return scl_graph_init_ex(alloc, g, vertex_count, SCL_GRAPH_DEFAULT_SHARD_CAP);
 }
 
 void scl_graph_destroy(scl_allocator_t *alloc, scl_graph_t *g)
@@ -58,7 +64,10 @@ scl_error_t scl_graph_add_edge(scl_allocator_t *alloc, scl_graph_t *g, size_t fr
 
     scl_adj_list_t *l = &g->adj[from];
     if (l->count == l->cap) {
-        size_t ncap = l->cap ? l->cap * 2 : 4;
+        /* First edge for this vertex: allocate the caller-chosen shard size
+         * (cache-tuned); after that, double. */
+        size_t ncap = l->cap ? l->cap * 2
+                             : (g->shard_cap ? g->shard_cap : SCL_GRAPH_DEFAULT_SHARD_CAP);
         size_t nbytes;
         if (scl_unlikely(scl_mul_overflow(ncap, sizeof(scl_adj_entry_t), &nbytes)))
             return SCL_ERR_SIZE_OVERFLOW;
