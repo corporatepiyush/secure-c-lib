@@ -36,32 +36,25 @@ typedef struct scl_ml_svm {
 static SCL_ML_FLOAT
 scl_ml_svm_kernel_linear(const SCL_ML_FLOAT *x, const SCL_ML_FLOAT *y,
                           size_t d) {
-    double dot = 0.0;
-    for (size_t i = 0; i < d; i++)
-        dot += (double)x[i] * (double)y[i];
-    return (SCL_ML_FLOAT)dot;
+    /* SIMD dot with f64 accumulator (numerical stability for large d) */
+    return scl_ml_simd.dot_f(x, y, d);
 }
 
 static SCL_ML_FLOAT
 scl_ml_svm_kernel_rbf(const SCL_ML_FLOAT *x, const SCL_ML_FLOAT *y,
                        size_t d, SCL_ML_FLOAT gamma) {
-    double dist_sq = 0.0;
-    for (size_t i = 0; i < d; i++) {
-        double diff = (double)x[i] - (double)y[i];
-        dist_sq += diff * diff;
-    }
-    return (SCL_ML_FLOAT)exp(-(double)gamma * dist_sq);
+    /* SIMD squared-distance; single expf (not per-element) keeps accuracy */
+    float dist_sq = scl_ml_simd.dist_l2_sq(x, y, d);
+    return (SCL_ML_FLOAT)expf(-(float)gamma * dist_sq);
 }
 
 static SCL_ML_FLOAT
 scl_ml_svm_kernel_poly(const SCL_ML_FLOAT *x, const SCL_ML_FLOAT *y,
                         size_t d, SCL_ML_FLOAT gamma, SCL_ML_FLOAT coef0,
                         int degree) {
-    double dot = 0.0;
-    for (size_t i = 0; i < d; i++)
-        dot += (double)x[i] * (double)y[i];
-    double val = (double)gamma * dot + (double)coef0;
-    double result = 1.0;
+    float dot = scl_ml_simd.dot_f(x, y, d);
+    float val = (float)gamma * dot + (float)coef0;
+    float result = 1.0f;
     int deg = degree;
     while (deg > 0) {
         if (deg & 1) result *= val;

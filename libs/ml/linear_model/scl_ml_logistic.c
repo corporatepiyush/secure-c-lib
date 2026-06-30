@@ -83,12 +83,14 @@ scl_ml_logistic_fit_sgd(scl_ml_logistic_t *model, const scl_ml_dataset_t *ds) {
                                ds->data + batch_start * ds->row_stride,
                                model->pred_buffer, bsize, d, 0.0f);
 
-            for (size_t j = 0; j < d; j++)
-                model->gradient[j] = model->gradient[j] * scale +
-                                     2.0f * alpha_l2 * model->weights[j];
-
-            for (size_t j = 0; j < d; j++)
-                model->weights[j] -= lr_eff * model->gradient[j];
+            /* Fuse L2 + weight update into a single pass over d.
+             * g_j = grad_j*scale + 2*alpha_l2*w_j ;  w_j -= lr_eff * g_j */
+            for (size_t j = 0; j < d; j++) {
+                float g = model->gradient[j] * scale +
+                          2.0f * alpha_l2 * model->weights[j];
+                model->gradient[j] = g;
+                model->weights[j] -= lr_eff * g;
+            }
 
             float grad_b = 0.0f;
             for (size_t i = 0; i < bsize; i++)
@@ -184,14 +186,15 @@ scl_ml_logistic_predict(scl_ml_logistic_t *model, const scl_ml_dataset_t *ds,
     size_t d = model->n_features;
     if (n == 0) return SCL_OK;
 
+    /* Per-row SIMD dot (row-stride aware). NOTE: we cannot use gemv here
+     * because ds->row_stride may be padded past n_cols by dataset_init, and
+     * gemv assumes a packed [m x n] layout.  sigmoid(x) > 0.5 <=> x > 0, so
+     * the hard label needs no exp. */
     for (size_t i = 0; i < n; i++) {
-        double logit = (double)model->intercept;
-        for (size_t j = 0; j < d; j++)
-            logit += (double)ds->data[i * ds->row_stride + j] *
-                     (double)model->weights[j];
-        logit = (double)scl_ml_clamp_logit((float)logit);
-        float prob = scl_ml_fast_sigmoid((float)logit);
-        y_out[i] = prob > 0.5f ? 1.0f : 0.0f;
+        float l = scl_ml_clamp_logit(
+            scl_ml_simd.dot_f(&ds->data[i * ds->row_stride], model->weights, d) +
+            (float)model->intercept);
+        y_out[i] = (l > 0.0f) ? 1.0f : 0.0f;
     }
 
     return SCL_OK;
@@ -199,7 +202,7 @@ scl_ml_logistic_predict(scl_ml_logistic_t *model, const scl_ml_dataset_t *ds,
 
 SCL_WARN_UNUSED scl_error_t
 scl_ml_logistic_predict_proba(scl_ml_logistic_t *model, const scl_ml_dataset_t *ds,
-                               SCL_ML_FLOAT *proba_out) {
+                                SCL_ML_FLOAT *proba_out) {
     if (scl_unlikely(!model || !ds || !proba_out)) return SCL_ERR_NULL_PTR;
     if (scl_unlikely(!model->fitted)) return SCL_ERR_INVALID_STATE;
     if (scl_unlikely(ds->n_cols != model->n_features)) return SCL_ERR_INVALID_ARG;
@@ -208,14 +211,13 @@ scl_ml_logistic_predict_proba(scl_ml_logistic_t *model, const scl_ml_dataset_t *
     size_t d = model->n_features;
     if (n == 0) return SCL_OK;
 
-    for (size_t i = 0; i < n; i++) {
-        double logit = (double)model->intercept;
-        for (size_t j = 0; j < d; j++)
-            logit += (double)ds->data[i * ds->row_stride + j] *
-                     (double)model->weights[j];
-        logit = (double)scl_ml_clamp_logit((float)logit);
-        proba_out[i] = scl_ml_fast_sigmoid((float)logit);
-    }
+    /* Per-row SIMD dot (row-stride aware) + intercept, then vectorized sigmoid
+     * over the contiguous proba_out[] buffer. */
+    for (size_t i = 0; i < n; i++)
+        proba_out[i] = scl_ml_clamp_logit(
+            scl_ml_simd.dot_f(&ds->data[i * ds->row_stride], model->weights, d) +
+            (float)model->intercept);
+    scl_ml_simd.sigmoid(proba_out, proba_out, n);
 
     return SCL_OK;
 }

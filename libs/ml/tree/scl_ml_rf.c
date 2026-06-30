@@ -17,20 +17,15 @@
 #include "scl_ml_rf.h"
 #include "scl_ml_tree.h"
 #include "scl_ml_simd.h"
+#include "scl_threadpool.h"
 #include <string.h>
 #include <math.h>
 #include <float.h>
 #include <stdlib.h>
 
-typedef struct {
-    int           feature_idx;
-    SCL_ML_FLOAT  threshold;
-    int           left_child;
-    int           right_child;
-    SCL_ML_FLOAT  value;
-    SCL_ML_FLOAT  impurity;
-    size_t        n_samples;
-} scl_ml_rf_node_t;
+/* RF stores its own copy of each tree's nodes; the layout is identical to
+ * scl_ml_tree_node_t, so alias it and lift nodes with a single memcpy. */
+typedef scl_ml_tree_node_t scl_ml_rf_node_t;
 
 typedef struct {
     scl_ml_rf_node_t *nodes;
@@ -48,6 +43,7 @@ typedef struct scl_ml_rf {
     size_t                    n_classes;
     int                       fitted;
     int                       is_classifier;
+    scl_allocator_t           *alloc;
 } scl_ml_rf_t;
 
 static uint32_t
@@ -61,12 +57,49 @@ scl_ml_rf_rand_uniform(uint32_t *state) {
     return (double)scl_ml_rf_rand(state) / 4294967296.0;
 }
 
+/* ── Parallel training context ─────────────────────────────────
+ * Each RF tree is independent (writes to a distinct trees[i] slot, reads
+ * only shared immutable state), so training is embarrassingly parallel.
+ * n_threads<=1 keeps the original sequential path. */
+
+static int
+scl_ml_rf_train_single_tree(scl_ml_rf_internal_tree_t *tree_out,
+                             const scl_ml_dataset_t *ds,
+                             uint32_t *rng_state,
+                             size_t n_features_total,
+                             int is_classifier,
+                             scl_ml_rf_params_t *params,
+                             scl_allocator_t *persist_alloc);
+
+typedef struct {
+    scl_ml_rf_internal_tree_t *tree_out;
+    const scl_ml_dataset_t    *ds;
+    uint32_t                   local_seed;
+    size_t                     n_features_total;
+    int                        is_classifier;
+    scl_ml_rf_params_t         params;   /* read-only copy */
+    scl_allocator_t           *persist_alloc;
+    int                        ret;      /* 0 = ok, -1 = failure */
+} scl_ml_rf_train_job_t;
+
+static void
+scl_ml_rf_train_job_fn(void *arg) {
+    scl_ml_rf_train_job_t *j = (scl_ml_rf_train_job_t *)arg;
+    uint32_t ls = j->local_seed;
+    j->ret = scl_ml_rf_train_single_tree(j->tree_out, j->ds, &ls,
+                                          j->n_features_total, j->is_classifier,
+                                          &j->params, j->persist_alloc);
+}
+
 SCL_WARN_UNUSED scl_error_t
 scl_ml_rf_new(scl_ml_rf_t **model, scl_ml_rf_params_t params) {
     if (scl_unlikely(!model)) return SCL_ERR_NULL_PTR;
-    scl_ml_rf_t *m = (scl_ml_rf_t *)calloc(1, sizeof(scl_ml_rf_t));
+    scl_allocator_t *alloc = params.alloc ? params.alloc : scl_allocator_default();
+    scl_ml_rf_t *m = (scl_ml_rf_t *)scl_calloc(
+        alloc, 1, sizeof(scl_ml_rf_t), alignof(max_align_t));
     if (scl_unlikely(!m)) return SCL_ERR_OUT_OF_MEMORY;
     m->params = params;
+    m->alloc  = alloc;
     *model = m;
     return SCL_OK;
 }
@@ -74,11 +107,12 @@ scl_ml_rf_new(scl_ml_rf_t **model, scl_ml_rf_params_t params) {
 void
 scl_ml_rf_free(scl_ml_rf_t *model) {
     if (scl_unlikely(!model)) return;
+    scl_allocator_t *a = model->alloc ? model->alloc : scl_allocator_default();
     for (size_t i = 0; i < model->n_estimators; i++)
-        free(model->trees[i].nodes);
-    free(model->trees);
+        scl_free(a, model->trees[i].nodes);
+    scl_free(a, model->trees);
     memset(model, 0, sizeof(*model));
-    free(model);
+    scl_free(a, model);
 }
 
 static int
@@ -88,10 +122,16 @@ scl_ml_rf_train_single_tree(
     uint32_t *rng_state,
     size_t n_features_total,
     int is_classifier,
-    scl_ml_rf_params_t *params) {
+    scl_ml_rf_params_t *params,
+    scl_allocator_t *persist_alloc) {
 
+    /* Per-tree scratch uses the default allocator: this keeps the parallel
+     * path contention-free even when persist_alloc is a shared arena/pool
+     * (which may not be thread-safe). Persistent tree_out->nodes uses
+     * persist_alloc so the ensemble is freed through one allocator. */
+    scl_allocator_t *scratch = scl_allocator_default();
     size_t n = ds->n_rows;
-    size_t *boot_idx = (size_t *)malloc(n * sizeof(size_t));
+    size_t *boot_idx = (size_t *)scl_alloc(scratch, n * sizeof(size_t), alignof(max_align_t));
     if (!boot_idx) return -1;
 
     for (size_t i = 0; i < n; i++)
@@ -99,12 +139,12 @@ scl_ml_rf_train_single_tree(
     for (size_t i = 0; i < n; i++)
         if (boot_idx[i] >= n) boot_idx[i] = n - 1;
 
-    SCL_ML_FLOAT *boot_data = (SCL_ML_FLOAT *)malloc(
-        n * n_features_total * sizeof(SCL_ML_FLOAT));
-    SCL_ML_FLOAT *boot_targets = (SCL_ML_FLOAT *)malloc(
-        n * sizeof(SCL_ML_FLOAT));
+    SCL_ML_FLOAT *boot_data = (SCL_ML_FLOAT *)scl_alloc(
+        scratch, n * n_features_total * sizeof(SCL_ML_FLOAT), alignof(max_align_t));
+    SCL_ML_FLOAT *boot_targets = (SCL_ML_FLOAT *)scl_alloc(
+        scratch, n * sizeof(SCL_ML_FLOAT), alignof(max_align_t));
     if (!boot_data || !boot_targets) {
-        free(boot_idx); free(boot_data); free(boot_targets);
+        scl_free(scratch, boot_idx); scl_free(scratch, boot_data); scl_free(scratch, boot_targets);
         return -1;
     }
 
@@ -146,55 +186,37 @@ scl_ml_rf_train_single_tree(
     scl_ml_tree_t *t = NULL;
     scl_error_t err = scl_ml_tree_new(&t, tree_params);
     if (err != SCL_OK) {
-        free(boot_idx); free(boot_data); free(boot_targets);
+        scl_free(scratch, boot_idx); scl_free(scratch, boot_data); scl_free(scratch, boot_targets);
         return -1;
     }
 
     err = scl_ml_tree_fit(t, &boot_ds);
     if (err != SCL_OK) {
         scl_ml_tree_free(t);
-        free(boot_idx); free(boot_data); free(boot_targets);
+        scl_free(scratch, boot_idx); scl_free(scratch, boot_data); scl_free(scratch, boot_targets);
         return -1;
     }
 
     tree_out->n_nodes = scl_ml_tree_get_n_nodes(t);
-    tree_out->n_leaves = 0;
+    tree_out->n_leaves = scl_ml_tree_get_n_leaves(t);
     tree_out->n_features = n_features_total;
     tree_out->is_classifier = is_classifier;
 
-    tree_out->nodes = (scl_ml_rf_node_t *)malloc(
-        tree_out->n_nodes * sizeof(scl_ml_rf_node_t));
+    tree_out->nodes = (scl_ml_rf_node_t *)scl_alloc(
+        persist_alloc, tree_out->n_nodes * sizeof(scl_ml_rf_node_t), alignof(max_align_t));
     if (!tree_out->nodes) {
         scl_ml_tree_free(t);
-        free(boot_idx); free(boot_data); free(boot_targets);
+        scl_free(scratch, boot_idx); scl_free(scratch, boot_data); scl_free(scratch, boot_targets);
         return -1;
     }
 
-    uint8_t *buf = NULL;
-    size_t buflen = 0;
-    err = scl_ml_tree_save(t, &buf, &buflen, NULL);
-    if (err != SCL_OK) {
-        free(tree_out->nodes);
-        scl_ml_tree_free(t);
-        free(boot_idx); free(boot_data); free(boot_targets);
-        return -1;
-    }
+    /* Zero-copy handoff: one memcpy of the contiguous node array, no
+     * serialize/deserialize round-trip. Layout is byte-identical. */
+    memcpy(tree_out->nodes, scl_ml_tree_get_nodes(t),
+           tree_out->n_nodes * sizeof(scl_ml_tree_node_t));
 
-    size_t off = sizeof(scl_ml_serial_header_t);
-    memcpy(&tree_out->n_nodes, buf + off, sizeof(size_t)); off += sizeof(size_t);
-    memcpy(&tree_out->n_leaves, buf + off, sizeof(size_t)); off += sizeof(size_t);
-    off += sizeof(size_t);
-    int isc;
-    memcpy(&isc, buf + off, sizeof(int));
-    tree_out->is_classifier = isc;
-    off += sizeof(int);
-
-    memcpy(tree_out->nodes, buf + off,
-           tree_out->n_nodes * sizeof(scl_ml_rf_node_t));
-
-    free(buf);
     scl_ml_tree_free(t);
-    free(boot_idx); free(boot_data); free(boot_targets);
+    scl_free(scratch, boot_idx); scl_free(scratch, boot_data); scl_free(scratch, boot_targets);
     return 0;
 }
 
@@ -242,25 +264,74 @@ scl_ml_rf_fit(scl_ml_rf_t *model, const scl_ml_dataset_t *ds) {
     uint32_t seed = (uint32_t)model->params.random_seed;
     if (seed == (uint32_t)-1) seed = 42;
 
-    model->trees = (scl_ml_rf_internal_tree_t *)calloc(
-        model->n_estimators, sizeof(scl_ml_rf_internal_tree_t));
+    model->trees = (scl_ml_rf_internal_tree_t *)scl_calloc(
+        model->alloc, model->n_estimators, sizeof(scl_ml_rf_internal_tree_t),
+        alignof(max_align_t));
     if (!model->trees) return SCL_ERR_OUT_OF_MEMORY;
+    scl_allocator_t *a = model->alloc;
 
-    for (size_t i = 0; i < model->n_estimators; i++) {
-        seed = seed * 1103515245u + 12345u;
-        uint32_t local_seed = seed;
-        int ret = scl_ml_rf_train_single_tree(
-            &model->trees[i], ds, &local_seed,
-            model->n_features,
-            model->is_classifier,
-            &model->params);
-        if (ret != 0) {
-            for (size_t j = 0; j <= i; j++)
-                free(model->trees[j].nodes);
-            free(model->trees);
-            model->trees = NULL;
-            return SCL_ERR_OUT_OF_MEMORY;
+    int n_jobs = model->params.n_threads;
+    if (n_jobs < 1) n_jobs = 1;
+
+    if (n_jobs == 1) {
+        /* Sequential: original path. */
+        for (size_t i = 0; i < model->n_estimators; i++) {
+            seed = seed * 1103515245u + 12345u;
+            uint32_t local_seed = seed;
+            int ret = scl_ml_rf_train_single_tree(
+                &model->trees[i], ds, &local_seed,
+                model->n_features,
+                model->is_classifier,
+                &model->params, a);
+            if (ret != 0) {
+                for (size_t j = 0; j <= i; j++)
+                    scl_free(a, model->trees[j].nodes);
+                scl_free(a, model->trees);
+                model->trees = NULL;
+                return SCL_ERR_OUT_OF_MEMORY;
+            }
         }
+    } else {
+        /* Parallel: each tree trained by a pool worker. trees[] is pre-zeroed
+         * and each task writes a disjoint slot → no shared mutable state. */
+        size_t ne = model->n_estimators;
+        scl_ml_rf_train_job_t *jobs = (scl_ml_rf_train_job_t *)scl_calloc(
+            a, ne, sizeof(scl_ml_rf_train_job_t), alignof(max_align_t));
+        if (!jobs) { scl_free(a, model->trees); model->trees = NULL; return SCL_ERR_OUT_OF_MEMORY; }
+
+        scl_threadpool_t pool;
+        scl_error_t perr = scl_threadpool_init(scl_allocator_default(),
+                                                &pool, (unsigned)n_jobs);
+        if (perr != SCL_OK) {
+            scl_free(a, jobs); scl_free(a, model->trees); model->trees = NULL;
+            return perr;
+        }
+
+        for (size_t i = 0; i < ne; i++) {
+            seed = seed * 1103515245u + 12345u;
+            jobs[i].tree_out         = &model->trees[i];
+            jobs[i].ds               = ds;
+            jobs[i].local_seed       = seed;
+            jobs[i].n_features_total = model->n_features;
+            jobs[i].is_classifier    = model->is_classifier;
+            jobs[i].params           = model->params;
+            jobs[i].persist_alloc    = a;
+            jobs[i].ret              = -1;
+            (void)scl_threadpool_enqueue(&pool, scl_ml_rf_train_job_fn, &jobs[i]);
+        }
+        scl_threadpool_wait(&pool);
+        scl_threadpool_destroy(&pool);
+
+        for (size_t i = 0; i < ne; i++) {
+            if (jobs[i].ret != 0) {
+                for (size_t k = 0; k < ne; k++)
+                    scl_free(a, model->trees[k].nodes);
+                scl_free(a, model->trees); model->trees = NULL;
+                scl_free(a, jobs);
+                return SCL_ERR_OUT_OF_MEMORY;
+            }
+        }
+        scl_free(a, jobs);
     }
 
     model->fitted = 1;
@@ -275,7 +346,8 @@ scl_ml_rf_predict(scl_ml_rf_t *model, const scl_ml_dataset_t *ds,
     if (scl_unlikely(ds->n_cols != model->n_features)) return SCL_ERR_INVALID_ARG;
 
     if (model->is_classifier) {
-        size_t *votes = (size_t *)calloc(model->n_classes, sizeof(size_t));
+        scl_allocator_t *a = model->alloc;
+        size_t *votes = (size_t *)scl_calloc(a, model->n_classes, sizeof(size_t), alignof(max_align_t));
         if (!votes) return SCL_ERR_OUT_OF_MEMORY;
 
         for (size_t i = 0; i < ds->n_rows; i++) {
@@ -311,7 +383,7 @@ scl_ml_rf_predict(scl_ml_rf_t *model, const scl_ml_dataset_t *ds,
             y_out[i] = (SCL_ML_FLOAT)best_cls;
         }
 
-        free(votes);
+        scl_free(a, votes);
     } else {
         for (size_t i = 0; i < ds->n_rows; i++) {
             double sum = 0.0;
@@ -346,9 +418,9 @@ scl_ml_rf_get_n_features(const scl_ml_rf_t *model) {
 SCL_WARN_UNUSED scl_error_t
 scl_ml_rf_save(const scl_ml_rf_t *model,
                 uint8_t **buf, size_t *len, scl_allocator_t *alloc) {
-    (void)alloc;
     if (scl_unlikely(!model || !buf || !len)) return SCL_ERR_NULL_PTR;
     if (scl_unlikely(!model->fitted)) return SCL_ERR_INVALID_STATE;
+    if (scl_unlikely(!alloc)) alloc = model->alloc ? model->alloc : scl_allocator_default();
 
     size_t trees_data_sz = 0;
     for (size_t i = 0; i < model->n_estimators; i++) {
@@ -366,7 +438,7 @@ scl_ml_rf_save(const scl_ml_rf_t *model,
     size_t payload_sz = sizeof(size_t) * 3 + sizeof(int) + trees_data_sz;
     size_t total = sizeof(hdr) + payload_sz + sizeof(uint32_t);
 
-    uint8_t *buffer = (uint8_t *)calloc(1, total);
+    uint8_t *buffer = (uint8_t *)scl_calloc(alloc, 1, total, alignof(max_align_t));
     if (!buffer) return SCL_ERR_OUT_OF_MEMORY;
 
     memcpy(buffer, &hdr, sizeof(hdr));
@@ -389,7 +461,7 @@ scl_ml_rf_save(const scl_ml_rf_t *model,
         off += nb;
     }
 
-    uint32_t crc = 0;
+    uint32_t crc = scl_ml_crc32c(buffer + sizeof(scl_ml_serial_header_t), payload_sz);
     memcpy(buffer + off, &crc, sizeof(crc));
 
     *buf = buffer;
@@ -414,6 +486,15 @@ scl_ml_rf_load(scl_ml_rf_t **model,
     scl_error_t err = scl_ml_rf_new(&m, params);
     if (err != SCL_OK) return err;
 
+    /* Verify payload integrity before any allocation/parsing. */
+    uint32_t stored_crc = 0;
+    memcpy(&stored_crc, buf + len - sizeof(uint32_t), sizeof(uint32_t));
+    uint32_t expected_crc = scl_ml_crc32c(
+        buf + sizeof(scl_ml_serial_header_t),
+        len - sizeof(scl_ml_serial_header_t) - sizeof(uint32_t));
+    if (scl_unlikely(stored_crc != expected_crc))
+        return SCL_ERR_INVALID_ARG;
+
     size_t off = sizeof(*hdr);
 
     memcpy(&m->n_estimators, buf + off, sizeof(size_t)); off += sizeof(size_t);
@@ -421,9 +502,10 @@ scl_ml_rf_load(scl_ml_rf_t **model,
     memcpy(&m->n_classes, buf + off, sizeof(size_t)); off += sizeof(size_t);
     memcpy(&m->is_classifier, buf + off, sizeof(int)); off += sizeof(int);
 
-    m->trees = (scl_ml_rf_internal_tree_t *)calloc(
-        m->n_estimators, sizeof(scl_ml_rf_internal_tree_t));
-    if (!m->trees) { free(m); return SCL_ERR_OUT_OF_MEMORY; }
+    scl_allocator_t *a = m->alloc;
+    m->trees = (scl_ml_rf_internal_tree_t *)scl_calloc(
+        a, m->n_estimators, sizeof(scl_ml_rf_internal_tree_t), alignof(max_align_t));
+    if (!m->trees) { scl_ml_rf_free(m); return SCL_ERR_OUT_OF_MEMORY; }
 
     for (size_t i = 0; i < m->n_estimators; i++) {
         memcpy(&m->trees[i].n_nodes, buf + off, sizeof(size_t));
@@ -434,12 +516,13 @@ scl_ml_rf_load(scl_ml_rf_t **model,
         off += sizeof(int);
 
         size_t nb = m->trees[i].n_nodes * sizeof(scl_ml_rf_node_t);
-        m->trees[i].nodes = (scl_ml_rf_node_t *)calloc(
-            m->trees[i].n_nodes, sizeof(scl_ml_rf_node_t));
+        m->trees[i].nodes = (scl_ml_rf_node_t *)scl_calloc(
+            a, m->trees[i].n_nodes, sizeof(scl_ml_rf_node_t), alignof(max_align_t));
         if (!m->trees[i].nodes) {
             for (size_t j = 0; j < i; j++)
-                free(m->trees[j].nodes);
-            free(m->trees); free(m);
+                scl_free(a, m->trees[j].nodes);
+            scl_free(a, m->trees);
+            memset(m, 0, sizeof(*m)); scl_free(a, m);
             return SCL_ERR_OUT_OF_MEMORY;
         }
         memcpy(m->trees[i].nodes, buf + off, nb);

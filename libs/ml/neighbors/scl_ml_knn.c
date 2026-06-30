@@ -28,6 +28,7 @@ typedef struct scl_ml_knn {
     size_t        n_samples;
     size_t        n_features;
     int           fitted;
+    scl_allocator_t *alloc;
 } scl_ml_knn_t;
 
 static SCL_COLD_PATH scl_error_t
@@ -63,11 +64,14 @@ scl_ml_knn_new(scl_ml_knn_t **model, scl_ml_knn_params_t params)
 {
     if (scl_unlikely(!model)) return SCL_ERR_NULL_PTR;
 
-    scl_ml_knn_t *m = (scl_ml_knn_t *)calloc(1, sizeof(scl_ml_knn_t));
+    scl_allocator_t *alloc = params.alloc ? params.alloc : scl_allocator_default();
+    scl_ml_knn_t *m = (scl_ml_knn_t *)scl_calloc(
+        alloc, 1, sizeof(scl_ml_knn_t), alignof(max_align_t));
     if (scl_unlikely(!m)) return SCL_ERR_OUT_OF_MEMORY;
 
     if (params.k == 0) params.k = 5;
     m->params = params;
+    m->alloc  = alloc;
     *model = m;
     return SCL_OK;
 }
@@ -76,10 +80,11 @@ void
 scl_ml_knn_free(scl_ml_knn_t *model)
 {
     if (scl_unlikely(!model)) return;
-    free(model->train_data);
-    free(model->train_targets);
+    scl_allocator_t *a = model->alloc ? model->alloc : scl_allocator_default();
+    scl_free(a, model->train_data);
+    scl_free(a, model->train_targets);
     memset(model, 0, sizeof(*model));
-    free(model);
+    scl_free(a, model);
 }
 
 SCL_WARN_UNUSED scl_error_t
@@ -94,15 +99,17 @@ scl_ml_knn_fit(scl_ml_knn_t *model, const scl_ml_dataset_t *ds)
     size_t n = ds->n_rows;
     size_t d = ds->n_cols;
 
-    free(model->train_data);
-    free(model->train_targets);
+    scl_allocator_t *a = model->alloc;
 
-    model->train_data = (SCL_ML_FLOAT *)calloc(n * d, sizeof(SCL_ML_FLOAT));
+    scl_free(a, model->train_data);
+    scl_free(a, model->train_targets);
+
+    model->train_data = (SCL_ML_FLOAT *)scl_calloc(a, n * d, sizeof(SCL_ML_FLOAT), alignof(max_align_t));
     if (scl_unlikely(!model->train_data)) return SCL_ERR_OUT_OF_MEMORY;
 
-    model->train_targets = (SCL_ML_FLOAT *)calloc(n, sizeof(SCL_ML_FLOAT));
+    model->train_targets = (SCL_ML_FLOAT *)scl_calloc(a, n, sizeof(SCL_ML_FLOAT), alignof(max_align_t));
     if (scl_unlikely(!model->train_targets)) {
-        free(model->train_data);
+        scl_free(a, model->train_data);
         model->train_data = NULL;
         return SCL_ERR_OUT_OF_MEMORY;
     }
@@ -135,14 +142,15 @@ scl_ml_knn_predict(scl_ml_knn_t *model, const scl_ml_dataset_t *ds,
     if (k > nt) k = nt;
     if (k == 0) { memset(y_out, 0, nq * sizeof(SCL_ML_FLOAT)); return SCL_OK; }
 
-    float *dist_row = (float *)malloc(nt * sizeof(float));
-    uint32_t *indices = (uint32_t *)malloc(k * sizeof(uint32_t));
-    float *dists_k = (float *)malloc(k * sizeof(float));
+    scl_allocator_t *a = model->alloc;
+    float *dist_row = (float *)scl_alloc(a, nt * sizeof(float), alignof(max_align_t));
+    uint32_t *indices = (uint32_t *)scl_alloc(a, k * sizeof(uint32_t), alignof(max_align_t));
+    float *dists_k = (float *)scl_alloc(a, k * sizeof(float), alignof(max_align_t));
     float seen_labels[32];
     float seen_weights[32];
     int   seen_counts[32];
     if (!dist_row || !indices || !dists_k) {
-        free(dist_row); free(indices); free(dists_k);
+        scl_free(a, dist_row); scl_free(a, indices); scl_free(a, dists_k);
         return SCL_ERR_OUT_OF_MEMORY;
     }
 
@@ -215,9 +223,9 @@ scl_ml_knn_predict(scl_ml_knn_t *model, const scl_ml_dataset_t *ds,
         }
     }
 
-    free(dist_row);
-    free(indices);
-    free(dists_k);
+    scl_free(a, dist_row);
+    scl_free(a, indices);
+    scl_free(a, dists_k);
     return SCL_OK;
 }
 
@@ -237,9 +245,9 @@ SCL_WARN_UNUSED scl_error_t
 scl_ml_knn_save(const scl_ml_knn_t *model,
                  uint8_t **buf, size_t *len, scl_allocator_t *alloc)
 {
-    (void)alloc;
     if (scl_unlikely(!model || !buf || !len)) return SCL_ERR_NULL_PTR;
     if (scl_unlikely(!model->fitted)) return SCL_ERR_INVALID_STATE;
+    if (scl_unlikely(!alloc)) alloc = model->alloc ? model->alloc : scl_allocator_default();
 
     size_t data_bytes = model->n_samples * model->n_features * sizeof(SCL_ML_FLOAT);
     size_t tgt_bytes  = model->n_samples * sizeof(SCL_ML_FLOAT);
@@ -254,7 +262,7 @@ scl_ml_knn_save(const scl_ml_knn_t *model,
     size_t payload_sz = sizeof(size_t) * 2 + data_bytes + tgt_bytes;
     size_t total = sizeof(hdr) + payload_sz + sizeof(uint32_t);
 
-    uint8_t *buffer = (uint8_t *)calloc(1, total);
+    uint8_t *buffer = (uint8_t *)scl_calloc(alloc, 1, total, alignof(max_align_t));
     if (!buffer) return SCL_ERR_OUT_OF_MEMORY;
 
     memcpy(buffer, &hdr, sizeof(hdr));
@@ -265,7 +273,7 @@ scl_ml_knn_save(const scl_ml_knn_t *model,
     memcpy(buffer + off, model->train_data, data_bytes); off += data_bytes;
     memcpy(buffer + off, model->train_targets, tgt_bytes); off += tgt_bytes;
 
-    uint32_t crc = 0;
+    uint32_t crc = scl_ml_crc32c(buffer + sizeof(scl_ml_serial_header_t), payload_sz);
     memcpy(buffer + off, &crc, sizeof(crc));
 
     *buf = buffer;
@@ -286,6 +294,15 @@ scl_ml_knn_load(scl_ml_knn_t **model,
     if (scl_unlikely(hdr->magic != SCL_ML_MAGIC || hdr->algo_id != SCL_ML_ALGO_KNN))
         return SCL_ERR_INVALID_ARG;
 
+    /* Verify payload integrity before any allocation/parsing. */
+    uint32_t stored_crc = 0;
+    memcpy(&stored_crc, buf + len - sizeof(uint32_t), sizeof(uint32_t));
+    uint32_t expected_crc = scl_ml_crc32c(
+        buf + sizeof(scl_ml_serial_header_t),
+        len - sizeof(scl_ml_serial_header_t) - sizeof(uint32_t));
+    if (scl_unlikely(stored_crc != expected_crc))
+        return SCL_ERR_INVALID_ARG;
+
     size_t off = sizeof(*hdr);
     size_t n_samples = 0, n_features = 0;
     memcpy(&n_samples, buf + off, sizeof(size_t)); off += sizeof(size_t);
@@ -293,19 +310,21 @@ scl_ml_knn_load(scl_ml_knn_t **model,
 
     if (params.k == 0) params.k = 5;
 
-    scl_ml_knn_t *m = (scl_ml_knn_t *)calloc(1, sizeof(scl_ml_knn_t));
-    if (!m) return SCL_ERR_OUT_OF_MEMORY;
-    m->params = params;
+    scl_ml_knn_t *m;
+    scl_error_t nerr = scl_ml_knn_new(&m, params);
+    if (nerr != SCL_OK) return nerr;
+    scl_allocator_t *a = m->alloc;
     m->n_samples = n_samples;
     m->n_features = n_features;
 
     size_t data_bytes = n_samples * n_features * sizeof(SCL_ML_FLOAT);
     size_t tgt_bytes  = n_samples * sizeof(SCL_ML_FLOAT);
 
-    m->train_data = (SCL_ML_FLOAT *)calloc(1, data_bytes);
-    m->train_targets = (SCL_ML_FLOAT *)calloc(1, tgt_bytes);
+    m->train_data = (SCL_ML_FLOAT *)scl_calloc(a, 1, data_bytes, alignof(max_align_t));
+    m->train_targets = (SCL_ML_FLOAT *)scl_calloc(a, 1, tgt_bytes, alignof(max_align_t));
     if (!m->train_data || !m->train_targets) {
-        free(m->train_data); free(m->train_targets); free(m);
+        scl_free(a, m->train_data); scl_free(a, m->train_targets);
+        memset(m, 0, sizeof(*m)); scl_free(a, m);
         return SCL_ERR_OUT_OF_MEMORY;
     }
 

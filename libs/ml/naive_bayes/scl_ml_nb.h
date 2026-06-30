@@ -29,10 +29,11 @@
 
 typedef struct {
     double  var_smoothing;               /* Added to variances for numerical stability (default 1e-9) */
+    scl_allocator_t *alloc;              /* NULL = use default allocator */
 } scl_ml_nb_params_t;
 
 #define SCL_ML_NB_PARAMS_DEFAULT() \
-    { .var_smoothing = 1e-9 }
+    { .var_smoothing = 1e-9, .alloc = NULL }
 
 typedef struct scl_ml_nb scl_ml_nb_t;
 

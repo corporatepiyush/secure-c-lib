@@ -35,6 +35,7 @@ typedef struct {
     SCL_ML_FLOAT *std_;     /* [n_features] */
     size_t        n_features;
     int           fitted;
+    scl_allocator_t *alloc;
 } scl_ml_standard_scaler_t;
 
 SCL_WARN_UNUSED scl_error_t
@@ -70,6 +71,7 @@ typedef struct {
     SCL_ML_FLOAT *scale_;   /* [n_features] = 1.0 / (max - min) */
     size_t        n_features;
     int           fitted;
+    scl_allocator_t *alloc;
 } scl_ml_minmax_scaler_t;
 
 SCL_WARN_UNUSED scl_error_t

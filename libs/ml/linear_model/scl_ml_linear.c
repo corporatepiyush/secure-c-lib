@@ -33,6 +33,7 @@ typedef struct scl_ml_linear {
     SCL_ML_FLOAT *gradient;      /* [n_features] */
     SCL_ML_FLOAT *pred_buffer;   /* [batch_size] */
     SCL_ML_FLOAT *resid_buffer;  /* [batch_size] */
+    scl_allocator_t *alloc;
 } scl_ml_linear_t;
 
 /* ── Helpers ─────────────────────────────────────────────────── */
@@ -159,7 +160,7 @@ static scl_error_t scl_ml_linear_fit_normal(scl_ml_linear_t *model,
 
     /* Compute column means and center data for correct intercept handling.
      * Solve (X_c^T X_c) @ w = X_c^T y_c  then b = mean_y - mean(X) @ w. */
-    double *mean_x = (double *)calloc(d, sizeof(double));
+    double *mean_x = (double *)scl_calloc(model->alloc, d, sizeof(double), alignof(max_align_t));
     double  mean_y = 0.0;
     if (!mean_x) return SCL_ERR_OUT_OF_MEMORY;
     for (size_t i = 0; i < n; i++) {
@@ -171,19 +172,27 @@ static scl_error_t scl_ml_linear_fit_normal(scl_ml_linear_t *model,
     for (size_t j = 0; j < d; j++)
         mean_x[j] /= (double)n;
 
-    double *XtX = (double *)calloc(d * d, sizeof(double));
-    double *Xty = (double *)calloc(d, sizeof(double));
-    if (!XtX || !Xty) { free(mean_x); free(XtX); free(Xty); return SCL_ERR_OUT_OF_MEMORY; }
+    double *XtX = (double *)scl_calloc(model->alloc, d * d, sizeof(double), alignof(max_align_t));
+    double *Xty = (double *)scl_calloc(model->alloc, d, sizeof(double), alignof(max_align_t));
+    double *xc  = (double *)scl_calloc(model->alloc, d, sizeof(double), alignof(max_align_t));   /* centered row scratch */
+    if (!XtX || !Xty || !xc) {
+        scl_free(model->alloc, mean_x); scl_free(model->alloc, XtX); scl_free(model->alloc, Xty); scl_free(model->alloc, xc);
+        return SCL_ERR_OUT_OF_MEMORY;
+    }
 
+    /* Center each row once (xc[]) instead of re-subtracting mean_x[k] in the
+     * inner j,k loop. Reduces subtractions from O(n*d^2) to O(n*d). */
     for (size_t i = 0; i < n; i++) {
         double yc = (double)ds->targets[i] - mean_y;
         for (size_t j = 0; j < d; j++) {
-            double xc = (double)ds->data[i * ds->row_stride + j] - mean_x[j];
-            Xty[j] += xc * yc;
-            for (size_t k = 0; k < d; k++) {
-                double xck = (double)ds->data[i * ds->row_stride + k] - mean_x[k];
-                XtX[j * d + k] += xc * xck;
-            }
+            xc[j] = (double)ds->data[i * ds->row_stride + j] - mean_x[j];
+            Xty[j] += xc[j] * yc;
+        }
+        for (size_t j = 0; j < d; j++) {
+            double xcj = xc[j];
+            double *row = &XtX[j * d];
+            for (size_t k = 0; k < d; k++)
+                row[k] += xcj * xc[k];
         }
     }
 
@@ -194,8 +203,8 @@ static scl_error_t scl_ml_linear_fit_normal(scl_ml_linear_t *model,
     }
 
     /* Solve (X_c^T X_c) * w = X_c^T y_c via Cholesky decomposition */
-    double *L = (double *)calloc(d * d, sizeof(double));
-    if (!L) { free(mean_x); free(XtX); free(Xty); return SCL_ERR_OUT_OF_MEMORY; }
+    double *L = (double *)scl_calloc(model->alloc, d * d, sizeof(double), alignof(max_align_t));
+    if (!L) { scl_free(model->alloc, mean_x); scl_free(model->alloc, XtX); scl_free(model->alloc, Xty); scl_free(model->alloc, xc); return SCL_ERR_OUT_OF_MEMORY; }
 
     for (size_t j = 0; j < d; j++) {
         double sum = 0.0;
@@ -203,7 +212,7 @@ static scl_error_t scl_ml_linear_fit_normal(scl_ml_linear_t *model,
             sum += L[j * d + k] * L[j * d + k];
         double val = XtX[j * d + j] - sum;
         if (scl_unlikely(val <= 0.0)) {
-            free(mean_x); free(XtX); free(Xty); free(L);
+            scl_free(model->alloc, mean_x); scl_free(model->alloc, XtX); scl_free(model->alloc, Xty); scl_free(model->alloc, L); scl_free(model->alloc, xc);
             return SCL_ERR_ML_SINGULAR;
         }
         L[j * d + j] = sqrt(val);
@@ -215,8 +224,8 @@ static scl_error_t scl_ml_linear_fit_normal(scl_ml_linear_t *model,
         }
     }
 
-    double *z = (double *)calloc(d, sizeof(double));
-    if (!z) { free(mean_x); free(XtX); free(Xty); free(L); return SCL_ERR_OUT_OF_MEMORY; }
+    double *z = (double *)scl_calloc(model->alloc, d, sizeof(double), alignof(max_align_t));
+    if (!z) { scl_free(model->alloc, mean_x); scl_free(model->alloc, XtX); scl_free(model->alloc, Xty); scl_free(model->alloc, L); scl_free(model->alloc, xc); return SCL_ERR_OUT_OF_MEMORY; }
     for (size_t i = 0; i < d; i++) {
         double sum = 0.0;
         for (size_t j = 0; j < i; j++)
@@ -236,7 +245,7 @@ static scl_error_t scl_ml_linear_fit_normal(scl_ml_linear_t *model,
     for (size_t j = 0; j < d; j++)
         model->intercept -= (float)(mean_x[j] * (double)model->weights[j]);
 
-    free(mean_x); free(XtX); free(Xty); free(L); free(z);
+    scl_free(model->alloc, mean_x); scl_free(model->alloc, XtX); scl_free(model->alloc, Xty); scl_free(model->alloc, L); scl_free(model->alloc, z); scl_free(model->alloc, xc);
     return SCL_OK;
 }
 
@@ -250,7 +259,7 @@ static scl_error_t scl_ml_linear_fit_cd(scl_ml_linear_t *model,
     float tol = (float)model->params.tol;
 
     /* Pre-compute X columns: col_norms[j] = sum_i X[i][j]^2 */
-    float *col_norms = (float *)calloc(d, sizeof(float));
+    float *col_norms = (float *)scl_calloc(model->alloc, d, sizeof(float), alignof(max_align_t));
     if (!col_norms) return SCL_ERR_OUT_OF_MEMORY;
     for (size_t j = 0; j < d; j++)
         for (size_t i = 0; i < n; i++)
@@ -263,8 +272,8 @@ static scl_error_t scl_ml_linear_fit_cd(scl_ml_linear_t *model,
         if (col_norms[j] < FLT_MIN) col_norms[j] = 1.0f;
 
     /* Initial predictions */
-    float *pred = (float *)calloc(n, sizeof(float));
-    if (!pred) { free(col_norms); return SCL_ERR_OUT_OF_MEMORY; }
+    float *pred = (float *)scl_calloc(model->alloc, n, sizeof(float), alignof(max_align_t));
+    if (!pred) { scl_free(model->alloc, col_norms); return SCL_ERR_OUT_OF_MEMORY; }
     for (size_t i = 0; i < n; i++) pred[i] = model->intercept;
 
     double prev_loss = 0.0;
@@ -297,15 +306,15 @@ static scl_error_t scl_ml_linear_fit_cd(scl_ml_linear_t *model,
         if (epoch > 0) {
             double rel_change = fabs(epoch_loss - prev_loss) / (fabs(prev_loss) + 1.0);
             if (rel_change < (double)tol) {
-                free(col_norms); free(pred);
+                scl_free(model->alloc, col_norms); scl_free(model->alloc, pred);
                 return SCL_OK;
             }
         }
         prev_loss = epoch_loss;
     }
 
-    free(col_norms);
-    float *resid = (float *)calloc(n, sizeof(float));
+    scl_free(model->alloc, col_norms);
+    float *resid = (float *)scl_calloc(model->alloc, n, sizeof(float), alignof(max_align_t));
     if (!resid) return SCL_ERR_OUT_OF_MEMORY;
     /* Compute intercept */
     double sum_res = 0.0;
@@ -316,7 +325,7 @@ static scl_error_t scl_ml_linear_fit_cd(scl_ml_linear_t *model,
         sum_res += (double)ds->targets[i] - p;
     }
     model->intercept += (float)(sum_res / (double)n);
-    free(pred); free(resid);
+    scl_free(model->alloc, pred); scl_free(model->alloc, resid);
 
     return SCL_OK;
 }
@@ -327,10 +336,13 @@ SCL_WARN_UNUSED scl_error_t
 scl_ml_linear_new(scl_ml_linear_t **model, scl_ml_linear_params_t params) {
     if (scl_unlikely(!model)) return SCL_ERR_NULL_PTR;
 
-    scl_ml_linear_t *m = (scl_ml_linear_t *)calloc(1, sizeof(scl_ml_linear_t));
+    scl_allocator_t *alloc = params.alloc ? params.alloc : scl_allocator_default();
+    scl_ml_linear_t *m = (scl_ml_linear_t *)scl_calloc(
+        alloc, 1, sizeof(scl_ml_linear_t), alignof(max_align_t));
     if (scl_unlikely(!m)) return SCL_ERR_OUT_OF_MEMORY;
 
     m->params = params;
+    m->alloc  = alloc;
     /* Auto-solver selection */
     if (params.solver == SCL_ML_SOLVER_AUTO) {
         /* Use Normal Equations for small d, SGD for large d */
@@ -347,12 +359,13 @@ scl_ml_linear_new(scl_ml_linear_t **model, scl_ml_linear_params_t params) {
 void
 scl_ml_linear_free(scl_ml_linear_t *model) {
     if (scl_unlikely(!model)) return;
-    free(model->weights);
-    free(model->gradient);
-    free(model->pred_buffer);
-    free(model->resid_buffer);
+    scl_allocator_t *a = model->alloc ? model->alloc : scl_allocator_default();
+    scl_free(a, model->weights);
+    scl_free(a, model->gradient);
+    scl_free(a, model->pred_buffer);
+    scl_free(a, model->resid_buffer);
     memset(model, 0, sizeof(*model));
-    free(model);
+    scl_free(a, model);
 }
 
 SCL_WARN_UNUSED scl_error_t
@@ -367,18 +380,19 @@ scl_ml_linear_fit(scl_ml_linear_t *model, const scl_ml_dataset_t *ds) {
     model->n_features = d;
 
     /* Allocate/aligned weights */
-    free(model->weights);
-    model->weights = (SCL_ML_FLOAT *)calloc(d, sizeof(SCL_ML_FLOAT));
+    scl_allocator_t *la = model->alloc;
+    scl_free(la, model->weights);
+    model->weights = (SCL_ML_FLOAT *)scl_calloc(la, d, sizeof(SCL_ML_FLOAT), alignof(max_align_t));
     if (scl_unlikely(!model->weights)) return SCL_ERR_OUT_OF_MEMORY;
 
     /* Allocate working buffers */
     size_t bs = model->params.batch_size > 0 ? model->params.batch_size : ds->n_rows;
-    free(model->gradient);
-    free(model->pred_buffer);
-    free(model->resid_buffer);
-    model->gradient     = (SCL_ML_FLOAT *)calloc(d, sizeof(SCL_ML_FLOAT));
-    model->pred_buffer  = (SCL_ML_FLOAT *)calloc(bs, sizeof(SCL_ML_FLOAT));
-    model->resid_buffer = (SCL_ML_FLOAT *)calloc(bs, sizeof(SCL_ML_FLOAT));
+    scl_free(la, model->gradient);
+    scl_free(la, model->pred_buffer);
+    scl_free(la, model->resid_buffer);
+    model->gradient     = (SCL_ML_FLOAT *)scl_calloc(la, d, sizeof(SCL_ML_FLOAT), alignof(max_align_t));
+    model->pred_buffer  = (SCL_ML_FLOAT *)scl_calloc(la, bs, sizeof(SCL_ML_FLOAT), alignof(max_align_t));
+    model->resid_buffer = (SCL_ML_FLOAT *)scl_calloc(la, bs, sizeof(SCL_ML_FLOAT), alignof(max_align_t));
     if (!model->gradient || !model->pred_buffer || !model->resid_buffer)
         return SCL_ERR_OUT_OF_MEMORY;
 
@@ -416,10 +430,10 @@ scl_ml_linear_predict(scl_ml_linear_t *model, const scl_ml_dataset_t *ds,
     if (n == 0) return SCL_OK;
 
     for (size_t i = 0; i < n; i++) {
-        double pred = (double)model->intercept;
-        for (size_t j = 0; j < d; j++)
-            pred += (double)ds->data[i * ds->row_stride + j] * (double)model->weights[j];
-        y_out[i] = (float)pred;
+        /* SIMD dot with f64 accumulator — keeps regression precision, vectorizes */
+        double pred = (double)scl_ml_simd.dot_f(
+            &ds->data[i * ds->row_stride], model->weights, d);
+        y_out[i] = (float)(pred + (double)model->intercept);
     }
 
     return SCL_OK;
@@ -461,7 +475,7 @@ scl_ml_linear_save(const scl_ml_linear_t *model,
     size_t payload_sz = sizeof(size_t) + sizeof(SCL_ML_FLOAT) + weights_bytes;
     size_t total = sizeof(hdr) + payload_sz + sizeof(uint32_t); /* crc */
 
-    uint8_t *buffer = (uint8_t *)calloc(1, total);
+    uint8_t *buffer = (uint8_t *)scl_calloc(alloc, 1, total, alignof(max_align_t));
     if (!buffer) return SCL_ERR_OUT_OF_MEMORY;
 
     memcpy(buffer, &hdr, sizeof(hdr));
@@ -471,8 +485,7 @@ scl_ml_linear_save(const scl_ml_linear_t *model,
     memcpy(buffer + off, &model->intercept, sizeof(SCL_ML_FLOAT)); off += sizeof(SCL_ML_FLOAT);
     memcpy(buffer + off, model->weights, weights_bytes); off += weights_bytes;
 
-    /* CRC32C placeholder (set to 0 for now — real CRC would go here) */
-    uint32_t crc = 0;
+    uint32_t crc = scl_ml_crc32c(buffer + sizeof(scl_ml_serial_header_t), payload_sz);
     memcpy(buffer + off, &crc, sizeof(crc));
 
     *buf = buffer;
@@ -493,6 +506,15 @@ scl_ml_linear_load(scl_ml_linear_t **model,
     if (scl_unlikely(hdr->magic != SCL_ML_MAGIC || hdr->algo_id != SCL_ML_ALGO_LINEAR))
         return SCL_ERR_INVALID_ARG;
 
+    /* Verify payload integrity before any allocation/parsing. */
+    uint32_t stored_crc = 0;
+    memcpy(&stored_crc, buf + len - sizeof(uint32_t), sizeof(uint32_t));
+    uint32_t expected_crc = scl_ml_crc32c(
+        buf + sizeof(scl_ml_serial_header_t),
+        len - sizeof(scl_ml_serial_header_t) - sizeof(uint32_t));
+    if (scl_unlikely(stored_crc != expected_crc))
+        return SCL_ERR_INVALID_ARG;
+
     size_t off = sizeof(*hdr);
     size_t n_features = 0;
     memcpy(&n_features, buf + off, sizeof(size_t)); off += sizeof(size_t);
@@ -504,8 +526,8 @@ scl_ml_linear_load(scl_ml_linear_t **model,
     if (err != SCL_OK) return err;
 
     m->n_features = n_features;
-    m->weights = (SCL_ML_FLOAT *)calloc(n_features, sizeof(SCL_ML_FLOAT));
-    if (!m->weights) { free(m); return SCL_ERR_OUT_OF_MEMORY; }
+    m->weights = (SCL_ML_FLOAT *)scl_calloc(m->alloc, n_features, sizeof(SCL_ML_FLOAT), alignof(max_align_t));
+    if (!m->weights) { scl_ml_linear_free(m); return SCL_ERR_OUT_OF_MEMORY; }
 
     memcpy(&m->intercept, buf + off, sizeof(SCL_ML_FLOAT)); off += sizeof(SCL_ML_FLOAT);
     memcpy(m->weights, buf + off, n_features * sizeof(SCL_ML_FLOAT));

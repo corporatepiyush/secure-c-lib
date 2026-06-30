@@ -31,6 +31,7 @@ typedef struct scl_ml_dbscan {
     size_t  n_samples;
     size_t  n_features;
     int     fitted;
+    scl_allocator_t *alloc;
 } scl_ml_dbscan_t;
 
 static size_t
@@ -56,13 +57,16 @@ scl_ml_dbscan_new(scl_ml_dbscan_t **model, scl_ml_dbscan_params_t params)
 {
     if (scl_unlikely(!model)) return SCL_ERR_NULL_PTR;
 
-    scl_ml_dbscan_t *m = (scl_ml_dbscan_t *)calloc(1, sizeof(scl_ml_dbscan_t));
+    scl_allocator_t *alloc = params.alloc ? params.alloc : scl_allocator_default();
+    scl_ml_dbscan_t *m = (scl_ml_dbscan_t *)scl_calloc(
+        alloc, 1, sizeof(scl_ml_dbscan_t), alignof(max_align_t));
     if (scl_unlikely(!m)) return SCL_ERR_OUT_OF_MEMORY;
 
     if (params.eps <= 0.0) params.eps = 0.5;
     if (params.min_pts == 0) params.min_pts = 5;
 
     m->params = params;
+    m->alloc  = alloc;
     *model = m;
     return SCL_OK;
 }
@@ -71,9 +75,10 @@ void
 scl_ml_dbscan_free(scl_ml_dbscan_t *model)
 {
     if (scl_unlikely(!model)) return;
-    free(model->labels);
+    scl_allocator_t *a = model->alloc ? model->alloc : scl_allocator_default();
+    scl_free(a, model->labels);
     memset(model, 0, sizeof(*model));
-    free(model);
+    scl_free(a, model);
 }
 
 SCL_WARN_UNUSED scl_error_t
@@ -90,22 +95,23 @@ scl_ml_dbscan_fit(scl_ml_dbscan_t *model, const scl_ml_dataset_t *ds)
     size_t min_pts = model->params.min_pts;
     float eps_sq = (float)(model->params.eps * model->params.eps);
 
-    free(model->labels);
+    scl_allocator_t *a = model->alloc;
 
+    scl_free(a, model->labels);
     model->n_samples = n;
     model->n_features = d;
     model->n_clusters = 0;
 
-    model->labels = (int *)malloc(n * sizeof(int));
+    model->labels = (int *)scl_alloc(a, n * sizeof(int), alignof(max_align_t));
     if (!model->labels) return SCL_ERR_OUT_OF_MEMORY;
 
     for (size_t i = 0; i < n; i++)
         model->labels[i] = SCL_ML_DBSCAN_UNASSIGNED;
 
-    size_t *neighbors = (size_t *)malloc(n * sizeof(size_t));
-    size_t *queue = (size_t *)malloc(n * sizeof(size_t));
+    size_t *neighbors = (size_t *)scl_alloc(a, n * sizeof(size_t), alignof(max_align_t));
+    size_t *queue = (size_t *)scl_alloc(a, n * sizeof(size_t), alignof(max_align_t));
     if (!neighbors || !queue) {
-        free(neighbors); free(queue);
+        scl_free(a, neighbors); scl_free(a, queue);
         return SCL_ERR_OUT_OF_MEMORY;
     }
 
@@ -142,14 +148,8 @@ scl_ml_dbscan_fit(scl_ml_dbscan_t *model, const scl_ml_dataset_t *ds)
 
             model->labels[q] = cluster_id;
 
-            size_t nn;
-            if (qtail + min_pts <= n) {
-                nn = scl_ml_dbscan_region_query(
-                    ds->data, n, d, ds->row_stride, q, eps_sq, neighbors);
-            } else {
-                nn = scl_ml_dbscan_region_query(
-                    ds->data, n, d, ds->row_stride, q, eps_sq, neighbors);
-            }
+            size_t nn = scl_ml_dbscan_region_query(
+                ds->data, n, d, ds->row_stride, q, eps_sq, neighbors);
 
             if (nn >= min_pts) {
                 for (size_t j = 0; j < nn; j++) {
@@ -164,8 +164,8 @@ scl_ml_dbscan_fit(scl_ml_dbscan_t *model, const scl_ml_dataset_t *ds)
         }
     }
 
-    free(neighbors);
-    free(queue);
+    scl_free(a, neighbors);
+    scl_free(a, queue);
     model->fitted = 1;
     return SCL_OK;
 }
@@ -199,9 +199,9 @@ SCL_WARN_UNUSED scl_error_t
 scl_ml_dbscan_save(const scl_ml_dbscan_t *model,
                     uint8_t **buf, size_t *len, scl_allocator_t *alloc)
 {
-    (void)alloc;
     if (scl_unlikely(!model || !buf || !len)) return SCL_ERR_NULL_PTR;
     if (scl_unlikely(!model->fitted)) return SCL_ERR_INVALID_STATE;
+    if (scl_unlikely(!alloc)) alloc = model->alloc ? model->alloc : scl_allocator_default();
 
     size_t labels_bytes = model->n_samples * sizeof(int);
 
@@ -215,7 +215,7 @@ scl_ml_dbscan_save(const scl_ml_dbscan_t *model,
     size_t payload_sz = sizeof(size_t) * 3 + labels_bytes;
     size_t total = sizeof(hdr) + payload_sz + sizeof(uint32_t);
 
-    uint8_t *buffer = (uint8_t *)calloc(1, total);
+    uint8_t *buffer = (uint8_t *)scl_calloc(alloc, 1, total, alignof(max_align_t));
     if (!buffer) return SCL_ERR_OUT_OF_MEMORY;
 
     memcpy(buffer, &hdr, sizeof(hdr));
@@ -226,7 +226,7 @@ scl_ml_dbscan_save(const scl_ml_dbscan_t *model,
     memcpy(buffer + off, &model->n_features, sizeof(size_t)); off += sizeof(size_t);
     memcpy(buffer + off, model->labels, labels_bytes); off += labels_bytes;
 
-    uint32_t crc = 0;
+    uint32_t crc = scl_ml_crc32c(buffer + sizeof(scl_ml_serial_header_t), payload_sz);
     memcpy(buffer + off, &crc, sizeof(crc));
 
     *buf = buffer;
@@ -248,6 +248,15 @@ scl_ml_dbscan_load(scl_ml_dbscan_t **model,
                      hdr->algo_id != SCL_ML_ALGO_DBSCAN))
         return SCL_ERR_INVALID_ARG;
 
+    /* Verify payload integrity before any allocation/parsing. */
+    uint32_t stored_crc = 0;
+    memcpy(&stored_crc, buf + len - sizeof(uint32_t), sizeof(uint32_t));
+    uint32_t expected_crc = scl_ml_crc32c(
+        buf + sizeof(scl_ml_serial_header_t),
+        len - sizeof(scl_ml_serial_header_t) - sizeof(uint32_t));
+    if (scl_unlikely(stored_crc != expected_crc))
+        return SCL_ERR_INVALID_ARG;
+
     size_t off = sizeof(*hdr);
     size_t n_clusters = 0, n_samples = 0, n_features = 0;
     memcpy(&n_clusters, buf + off, sizeof(size_t)); off += sizeof(size_t);
@@ -257,16 +266,17 @@ scl_ml_dbscan_load(scl_ml_dbscan_t **model,
     if (params.eps <= 0.0)     params.eps = 0.5;
     if (params.min_pts == 0)   params.min_pts = 5;
 
-    scl_ml_dbscan_t *m = (scl_ml_dbscan_t *)calloc(1, sizeof(scl_ml_dbscan_t));
-    if (!m) return SCL_ERR_OUT_OF_MEMORY;
-    m->params = params;
+    scl_ml_dbscan_t *m;
+    scl_error_t nerr = scl_ml_dbscan_new(&m, params);
+    if (nerr != SCL_OK) return nerr;
+    scl_allocator_t *a = m->alloc;
     m->n_clusters = n_clusters;
     m->n_samples = n_samples;
     m->n_features = n_features;
 
     size_t labels_bytes = n_samples * sizeof(int);
-    m->labels = (int *)calloc(1, labels_bytes);
-    if (!m->labels) { free(m); return SCL_ERR_OUT_OF_MEMORY; }
+    m->labels = (int *)scl_calloc(a, 1, labels_bytes, alignof(max_align_t));
+    if (!m->labels) { memset(m, 0, sizeof(*m)); scl_free(a, m); return SCL_ERR_OUT_OF_MEMORY; }
 
     memcpy(m->labels, buf + off, labels_bytes);
 

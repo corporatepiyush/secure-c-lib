@@ -30,6 +30,7 @@ typedef struct scl_ml_pca {
     size_t        n_components;
     size_t        n_features;
     int           fitted;
+    scl_allocator_t *alloc;
 } scl_ml_pca_t;
 
 typedef struct {
@@ -108,10 +109,13 @@ SCL_WARN_UNUSED scl_error_t
 scl_ml_pca_new(scl_ml_pca_t **model, scl_ml_pca_params_t params) {
     if (scl_unlikely(!model)) return SCL_ERR_NULL_PTR;
 
-    scl_ml_pca_t *m = (scl_ml_pca_t *)calloc(1, sizeof(scl_ml_pca_t));
+    scl_allocator_t *alloc = params.alloc ? params.alloc : scl_allocator_default();
+    scl_ml_pca_t *m = (scl_ml_pca_t *)scl_calloc(
+        alloc, 1, sizeof(scl_ml_pca_t), alignof(max_align_t));
     if (scl_unlikely(!m)) return SCL_ERR_OUT_OF_MEMORY;
 
     m->params = params;
+    m->alloc  = alloc;
     *model = m;
     return SCL_OK;
 }
@@ -119,12 +123,13 @@ scl_ml_pca_new(scl_ml_pca_t **model, scl_ml_pca_params_t params) {
 void
 scl_ml_pca_free(scl_ml_pca_t *model) {
     if (scl_unlikely(!model)) return;
-    free(model->components);
-    free(model->mean);
-    free(model->explained_variance);
-    free(model->explained_variance_ratio);
+    scl_allocator_t *a = model->alloc ? model->alloc : scl_allocator_default();
+    scl_free(a, model->components);
+    scl_free(a, model->mean);
+    scl_free(a, model->explained_variance);
+    scl_free(a, model->explained_variance_ratio);
     memset(model, 0, sizeof(*model));
-    free(model);
+    scl_free(a, model);
 }
 
 SCL_WARN_UNUSED scl_error_t
@@ -145,23 +150,26 @@ scl_ml_pca_fit(scl_ml_pca_t *model, const scl_ml_dataset_t *ds) {
     model->n_features = d;
     model->n_components = n_comp;
 
-    free(model->mean);
-    free(model->components);
-    free(model->explained_variance);
-    free(model->explained_variance_ratio);
+    scl_allocator_t *a = model->alloc;
 
-    model->mean = (SCL_ML_FLOAT *)calloc(d, sizeof(SCL_ML_FLOAT));
-    model->components = (SCL_ML_FLOAT *)calloc(n_comp * d, sizeof(SCL_ML_FLOAT));
-    model->explained_variance = (SCL_ML_FLOAT *)calloc(n_comp, sizeof(SCL_ML_FLOAT));
-    model->explained_variance_ratio = (SCL_ML_FLOAT *)calloc(n_comp, sizeof(SCL_ML_FLOAT));
+    scl_free(a, model->mean);
+    scl_free(a, model->components);
+    scl_free(a, model->explained_variance);
+    scl_free(a, model->explained_variance_ratio);
+
+    model->mean = (SCL_ML_FLOAT *)scl_calloc(a, d, sizeof(SCL_ML_FLOAT), alignof(max_align_t));
+    model->components = (SCL_ML_FLOAT *)scl_calloc(a, n_comp * d, sizeof(SCL_ML_FLOAT), alignof(max_align_t));
+    model->explained_variance = (SCL_ML_FLOAT *)scl_calloc(a, n_comp, sizeof(SCL_ML_FLOAT), alignof(max_align_t));
+    model->explained_variance_ratio = (SCL_ML_FLOAT *)scl_calloc(a, n_comp, sizeof(SCL_ML_FLOAT), alignof(max_align_t));
     if (!model->mean || !model->components ||
         !model->explained_variance || !model->explained_variance_ratio) {
         return SCL_ERR_OUT_OF_MEMORY;
     }
 
-    SCL_ML_FLOAT *cov = (SCL_ML_FLOAT *)calloc(d * d, sizeof(SCL_ML_FLOAT));
-    SCL_ML_FLOAT *V = (SCL_ML_FLOAT *)calloc(d * d, sizeof(SCL_ML_FLOAT));
-    if (!cov || !V) { free(cov); free(V); return SCL_ERR_OUT_OF_MEMORY; }
+    SCL_ML_FLOAT *cov = (SCL_ML_FLOAT *)scl_calloc(a, d * d, sizeof(SCL_ML_FLOAT), alignof(max_align_t));
+    SCL_ML_FLOAT *V = (SCL_ML_FLOAT *)scl_calloc(a, d * d, sizeof(SCL_ML_FLOAT), alignof(max_align_t));
+    SCL_ML_FLOAT *xc = (SCL_ML_FLOAT *)scl_calloc(a, d, sizeof(SCL_ML_FLOAT), alignof(max_align_t));
+    if (!cov || !V || !xc) { scl_free(a, cov); scl_free(a, V); scl_free(a, xc); return SCL_ERR_OUT_OF_MEMORY; }
 
     for (size_t i = 0; i < n; i++) {
         for (size_t j = 0; j < d; j++)
@@ -170,13 +178,15 @@ scl_ml_pca_fit(scl_ml_pca_t *model, const scl_ml_dataset_t *ds) {
     for (size_t j = 0; j < d; j++)
         model->mean[j] /= (SCL_ML_FLOAT)n;
 
+    /* Center each row once into xc[]; update only the upper triangle.
+     * Avoids re-subtracting mean[k] in the inner loop (O(n*d) vs O(n*d^2)). */
     for (size_t i = 0; i < n; i++) {
+        for (size_t j = 0; j < d; j++)
+            xc[j] = ds->data[i * stride + j] - model->mean[j];
         for (size_t j = 0; j < d; j++) {
-            SCL_ML_FLOAT xc_j = ds->data[i * stride + j] - model->mean[j];
-            for (size_t k = j; k < d; k++) {
-                SCL_ML_FLOAT xc_k = ds->data[i * stride + k] - model->mean[k];
-                cov[j * d + k] += xc_j * xc_k;
-            }
+            SCL_ML_FLOAT xcj = xc[j];
+            for (size_t k = j; k < d; k++)
+                cov[j * d + k] += xcj * xc[k];
         }
     }
 
@@ -192,12 +202,12 @@ scl_ml_pca_fit(scl_ml_pca_t *model, const scl_ml_dataset_t *ds) {
                                          model->params.tol,
                                          model->params.max_sweeps);
     if (scl_unlikely(err != SCL_OK)) {
-        free(cov); free(V);
+        scl_free(a, cov); scl_free(a, V); scl_free(a, xc);
         return err;
     }
 
-    scl_pca_eigen_t *eigens = (scl_pca_eigen_t *)malloc(d * sizeof(scl_pca_eigen_t));
-    if (!eigens) { free(cov); free(V); return SCL_ERR_OUT_OF_MEMORY; }
+    scl_pca_eigen_t *eigens = (scl_pca_eigen_t *)scl_alloc(a, d * sizeof(scl_pca_eigen_t), alignof(max_align_t));
+    if (!eigens) { scl_free(a, cov); scl_free(a, V); scl_free(a, xc); return SCL_ERR_OUT_OF_MEMORY; }
 
     for (size_t j = 0; j < d; j++) {
         eigens[j].idx = j;
@@ -218,9 +228,10 @@ scl_ml_pca_fit(scl_ml_pca_t *model, const scl_ml_dataset_t *ds) {
             model->components[k * d + j] = V[j * d + src];
     }
 
-    free(eigens);
-    free(cov);
-    free(V);
+    scl_free(a, eigens);
+    scl_free(a, cov);
+    scl_free(a, V);
+    scl_free(a, xc);
     model->fitted = 1;
     return SCL_OK;
 }
@@ -237,15 +248,23 @@ scl_ml_pca_transform(scl_ml_pca_t *model, const scl_ml_dataset_t *ds,
     size_t n_comp = model->n_components;
     size_t stride = ds->row_stride;
 
+    /* Precompute mean·component_k (independent of i) so the hot loop only
+     * does one SIMD dot per (sample, component) instead of subtracting mean
+     * per element.  (x - mean)·c_k = x·c_k - mean·c_k */
+    SCL_ML_FLOAT *mean_dot = (SCL_ML_FLOAT *)scl_calloc(model->alloc, n_comp, sizeof(SCL_ML_FLOAT), alignof(max_align_t));
+    if (!mean_dot) return SCL_ERR_OUT_OF_MEMORY;
+    for (size_t k = 0; k < n_comp; k++)
+        mean_dot[k] = scl_ml_simd.dot_f(model->mean,
+                                         &model->components[k * d], d);
+
     for (size_t i = 0; i < n; i++) {
-        for (size_t k = 0; k < n_comp; k++) {
-            double sum = 0.0;
-            for (size_t j = 0; j < d; j++)
-                sum += (ds->data[i * stride + j] - model->mean[j]) *
-                       model->components[k * d + j];
-            out[i * n_comp + k] = (SCL_ML_FLOAT)sum;
-        }
+        const SCL_ML_FLOAT *row = &ds->data[i * stride];
+        for (size_t k = 0; k < n_comp; k++)
+            out[i * n_comp + k] = (SCL_ML_FLOAT)(
+                (double)scl_ml_simd.dot_f(row, &model->components[k * d], d) -
+                (double)mean_dot[k]);
     }
+    scl_free(model->alloc, mean_dot);
 
     if (model->params.whiten) {
         for (size_t k = 0; k < n_comp; k++) {
@@ -276,14 +295,13 @@ scl_ml_pca_inverse_transform(scl_ml_pca_t *model,
     size_t d = model->n_features;
     size_t n_comp = model->n_components;
 
-    for (size_t i = 0; i < n_samples; i++) {
-        for (size_t j = 0; j < d; j++) {
-            double sum = 0.0;
-            for (size_t k = 0; k < n_comp; k++)
-                sum += X_proj[i * n_comp + k] * model->components[k * d + j];
-            out[i * d + j] = (SCL_ML_FLOAT)(sum + model->mean[j]);
-        }
-    }
+    /* out = X_proj @ components + mean.  components is [n_comp x d] row-major,
+     * exactly the B matrix GEMM expects: C[n,d] = A[n,n_comp] @ B[n_comp,d]. */
+    scl_ml_simd.gemm(out, X_proj, model->components,
+                     n_samples, d, n_comp, 1.0f, 0.0f);
+    for (size_t i = 0; i < n_samples; i++)
+        for (size_t j = 0; j < d; j++)
+            out[i * d + j] += model->mean[j];
 
     return SCL_OK;
 }
@@ -316,9 +334,9 @@ scl_ml_pca_get_explained_variance_ratio(const scl_ml_pca_t *model) {
 SCL_WARN_UNUSED scl_error_t
 scl_ml_pca_save(const scl_ml_pca_t *model,
                  uint8_t **buf, size_t *len, scl_allocator_t *alloc) {
-    (void)alloc;
     if (scl_unlikely(!model || !buf || !len)) return SCL_ERR_NULL_PTR;
     if (scl_unlikely(!model->fitted)) return SCL_ERR_INVALID_STATE;
+    if (scl_unlikely(!alloc)) alloc = model->alloc ? model->alloc : scl_allocator_default();
 
     size_t d = model->n_features;
     size_t nc = model->n_components;
@@ -337,7 +355,7 @@ scl_ml_pca_save(const scl_ml_pca_t *model,
                         nc * sizeof(SCL_ML_FLOAT);
     size_t total = sizeof(hdr) + payload_sz + sizeof(uint32_t);
 
-    uint8_t *buffer = (uint8_t *)calloc(1, total);
+    uint8_t *buffer = (uint8_t *)scl_calloc(alloc, 1, total, alignof(max_align_t));
     if (!buffer) return SCL_ERR_OUT_OF_MEMORY;
 
     memcpy(buffer, &hdr, sizeof(hdr));
@@ -353,7 +371,7 @@ scl_ml_pca_save(const scl_ml_pca_t *model,
     memcpy(buffer + off, model->explained_variance_ratio, nc * sizeof(SCL_ML_FLOAT));
     off += nc * sizeof(SCL_ML_FLOAT);
 
-    uint32_t crc = 0;
+    uint32_t crc = scl_ml_crc32c(buffer + sizeof(scl_ml_serial_header_t), payload_sz);
     memcpy(buffer + off, &crc, sizeof(crc));
 
     *buf = buffer;
@@ -373,6 +391,15 @@ scl_ml_pca_load(scl_ml_pca_t **model,
     if (scl_unlikely(hdr->magic != SCL_ML_MAGIC || hdr->algo_id != SCL_ML_ALGO_PCA))
         return SCL_ERR_INVALID_ARG;
 
+    /* Verify payload integrity before any allocation/parsing. */
+    uint32_t stored_crc = 0;
+    memcpy(&stored_crc, buf + len - sizeof(uint32_t), sizeof(uint32_t));
+    uint32_t expected_crc = scl_ml_crc32c(
+        buf + sizeof(scl_ml_serial_header_t),
+        len - sizeof(scl_ml_serial_header_t) - sizeof(uint32_t));
+    if (scl_unlikely(stored_crc != expected_crc))
+        return SCL_ERR_INVALID_ARG;
+
     size_t off = sizeof(*hdr);
     size_t d = 0, nc = 0;
     memcpy(&d, buf + off, sizeof(size_t)); off += sizeof(size_t);
@@ -386,10 +413,11 @@ scl_ml_pca_load(scl_ml_pca_t **model,
     m->n_features = d;
     m->n_components = nc;
 
-    m->mean = (SCL_ML_FLOAT *)calloc(d, sizeof(SCL_ML_FLOAT));
-    m->components = (SCL_ML_FLOAT *)calloc(nc * d, sizeof(SCL_ML_FLOAT));
-    m->explained_variance = (SCL_ML_FLOAT *)calloc(nc, sizeof(SCL_ML_FLOAT));
-    m->explained_variance_ratio = (SCL_ML_FLOAT *)calloc(nc, sizeof(SCL_ML_FLOAT));
+    scl_allocator_t *a = m->alloc;
+    m->mean = (SCL_ML_FLOAT *)scl_calloc(a, d, sizeof(SCL_ML_FLOAT), alignof(max_align_t));
+    m->components = (SCL_ML_FLOAT *)scl_calloc(a, nc * d, sizeof(SCL_ML_FLOAT), alignof(max_align_t));
+    m->explained_variance = (SCL_ML_FLOAT *)scl_calloc(a, nc, sizeof(SCL_ML_FLOAT), alignof(max_align_t));
+    m->explained_variance_ratio = (SCL_ML_FLOAT *)scl_calloc(a, nc, sizeof(SCL_ML_FLOAT), alignof(max_align_t));
     if (!m->mean || !m->components ||
         !m->explained_variance || !m->explained_variance_ratio) {
         scl_ml_pca_free(m);

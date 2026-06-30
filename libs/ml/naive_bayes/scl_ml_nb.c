@@ -34,6 +34,14 @@ typedef struct scl_ml_nb {
     int     fitted;
 
     SCL_ML_FLOAT *lp_buffer;
+    /* Precomputed per-(class,feature) terms to keep the predict hot loop
+     * free of logf() and division:
+     *   log_term[c*nf+f] = -0.5 * log(2*pi*var)
+     *   inv_2var[c*nf+f] = 0.5 / var
+     * Built at fit/load from vars[]. */
+    SCL_ML_FLOAT *log_term;
+    SCL_ML_FLOAT *inv_2var;
+    scl_allocator_t *alloc;
 } scl_ml_nb_t;
 
 static int
@@ -43,14 +51,32 @@ scl_ml_nb_find_class(const int *labels, size_t n_classes, int label) {
     return -1;
 }
 
+/* Rebuild log_term/inv_2var from finalized vars[]. Called at fit and load. */
+static void
+scl_ml_nb_precompute_gaussian(scl_ml_nb_t *model) {
+    size_t nf = model->n_features;
+    size_t nc = model->n_classes;
+    float two_pi = 2.0f * SCL_ML_NB_PI;
+    for (size_t c = 0; c < nc; c++) {
+        for (size_t f = 0; f < nf; f++) {
+            float v = model->vars[c * nf + f];
+            model->log_term[c * nf + f]  = -0.5f * logf(two_pi * v);
+            model->inv_2var[c * nf + f]  = 0.5f / v;
+        }
+    }
+}
+
 SCL_WARN_UNUSED scl_error_t
 scl_ml_nb_new(scl_ml_nb_t **model, scl_ml_nb_params_t params) {
     if (scl_unlikely(!model)) return SCL_ERR_NULL_PTR;
 
-    scl_ml_nb_t *m = (scl_ml_nb_t *)calloc(1, sizeof(scl_ml_nb_t));
+    scl_allocator_t *alloc = params.alloc ? params.alloc : scl_allocator_default();
+    scl_ml_nb_t *m = (scl_ml_nb_t *)scl_calloc(
+        alloc, 1, sizeof(scl_ml_nb_t), alignof(max_align_t));
     if (scl_unlikely(!m)) return SCL_ERR_OUT_OF_MEMORY;
 
     m->params = params;
+    m->alloc  = alloc;
     *model = m;
     return SCL_OK;
 }
@@ -58,13 +84,16 @@ scl_ml_nb_new(scl_ml_nb_t **model, scl_ml_nb_params_t params) {
 void
 scl_ml_nb_free(scl_ml_nb_t *model) {
     if (scl_unlikely(!model)) return;
-    free(model->means);
-    free(model->vars);
-    free(model->class_log_prior);
-    free(model->class_labels);
-    free(model->lp_buffer);
+    scl_allocator_t *a = model->alloc ? model->alloc : scl_allocator_default();
+    scl_free(a, model->means);
+    scl_free(a, model->vars);
+    scl_free(a, model->class_log_prior);
+    scl_free(a, model->class_labels);
+    scl_free(a, model->lp_buffer);
+    scl_free(a, model->log_term);
+    scl_free(a, model->inv_2var);
     memset(model, 0, sizeof(*model));
-    free(model);
+    scl_free(a, model);
 }
 
 SCL_WARN_UNUSED scl_error_t
@@ -77,9 +106,10 @@ scl_ml_nb_fit(scl_ml_nb_t *model, const scl_ml_dataset_t *ds) {
 
     size_t n = ds->n_rows;
     size_t nf = ds->n_cols;
+    scl_allocator_t *a = model->alloc;
 
     int n_classes = 0;
-    int *labels = (int *)calloc(n, sizeof(int));
+    int *labels = (int *)scl_calloc(a, n, sizeof(int), alignof(max_align_t));
     if (!labels) return SCL_ERR_OUT_OF_MEMORY;
 
     for (size_t i = 0; i < n; i++) {
@@ -89,12 +119,12 @@ scl_ml_nb_fit(scl_ml_nb_t *model, const scl_ml_dataset_t *ds) {
     }
 
     if (n_classes < 2) {
-        free(labels);
+        scl_free(a, labels);
         return SCL_ERR_INVALID_ARG;
     }
 
-    int *counts = (int *)calloc((size_t)n_classes, sizeof(int));
-    if (!counts) { free(labels); return SCL_ERR_OUT_OF_MEMORY; }
+    int *counts = (int *)scl_calloc(a, (size_t)n_classes, sizeof(int), alignof(max_align_t));
+    if (!counts) { scl_free(a, labels); return SCL_ERR_OUT_OF_MEMORY; }
 
     for (size_t i = 0; i < n; i++) {
         int label = (int)ds->targets[i];
@@ -102,21 +132,26 @@ scl_ml_nb_fit(scl_ml_nb_t *model, const scl_ml_dataset_t *ds) {
         counts[c]++;
     }
 
-    free(model->means);
-    free(model->vars);
-    free(model->class_log_prior);
-    free(model->class_labels);
-    free(model->lp_buffer);
+    scl_free(a, model->means);
+    scl_free(a, model->vars);
+    scl_free(a, model->class_log_prior);
+    scl_free(a, model->class_labels);
+    scl_free(a, model->lp_buffer);
+    scl_free(a, model->log_term);
+    scl_free(a, model->inv_2var);
 
     size_t cv_sz = (size_t)n_classes * nf;
-    model->means = (SCL_ML_FLOAT *)calloc(cv_sz, sizeof(SCL_ML_FLOAT));
-    model->vars = (SCL_ML_FLOAT *)calloc(cv_sz, sizeof(SCL_ML_FLOAT));
-    model->class_log_prior = (SCL_ML_FLOAT *)calloc((size_t)n_classes, sizeof(SCL_ML_FLOAT));
-    model->class_labels = (int *)calloc((size_t)n_classes, sizeof(int));
-    model->lp_buffer = (SCL_ML_FLOAT *)calloc((size_t)n_classes, sizeof(SCL_ML_FLOAT));
+    model->means = (SCL_ML_FLOAT *)scl_calloc(a, cv_sz, sizeof(SCL_ML_FLOAT), alignof(max_align_t));
+    model->vars = (SCL_ML_FLOAT *)scl_calloc(a, cv_sz, sizeof(SCL_ML_FLOAT), alignof(max_align_t));
+    model->class_log_prior = (SCL_ML_FLOAT *)scl_calloc(a, (size_t)n_classes, sizeof(SCL_ML_FLOAT), alignof(max_align_t));
+    model->class_labels = (int *)scl_calloc(a, (size_t)n_classes, sizeof(int), alignof(max_align_t));
+    model->lp_buffer = (SCL_ML_FLOAT *)scl_calloc(a, (size_t)n_classes, sizeof(SCL_ML_FLOAT), alignof(max_align_t));
+    model->log_term  = (SCL_ML_FLOAT *)scl_calloc(a, cv_sz, sizeof(SCL_ML_FLOAT), alignof(max_align_t));
+    model->inv_2var  = (SCL_ML_FLOAT *)scl_calloc(a, cv_sz, sizeof(SCL_ML_FLOAT), alignof(max_align_t));
     if (!model->means || !model->vars || !model->class_log_prior ||
-        !model->class_labels || !model->lp_buffer) {
-        free(labels); free(counts);
+        !model->class_labels || !model->lp_buffer ||
+        !model->log_term || !model->inv_2var) {
+        scl_free(a, labels); scl_free(a, counts);
         return SCL_ERR_OUT_OF_MEMORY;
     }
 
@@ -155,8 +190,10 @@ scl_ml_nb_fit(scl_ml_nb_t *model, const scl_ml_dataset_t *ds) {
     for (int c = 0; c < n_classes; c++)
         model->class_log_prior[c] = logf((float)counts[c] * inv_n);
 
-    free(labels);
-    free(counts);
+    scl_ml_nb_precompute_gaussian(model);
+
+    scl_free(a, labels);
+    scl_free(a, counts);
 
     model->fitted = 1;
     return SCL_OK;
@@ -178,16 +215,15 @@ scl_ml_nb_predict(scl_ml_nb_t *model, const scl_ml_dataset_t *ds,
             model->lp_buffer[c] = model->class_log_prior[c];
 
         for (size_t c = 0; c < nc; c++) {
-            double lp = (double)model->lp_buffer[c];
+            const SCL_ML_FLOAT *m = &model->means[c * nf];
+            const SCL_ML_FLOAT *lt = &model->log_term[c * nf];
+            const SCL_ML_FLOAT *i2v = &model->inv_2var[c * nf];
+            float lp = model->lp_buffer[c];
             for (size_t f = 0; f < nf; f++) {
-                float x = ds->data[i * ds->row_stride + f];
-                float m = model->means[c * nf + f];
-                float v = model->vars[c * nf + f];
-                float diff = x - m;
-                lp += (double)(-0.5f * logf(2.0f * SCL_ML_NB_PI * v) -
-                                diff * diff / (2.0f * v));
+                float diff = ds->data[i * ds->row_stride + f] - m[f];
+                lp += lt[f] - diff * diff * i2v[f];
             }
-            model->lp_buffer[c] = (float)lp;
+            model->lp_buffer[c] = lp;
         }
 
         size_t best = scl_ml_simd.argmax(model->lp_buffer, nc);
@@ -199,7 +235,7 @@ scl_ml_nb_predict(scl_ml_nb_t *model, const scl_ml_dataset_t *ds,
 
 SCL_WARN_UNUSED scl_error_t
 scl_ml_nb_predict_proba(scl_ml_nb_t *model, const scl_ml_dataset_t *ds,
-                         SCL_ML_FLOAT *proba_out) {
+                          SCL_ML_FLOAT *proba_out) {
     if (scl_unlikely(!model || !ds || !proba_out)) return SCL_ERR_NULL_PTR;
     if (scl_unlikely(!model->fitted)) return SCL_ERR_INVALID_STATE;
     if (scl_unlikely(ds->n_cols != model->n_features)) return SCL_ERR_INVALID_ARG;
@@ -213,16 +249,15 @@ scl_ml_nb_predict_proba(scl_ml_nb_t *model, const scl_ml_dataset_t *ds,
             model->lp_buffer[c] = model->class_log_prior[c];
 
         for (size_t c = 0; c < nc; c++) {
-            double lp = (double)model->lp_buffer[c];
+            const SCL_ML_FLOAT *m = &model->means[c * nf];
+            const SCL_ML_FLOAT *lt = &model->log_term[c * nf];
+            const SCL_ML_FLOAT *i2v = &model->inv_2var[c * nf];
+            float lp = model->lp_buffer[c];
             for (size_t f = 0; f < nf; f++) {
-                float x = ds->data[i * ds->row_stride + f];
-                float m = model->means[c * nf + f];
-                float v = model->vars[c * nf + f];
-                float diff = x - m;
-                lp += (double)(-0.5f * logf(2.0f * SCL_ML_NB_PI * v) -
-                                diff * diff / (2.0f * v));
+                float diff = ds->data[i * ds->row_stride + f] - m[f];
+                lp += lt[f] - diff * diff * i2v[f];
             }
-            model->lp_buffer[c] = (float)lp;
+            model->lp_buffer[c] = lp;
         }
 
         scl_ml_simd.softmax(proba_out + i * nc, model->lp_buffer, nc);
@@ -239,9 +274,9 @@ scl_ml_nb_get_n_classes(const scl_ml_nb_t *model) {
 SCL_WARN_UNUSED scl_error_t
 scl_ml_nb_save(const scl_ml_nb_t *model,
                 uint8_t **buf, size_t *len, scl_allocator_t *alloc) {
-    (void)alloc;
     if (scl_unlikely(!model || !buf || !len)) return SCL_ERR_NULL_PTR;
     if (scl_unlikely(!model->fitted)) return SCL_ERR_INVALID_STATE;
+    if (scl_unlikely(!alloc)) alloc = model->alloc ? model->alloc : scl_allocator_default();
 
     scl_ml_serial_header_t hdr;
     hdr.magic     = SCL_ML_MAGIC;
@@ -259,7 +294,7 @@ scl_ml_nb_save(const scl_ml_nb_t *model,
                         nc * sizeof(SCL_ML_FLOAT);
     size_t total = sizeof(hdr) + payload_sz + sizeof(uint32_t);
 
-    uint8_t *buffer = (uint8_t *)calloc(1, total);
+    uint8_t *buffer = (uint8_t *)scl_calloc(alloc, 1, total, alignof(max_align_t));
     if (!buffer) return SCL_ERR_OUT_OF_MEMORY;
 
     memcpy(buffer, &hdr, sizeof(hdr));
@@ -271,7 +306,7 @@ scl_ml_nb_save(const scl_ml_nb_t *model,
     memcpy(buffer + off, model->vars, cv_sz * sizeof(SCL_ML_FLOAT)); off += cv_sz * sizeof(SCL_ML_FLOAT);
     memcpy(buffer + off, model->class_log_prior, nc * sizeof(SCL_ML_FLOAT));
 
-    uint32_t crc = 0;
+    uint32_t crc = scl_ml_crc32c(buffer + sizeof(scl_ml_serial_header_t), payload_sz);
     memcpy(buffer + total - sizeof(uint32_t), &crc, sizeof(crc));
 
     *buf = buffer;
@@ -291,6 +326,15 @@ scl_ml_nb_load(scl_ml_nb_t **model,
     if (scl_unlikely(hdr->magic != SCL_ML_MAGIC || hdr->algo_id != SCL_ML_ALGO_NAIVE_BAYES))
         return SCL_ERR_INVALID_ARG;
 
+    /* Verify payload integrity before any allocation/parsing. */
+    uint32_t stored_crc = 0;
+    memcpy(&stored_crc, buf + len - sizeof(uint32_t), sizeof(uint32_t));
+    uint32_t expected_crc = scl_ml_crc32c(
+        buf + sizeof(scl_ml_serial_header_t),
+        len - sizeof(scl_ml_serial_header_t) - sizeof(uint32_t));
+    if (scl_unlikely(stored_crc != expected_crc))
+        return SCL_ERR_INVALID_ARG;
+
     size_t off = sizeof(*hdr);
     size_t nc = 0, nf = 0;
     memcpy(&nc, buf + off, sizeof(size_t)); off += sizeof(size_t);
@@ -306,13 +350,17 @@ scl_ml_nb_load(scl_ml_nb_t **model,
     m->n_classes = nc;
     m->n_features = nf;
 
-    m->means = (SCL_ML_FLOAT *)calloc(cv_sz, sizeof(SCL_ML_FLOAT));
-    m->vars = (SCL_ML_FLOAT *)calloc(cv_sz, sizeof(SCL_ML_FLOAT));
-    m->class_log_prior = (SCL_ML_FLOAT *)calloc(nc, sizeof(SCL_ML_FLOAT));
-    m->class_labels = (int *)calloc(nc, sizeof(int));
-    m->lp_buffer = (SCL_ML_FLOAT *)calloc(nc, sizeof(SCL_ML_FLOAT));
+    scl_allocator_t *a = m->alloc;
+    m->means = (SCL_ML_FLOAT *)scl_calloc(a, cv_sz, sizeof(SCL_ML_FLOAT), alignof(max_align_t));
+    m->vars = (SCL_ML_FLOAT *)scl_calloc(a, cv_sz, sizeof(SCL_ML_FLOAT), alignof(max_align_t));
+    m->class_log_prior = (SCL_ML_FLOAT *)scl_calloc(a, nc, sizeof(SCL_ML_FLOAT), alignof(max_align_t));
+    m->class_labels = (int *)scl_calloc(a, nc, sizeof(int), alignof(max_align_t));
+    m->lp_buffer = (SCL_ML_FLOAT *)scl_calloc(a, nc, sizeof(SCL_ML_FLOAT), alignof(max_align_t));
+    m->log_term  = (SCL_ML_FLOAT *)scl_calloc(a, cv_sz, sizeof(SCL_ML_FLOAT), alignof(max_align_t));
+    m->inv_2var  = (SCL_ML_FLOAT *)scl_calloc(a, cv_sz, sizeof(SCL_ML_FLOAT), alignof(max_align_t));
     if (!m->means || !m->vars || !m->class_log_prior ||
-        !m->class_labels || !m->lp_buffer) {
+        !m->class_labels || !m->lp_buffer ||
+        !m->log_term || !m->inv_2var) {
         scl_ml_nb_free(m);
         return SCL_ERR_OUT_OF_MEMORY;
     }
@@ -323,6 +371,8 @@ scl_ml_nb_load(scl_ml_nb_t **model,
     memcpy(m->means, buf + off, cv_sz * sizeof(SCL_ML_FLOAT)); off += cv_sz * sizeof(SCL_ML_FLOAT);
     memcpy(m->vars, buf + off, cv_sz * sizeof(SCL_ML_FLOAT)); off += cv_sz * sizeof(SCL_ML_FLOAT);
     memcpy(m->class_log_prior, buf + off, nc * sizeof(SCL_ML_FLOAT));
+
+    scl_ml_nb_precompute_gaussian(m);
 
     m->fitted = 1;
     *model = m;

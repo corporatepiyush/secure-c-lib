@@ -27,18 +27,22 @@
 SCL_WARN_UNUSED scl_error_t
 scl_ml_standard_scaler_new(scl_ml_standard_scaler_t **scaler) {
     if (scl_unlikely(!scaler)) return SCL_ERR_NULL_PTR;
-    *scaler = (scl_ml_standard_scaler_t *)calloc(1, sizeof(scl_ml_standard_scaler_t));
+    scl_allocator_t *alloc = scl_allocator_default();
+    *scaler = (scl_ml_standard_scaler_t *)scl_calloc(
+        alloc, 1, sizeof(scl_ml_standard_scaler_t), alignof(max_align_t));
     if (scl_unlikely(!*scaler)) return SCL_ERR_OUT_OF_MEMORY;
+    (*scaler)->alloc = alloc;
     return SCL_OK;
 }
 
 void
 scl_ml_standard_scaler_free(scl_ml_standard_scaler_t *scaler) {
     if (scl_unlikely(!scaler)) return;
-    free(scaler->mean_);
-    free(scaler->std_);
+    scl_allocator_t *a = scaler->alloc ? scaler->alloc : scl_allocator_default();
+    scl_free(a, scaler->mean_);
+    scl_free(a, scaler->std_);
     memset(scaler, 0, sizeof(*scaler));
-    free(scaler);
+    scl_free(a, scaler);
 }
 
 SCL_WARN_UNUSED scl_error_t
@@ -46,12 +50,13 @@ scl_ml_standard_scaler_fit(scl_ml_standard_scaler_t *scaler,
                             const scl_ml_dataset_t *ds) {
     if (scl_unlikely(!scaler || !ds)) return SCL_ERR_NULL_PTR;
     if (scl_unlikely(!ds->data || ds->n_rows < 1)) return SCL_ERR_INVALID_ARG;
+    scl_allocator_t *a = scaler->alloc ? scaler->alloc : scl_allocator_default();
 
     size_t nf = ds->n_cols;
-    scaler->mean_ = (SCL_ML_FLOAT *)calloc(nf, sizeof(SCL_ML_FLOAT));
-    scaler->std_  = (SCL_ML_FLOAT *)calloc(nf, sizeof(SCL_ML_FLOAT));
+    scaler->mean_ = (SCL_ML_FLOAT *)scl_calloc(a, nf, sizeof(SCL_ML_FLOAT), alignof(max_align_t));
+    scaler->std_  = (SCL_ML_FLOAT *)scl_calloc(a, nf, sizeof(SCL_ML_FLOAT), alignof(max_align_t));
     if (scl_unlikely(!scaler->mean_ || !scaler->std_)) {
-        free(scaler->mean_); free(scaler->std_);
+        scl_free(a, scaler->mean_); scl_free(a, scaler->std_);
         scaler->mean_ = scaler->std_ = NULL;
         return SCL_ERR_OUT_OF_MEMORY;
     }
@@ -126,18 +131,22 @@ scl_ml_standard_scaler_inverse(scl_ml_standard_scaler_t *scaler,
 SCL_WARN_UNUSED scl_error_t
 scl_ml_minmax_scaler_new(scl_ml_minmax_scaler_t **scaler) {
     if (scl_unlikely(!scaler)) return SCL_ERR_NULL_PTR;
-    *scaler = (scl_ml_minmax_scaler_t *)calloc(1, sizeof(scl_ml_minmax_scaler_t));
+    scl_allocator_t *alloc = scl_allocator_default();
+    *scaler = (scl_ml_minmax_scaler_t *)scl_calloc(
+        alloc, 1, sizeof(scl_ml_minmax_scaler_t), alignof(max_align_t));
     if (scl_unlikely(!*scaler)) return SCL_ERR_OUT_OF_MEMORY;
+    (*scaler)->alloc = alloc;
     return SCL_OK;
 }
 
 void
 scl_ml_minmax_scaler_free(scl_ml_minmax_scaler_t *scaler) {
     if (scl_unlikely(!scaler)) return;
-    free(scaler->min_);
-    free(scaler->scale_);
+    scl_allocator_t *a = scaler->alloc ? scaler->alloc : scl_allocator_default();
+    scl_free(a, scaler->min_);
+    scl_free(a, scaler->scale_);
     memset(scaler, 0, sizeof(*scaler));
-    free(scaler);
+    scl_free(a, scaler);
 }
 
 SCL_WARN_UNUSED scl_error_t
@@ -145,12 +154,13 @@ scl_ml_minmax_scaler_fit(scl_ml_minmax_scaler_t *scaler,
                           const scl_ml_dataset_t *ds) {
     if (scl_unlikely(!scaler || !ds)) return SCL_ERR_NULL_PTR;
     if (scl_unlikely(!ds->data || ds->n_rows < 1)) return SCL_ERR_INVALID_ARG;
+    scl_allocator_t *a = scaler->alloc ? scaler->alloc : scl_allocator_default();
 
     size_t nf = ds->n_cols;
-    scaler->min_   = (SCL_ML_FLOAT *)calloc(nf, sizeof(SCL_ML_FLOAT));
-    scaler->scale_ = (SCL_ML_FLOAT *)calloc(nf, sizeof(SCL_ML_FLOAT));
+    scaler->min_   = (SCL_ML_FLOAT *)scl_calloc(a, nf, sizeof(SCL_ML_FLOAT), alignof(max_align_t));
+    scaler->scale_ = (SCL_ML_FLOAT *)scl_calloc(a, nf, sizeof(SCL_ML_FLOAT), alignof(max_align_t));
     if (scl_unlikely(!scaler->min_ || !scaler->scale_)) {
-        free(scaler->min_); free(scaler->scale_);
+        scl_free(a, scaler->min_); scl_free(a, scaler->scale_);
         return SCL_ERR_OUT_OF_MEMORY;
     }
     scaler->n_features = nf;
@@ -159,8 +169,8 @@ scl_ml_minmax_scaler_fit(scl_ml_minmax_scaler_t *scaler,
     for (size_t j = 0; j < nf; j++) {
         scaler->min_[j] = ds->data[j]; /* first row, column j */
     }
-    SCL_ML_FLOAT *max = (SCL_ML_FLOAT *)calloc(nf, sizeof(SCL_ML_FLOAT));
-    if (scl_unlikely(!max)) { free(scaler->min_); free(scaler->scale_); return SCL_ERR_OUT_OF_MEMORY; }
+    SCL_ML_FLOAT *max = (SCL_ML_FLOAT *)scl_calloc(a, nf, sizeof(SCL_ML_FLOAT), alignof(max_align_t));
+    if (scl_unlikely(!max)) { scl_free(a, scaler->min_); scl_free(a, scaler->scale_); return SCL_ERR_OUT_OF_MEMORY; }
     for (size_t j = 0; j < nf; j++)
         max[j] = ds->data[j];
 
@@ -176,7 +186,7 @@ scl_ml_minmax_scaler_fit(scl_ml_minmax_scaler_t *scaler,
         SCL_ML_FLOAT range = max[j] - scaler->min_[j];
         scaler->scale_[j] = range > FLT_MIN ? 1.0f / range : 1.0f;
     }
-    free(max);
+    scl_free(a, max);
 
     scaler->fitted = 1;
     return SCL_OK;

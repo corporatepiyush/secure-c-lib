@@ -43,6 +43,19 @@ typedef struct {
 
 typedef struct scl_ml_tree scl_ml_tree_t;
 
+/* Node layout — exposed so ensembles (RF/GBDT) can lift a trained tree's
+ * nodes with a single memcpy instead of a serialize/deserialize round-trip.
+ * All scalar fields; no pointers → trivially relocatable. */
+typedef struct {
+    int           feature_idx;
+    SCL_ML_FLOAT  threshold;
+    int           left_child;
+    int           right_child;
+    SCL_ML_FLOAT  value;
+    SCL_ML_FLOAT  impurity;
+    size_t        n_samples;
+} scl_ml_tree_node_t;
+
 SCL_WARN_UNUSED scl_error_t
 scl_ml_tree_new(scl_ml_tree_t **model, scl_ml_tree_params_t params);
 
@@ -64,6 +77,11 @@ scl_ml_tree_get_n_nodes(const scl_ml_tree_t *model);
 
 SCL_PURE size_t
 scl_ml_tree_get_n_leaves(const scl_ml_tree_t *model);
+
+/* Direct, zero-copy access to the node array. Valid until the tree is freed
+ * or refit. Returns NULL if not fitted. */
+SCL_PURE const scl_ml_tree_node_t *
+scl_ml_tree_get_nodes(const scl_ml_tree_t *model);
 
 SCL_WARN_UNUSED scl_error_t
 scl_ml_tree_save(const scl_ml_tree_t *model,
