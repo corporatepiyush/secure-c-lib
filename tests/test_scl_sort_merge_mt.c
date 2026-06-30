@@ -31,8 +31,8 @@ static void test_sizes_threads(scl_test_runner_t *tr) {
 
     for (size_t si = 0; si < SCL_ARRAY_SIZE(sizes); si++) {
         size_t n = sizes[si];
-        int *arr = n ? (int *)malloc(n * sizeof(int)) : (int *)malloc(1);
-        int *ref = n ? (int *)malloc(n * sizeof(int)) : (int *)malloc(1);
+        int *arr = (int *)malloc((n ? n : 1) * sizeof(int));
+        int *ref = (int *)malloc((n ? n : 1) * sizeof(int));
         if (!arr || !ref) { SCL_EXPECT_TRUE(tr, 0); free(arr); free(ref); return; }
         for (size_t i = 0; i < n; i++) { arr[i] = (int)(rng() % 1000); ref[i] = arr[i]; }
 

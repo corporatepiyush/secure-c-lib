@@ -81,7 +81,7 @@ INCFLAGS := $(addprefix -I, $(LIBDIRS))
 FUZZSRCS := $(wildcard tests/fuzz/*.c)
 FUZZBINS := $(patsubst %.c, build/%_fuzzbin, $(FUZZSRCS))
 
-.PHONY: all lib test clean check asan tsan ubsan msan fuzz
+.PHONY: all lib test clean check asan tsan ubsan msan fuzz filc llvm
 
 all: lib test
 
@@ -195,6 +195,41 @@ build/%_fuzzbin: %.c $(LIBNAME)
 	$(CC) $(HARDEN_CFLAGS) -g -fsanitize=fuzzer,address $(INCFLAGS) -o $@ $< -L. -lscl $(HARDEN_LDFLAGS) -lm -lpthread
 
 fuzz: $(FUZZBINS)
+
+# ── Fil-C (LLVM memory safety) profile ─────────────────────────
+# Compiles with filclang which inserts invisible capabilities
+# (InvisiCaps) via the GIMSO LLVM pass. Every pointer carries
+# bounds, every load/store is checked, all UB is eliminated.
+# -O3 + LTO offset capability overhead; Fil-C makes stack cookies,
+# FORTIFY, and CFI redundant.
+filc:
+	$(MAKE) clean
+	$(MAKE) lib test CC=filclang \
+		CFLAGS="-std=c17 -Wall -Wextra -Wpedantic -Werror \
+		        -O3 -flto=full \
+		        -funroll-loops -ftree-vectorize -ffp-contract=fast \
+		        -fvisibility=hidden" \
+		LDFLAGS="-flto=full -lm -lpthread" \
+		ML_CFLAGS=""
+
+# ── LLVM (clang) native profile ─────────────────────────────────
+# Maximum security + performance using vanilla clang. Includes
+# stack variable initialization, LTO, and auto-vectorization.
+# Drops Linux-only flags (-fstack-clash-protection, -fcf-protection,
+# -Wl,-z,relro,-z,now) for cross-platform portability.
+llvm:
+	$(MAKE) clean
+	$(MAKE) lib test CC=clang AR=llvm-ar \
+		CFLAGS="-std=c17 -Wall -Wextra -Wpedantic -Werror \
+		        -O3 -flto \
+		        -fstack-protector-strong \
+		        -ftrivial-auto-var-init=pattern \
+		        -D_FORTIFY_SOURCE=2 \
+		        -fvisibility=hidden \
+		        -funroll-loops -ftree-vectorize -ffp-contract=fast \
+		        -Wnull-dereference -Wformat -Wformat-security" \
+		LDFLAGS="-flto -lm -lpthread" \
+		ML_CFLAGS=""
 
 check: asan ubsan
 
