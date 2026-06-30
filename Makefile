@@ -47,6 +47,8 @@ endif
 endif
 
 CFLAGS   = $(HARDEN_CFLAGS)
+# ML-specific flags: -O3, fma contraction, auto-vectorization
+ML_CFLAGS = -O3 -ffp-contract=fast -funroll-loops -ftree-vectorize
 LDFLAGS  = $(HARDEN_LDFLAGS) -lm -lpthread
 ARFLAGS  = rcs
 
@@ -54,9 +56,14 @@ ARFLAGS  = rcs
 LIBDIRS  := $(shell find ./libs -maxdepth 4 -type d -not -path '*/.git/*' | sort -u)
 
 # Sequential library sources (all scl_*.c under libs/, excluding test files)
-LIBSRCS  := $(shell find ./libs -name 'scl_*.c' -not -name 'test_*.c' -not -path '*/.git/*')
+LIBSRCS  := $(shell find ./libs -name 'scl_*.c' -not -name 'test_*.c' -not -path '*/.git/*' -not -path '*/ml/*simd_avx*' -not -path '*/ml/*simd_neon*')
 LIBOBJS  := $(patsubst %.c, build/%.o, $(LIBSRCS))
 LIBNAME  = libscl.a
+
+# ML SIMD target-specific sources (compiled with extra ISA flags but not by default)
+ML_SIMD_SRCS := $(shell find ./libs/ml -name 'scl_ml_simd_avx2.c' -not -path '*/.git/*' 2>/dev/null)
+ML_SIMD_SRCS += $(shell find ./libs/ml -name 'scl_ml_simd_avx512.c' -not -path '*/.git/*' 2>/dev/null)
+ML_SIMD_SRCS += $(shell find ./libs/ml -name 'scl_ml_simd_neon.c' -not -path '*/.git/*' 2>/dev/null)
 
 # Concurrent library sources (all scl_concurrent_*.c under libs/)
 CONC_SRCS := $(shell find ./libs -name 'scl_concurrent_*.c' -not -path '*/.git/*')
@@ -78,9 +85,66 @@ FUZZBINS := $(patsubst %.c, build/%_fuzzbin, $(FUZZSRCS))
 
 all: lib test
 
-build/%.o: %.c libs/common/scl_common.h
+build/%.o: %.c
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) $(INCFLAGS) -I$(dir $<) -c $< -o $@
+	$(CC) $(CFLAGS) $(INCFLAGS) -I$(dir $<) -MMD -MP -c $< -o $@
+
+-include $(patsubst %.o, %.d, $(LIBOBJS))
+
+# ML files get extra optimization flags
+build/libs/ml/%.o: libs/ml/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(ML_CFLAGS) $(INCFLAGS) -Ilibs/ml -I$(dir $<) -MMD -MP -c $< -o $@
+
+-include $(patsubst build/libs/ml/%.o, build/libs/ml/%.d, $(filter build/libs/ml/%.o, $(LIBOBJS)))
+
+build/libs/ml/preprocessing/%.o: libs/ml/preprocessing/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(ML_CFLAGS) $(INCFLAGS) -Ilibs/ml -I$(dir $<) -MMD -MP -c $< -o $@
+
+-include $(patsubst build/libs/ml/preprocessing/%.o, build/libs/ml/preprocessing/%.d, $(filter build/libs/ml/preprocessing/%.o, $(LIBOBJS)))
+
+build/libs/ml/linear_model/%.o: libs/ml/linear_model/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(ML_CFLAGS) $(INCFLAGS) -Ilibs/ml -I$(dir $<) -MMD -MP -c $< -o $@
+
+-include $(patsubst build/libs/ml/linear_model/%.o, build/libs/ml/linear_model/%.d, $(filter build/libs/ml/linear_model/%.o, $(LIBOBJS)))
+
+build/libs/ml/tree/%.o: libs/ml/tree/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(ML_CFLAGS) $(INCFLAGS) -Ilibs/ml -I$(dir $<) -MMD -MP -c $< -o $@
+
+-include $(patsubst build/libs/ml/tree/%.o, build/libs/ml/tree/%.d, $(filter build/libs/ml/tree/%.o, $(LIBOBJS)))
+
+build/libs/ml/svm/%.o: libs/ml/svm/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(ML_CFLAGS) $(INCFLAGS) -Ilibs/ml -I$(dir $<) -MMD -MP -c $< -o $@
+
+-include $(patsubst build/libs/ml/svm/%.o, build/libs/ml/svm/%.d, $(filter build/libs/ml/svm/%.o, $(LIBOBJS)))
+
+build/libs/ml/neighbors/%.o: libs/ml/neighbors/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(ML_CFLAGS) $(INCFLAGS) -Ilibs/ml -I$(dir $<) -MMD -MP -c $< -o $@
+
+-include $(patsubst build/libs/ml/neighbors/%.o, build/libs/ml/neighbors/%.d, $(filter build/libs/ml/neighbors/%.o, $(LIBOBJS)))
+
+build/libs/ml/naive_bayes/%.o: libs/ml/naive_bayes/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(ML_CFLAGS) $(INCFLAGS) -Ilibs/ml -I$(dir $<) -MMD -MP -c $< -o $@
+
+-include $(patsubst build/libs/ml/naive_bayes/%.o, build/libs/ml/naive_bayes/%.d, $(filter build/libs/ml/naive_bayes/%.o, $(LIBOBJS)))
+
+build/libs/ml/cluster/%.o: libs/ml/cluster/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(ML_CFLAGS) $(INCFLAGS) -Ilibs/ml -I$(dir $<) -MMD -MP -c $< -o $@
+
+-include $(patsubst build/libs/ml/cluster/%.o, build/libs/ml/cluster/%.d, $(filter build/libs/ml/cluster/%.o, $(LIBOBJS)))
+
+build/libs/ml/decomposition/%.o: libs/ml/decomposition/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(ML_CFLAGS) $(INCFLAGS) -Ilibs/ml -I$(dir $<) -MMD -MP -c $< -o $@
+
+-include $(patsubst build/libs/ml/decomposition/%.o, build/libs/ml/decomposition/%.d, $(filter build/libs/ml/decomposition/%.o, $(LIBOBJS)))
 
 $(LIBNAME): $(LIBOBJS)
 	$(AR) $(ARFLAGS) $@ $^

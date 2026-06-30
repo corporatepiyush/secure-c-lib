@@ -103,7 +103,13 @@ typedef enum {
     SCL_ERR_ALIGNMENT,         /* alignment error */
     SCL_ERR_LOCK,              /* lock acquisition failed */
     SCL_ERR_TIMEOUT,           /* operation timed out */
-    SCL_ERR_DEADLOCK           /* mutex deadlock detected (self-deadlock) */
+    SCL_ERR_DEADLOCK,          /* mutex deadlock detected (self-deadlock) */
+    SCL_ERR_ML_CONVERGENCE,    /* ML solver failed to converge within max_iter */
+    SCL_ERR_ML_SINGULAR,       /* Singular matrix encountered in ML operation */
+    SCL_ERR_ML_NO_SOLUTION,    /* No feasible solution (e.g. empty cluster) */
+    SCL_ERR_ML_EMPTY_CLUSTER,  /* K-Means/GMM centroid with zero assigned points */
+    SCL_ERR_ML_MISSING_DATA,   /* NaN or Inf in input data */
+    SCL_ERR_ML_OVERFLOW        /* Numerical overflow / underflow in ML computation */
 } scl_error_t;
 
 /* ── Error string map ───────────────────────────────────────── */
@@ -129,6 +135,12 @@ static inline const char *scl_error_string(scl_error_t err) {
     case SCL_ERR_LOCK:         return "lock failed";
     case SCL_ERR_TIMEOUT:      return "timeout";
     case SCL_ERR_DEADLOCK:     return "deadlock";
+    case SCL_ERR_ML_CONVERGENCE:  return "ML: solver did not converge";
+    case SCL_ERR_ML_SINGULAR:     return "ML: singular matrix";
+    case SCL_ERR_ML_NO_SOLUTION:  return "ML: no solution found";
+    case SCL_ERR_ML_EMPTY_CLUSTER: return "ML: empty cluster";
+    case SCL_ERR_ML_MISSING_DATA:  return "ML: missing data (NaN/Inf)";
+    case SCL_ERR_ML_OVERFLOW:      return "ML: numerical overflow";
     default:                   return "unknown error";
     }
 }
