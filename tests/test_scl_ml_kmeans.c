@@ -3,6 +3,7 @@
 #include "scl_test.h"
 #include "scl_ml.h"
 #include "cluster/scl_ml_kmeans.h"
+#include "scl_alloc_arena.h"
 #include <string.h>
 #include <math.h>
 
@@ -16,7 +17,7 @@
 
 static void test_kmeans_fit_predict(scl_test_runner_t *tr) {
     scl_test_group("kmeans_fit_predict");
-    scl_allocator_t *a = scl_allocator_default();
+    scl_allocator_t *a = scl_alloc_arena_create(scl_allocator_default(), 1 << 20, 0);
     scl_ml_dataset_t ds;
     /* Two well-separated clusters in 2D */
     SCL_EXPECT_OK(tr, scl_ml_dataset_init(&ds, a, 20, 2));
@@ -36,6 +37,7 @@ static void test_kmeans_fit_predict(scl_test_runner_t *tr) {
     params.n_clusters = 2;
     params.n_init = 3;
     params.random_seed = 42;
+    params.alloc = a;
     scl_ml_kmeans_t *model = NULL;
     SCL_EXPECT_OK(tr, scl_ml_kmeans_new(&model, params));
     SCL_EXPECT_NOT_NULL(tr, model);
@@ -56,19 +58,23 @@ static void test_kmeans_fit_predict(scl_test_runner_t *tr) {
 
     scl_ml_kmeans_free(model);
     scl_ml_dataset_destroy(&ds, a);
+    scl_alloc_arena_destroy(a);
 }
 static void test_kmeans_errors(scl_test_runner_t *tr) {
     scl_test_group("kmeans_errors");
+    scl_allocator_t *a = scl_alloc_arena_create(scl_allocator_default(), 1 << 20, 0);
     scl_ml_kmeans_params_t mep = SCL_ML_KMEANS_PARAMS_DEFAULT();
+    mep.alloc = a;
     SCL_EXPECT_ERROR(tr, scl_ml_kmeans_new(NULL, mep), SCL_ERR_NULL_PTR);
     scl_ml_kmeans_t *m = NULL;
     SCL_EXPECT_OK(tr, scl_ml_kmeans_new(&m, mep));
     SCL_EXPECT_ERROR(tr, scl_ml_kmeans_fit(m, NULL), SCL_ERR_NULL_PTR);
     scl_ml_kmeans_free(m);
+    scl_alloc_arena_destroy(a);
 }
 static void test_kmeans_serialization(scl_test_runner_t *tr) {
     scl_test_group("kmeans_serialization");
-    scl_allocator_t *a = scl_allocator_default();
+    scl_allocator_t *a = scl_alloc_arena_create(scl_allocator_default(), 1 << 20, 0);
     scl_ml_dataset_t ds;
     SCL_EXPECT_OK(tr, scl_ml_dataset_init(&ds, a, 10, 1));
     for (size_t i = 0; i < 5; i++) { ds.data[i * ds.row_stride] = 0.0f; ds.targets[i] = 0.0f; }
@@ -80,6 +86,7 @@ static void test_kmeans_serialization(scl_test_runner_t *tr) {
     params.n_clusters = 2;
     params.n_init = 1;
     params.random_seed = 42;
+    params.alloc = a;
     SCL_EXPECT_OK(tr, scl_ml_kmeans_new(&model, params));
     SCL_EXPECT_OK(tr, scl_ml_kmeans_fit(model, &ds));
 
@@ -106,12 +113,13 @@ static void test_kmeans_serialization(scl_test_runner_t *tr) {
     scl_ml_kmeans_free(loaded);
     scl_free(a, buf);
     scl_ml_dataset_destroy(&ds, a);
+    scl_alloc_arena_destroy(a);
 }
 
 /* ── Edge Cases ───────────────────────────────────────────────*/
 static void test_kmeans_k_equals_n(scl_test_runner_t *tr) {
     scl_test_group("kmeans_k_equals_n");
-    scl_allocator_t *a = scl_allocator_default();
+    scl_allocator_t *a = scl_alloc_arena_create(scl_allocator_default(), 1 << 20, 0);
     scl_ml_dataset_t ds;
     SCL_EXPECT_OK(tr, scl_ml_dataset_init(&ds, a, 5, 2));
     for (size_t i = 0; i < 5; i++) {
@@ -125,6 +133,7 @@ static void test_kmeans_k_equals_n(scl_test_runner_t *tr) {
     params.n_clusters = 5; /* k == n */
     params.n_init = 2;
     params.random_seed = 42;
+    params.alloc = a;
     scl_ml_kmeans_t *model = NULL;
     SCL_EXPECT_OK(tr, scl_ml_kmeans_new(&model, params));
     SCL_EXPECT_OK(tr, scl_ml_kmeans_fit(model, &ds));
@@ -132,11 +141,12 @@ static void test_kmeans_k_equals_n(scl_test_runner_t *tr) {
     SCL_EXPECT_TRUE(tr, scl_ml_kmeans_get_inertia(model) >= 0.0f);
     scl_ml_kmeans_free(model);
     scl_ml_dataset_destroy(&ds, a);
+    scl_alloc_arena_destroy(a);
 }
 
 static void test_kmeans_single_point(scl_test_runner_t *tr) {
     scl_test_group("kmeans_single_point");
-    scl_allocator_t *a = scl_allocator_default();
+    scl_allocator_t *a = scl_alloc_arena_create(scl_allocator_default(), 1 << 20, 0);
     scl_ml_dataset_t ds;
     SCL_EXPECT_OK(tr, scl_ml_dataset_init(&ds, a, 1, 2));
     ds.data[0] = 5.0f; ds.data[1] = 7.0f; ds.targets[0] = 0.0f;
@@ -145,6 +155,7 @@ static void test_kmeans_single_point(scl_test_runner_t *tr) {
     scl_ml_kmeans_params_t params = SCL_ML_KMEANS_PARAMS_DEFAULT();
     params.n_clusters = 1;
     params.random_seed = 42;
+    params.alloc = a;
     scl_ml_kmeans_t *model = NULL;
     SCL_EXPECT_OK(tr, scl_ml_kmeans_new(&model, params));
     SCL_EXPECT_OK(tr, scl_ml_kmeans_fit(model, &ds));
@@ -154,6 +165,7 @@ static void test_kmeans_single_point(scl_test_runner_t *tr) {
     SCL_EXPECT_EQ_SZ(tr, (size_t)labels[0], 0);
     scl_ml_kmeans_free(model);
     scl_ml_dataset_destroy(&ds, a);
+    scl_alloc_arena_destroy(a);
 }
 
 int main(void) {

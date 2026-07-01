@@ -16,6 +16,7 @@
 
 #include "scl_ml_tree.h"
 #include "scl_ml_simd.h"
+#include "scl_alloc_arena.h"
 #include <string.h>
 #include <math.h>
 #include <float.h>
@@ -34,6 +35,7 @@ typedef struct scl_ml_tree {
     int                  fitted;
     int                  is_classifier;
     scl_allocator_t     *alloc;
+    scl_allocator_t     *scratch;
 } scl_ml_tree_t;
 
 static const size_t SCL_TREE_INIT_CAPACITY = 64;
@@ -358,7 +360,7 @@ scl_ml_tree_grow(
     node->n_samples = n;
 
     node->impurity = scl_ml_compute_impurity(
-        ds->targets, indices, n, tree->is_classifier, tree->n_classes, tree->alloc);
+        ds->targets, indices, n, tree->is_classifier, tree->n_classes, tree->scratch);
 
     int is_leaf = 0;
     if (n < tree->params.min_samples_split ||
@@ -372,7 +374,7 @@ scl_ml_tree_grow(
 
     if (is_leaf) {
         node->value = scl_ml_compute_leaf_value(
-            ds->targets, indices, n, tree->is_classifier, tree->n_classes, tree->alloc);
+            ds->targets, indices, n, tree->is_classifier, tree->n_classes, tree->scratch);
         tree->n_leaves++;
         return 0;
     }
@@ -388,13 +390,13 @@ scl_ml_tree_grow(
         tree->params.min_impurity_decrease,
         node->impurity,
         &best_feature, &best_threshold, &best_reduction,
-        tree->alloc);
+        tree->scratch);
 
     if (ret != 0) return -1;
 
     if (best_feature < 0) {
         node->value = scl_ml_compute_leaf_value(
-            ds->targets, indices, n, tree->is_classifier, tree->n_classes, tree->alloc);
+            ds->targets, indices, n, tree->is_classifier, tree->n_classes, tree->scratch);
         tree->n_leaves++;
         return 0;
     }
@@ -408,10 +410,9 @@ scl_ml_tree_grow(
             n_right++;
     }
 
-    size_t *left_idx = (size_t *)scl_alloc(tree->alloc, n_left * sizeof(size_t), alignof(max_align_t));
-    size_t *right_idx = (size_t *)scl_alloc(tree->alloc, n_right * sizeof(size_t), alignof(max_align_t));
+    size_t *left_idx = (size_t *)scl_alloc(tree->scratch, n_left * sizeof(size_t), alignof(max_align_t));
+    size_t *right_idx = (size_t *)scl_alloc(tree->scratch, n_right * sizeof(size_t), alignof(max_align_t));
     if (!left_idx || !right_idx) {
-        scl_free(tree->alloc, left_idx); scl_free(tree->alloc, right_idx);
         return -1;
     }
 
@@ -431,7 +432,6 @@ scl_ml_tree_grow(
     int left_child = (int)tree->n_nodes;
     if (scl_ml_tree_grow(tree, ds, left_idx, n_left, depth + 1,
                           feature_subset, n_subset) != 0) {
-        scl_free(tree->alloc, left_idx); scl_free(tree->alloc, right_idx);
         return -1;
     }
     node = &tree->nodes[node_idx];
@@ -440,26 +440,26 @@ scl_ml_tree_grow(
     int right_child = (int)tree->n_nodes;
     if (scl_ml_tree_grow(tree, ds, right_idx, n_right, depth + 1,
                           feature_subset, n_subset) != 0) {
-        scl_free(tree->alloc, left_idx); scl_free(tree->alloc, right_idx);
         return -1;
     }
     node = &tree->nodes[node_idx];
     node->right_child = right_child;
 
-    scl_free(tree->alloc, left_idx);
-    scl_free(tree->alloc, right_idx);
     return 0;
 }
 
 SCL_WARN_UNUSED scl_error_t
 scl_ml_tree_new(scl_ml_tree_t **model, scl_ml_tree_params_t params) {
     if (scl_unlikely(!model)) return SCL_ERR_NULL_PTR;
-    scl_allocator_t *alloc = params.alloc ? params.alloc : scl_allocator_default();
+    if (!params.alloc) return SCL_ERR_INVALID_ARG;
+    scl_allocator_t *alloc = params.alloc;
     scl_ml_tree_t *t = (scl_ml_tree_t *)scl_calloc(
         alloc, 1, sizeof(scl_ml_tree_t), alignof(max_align_t));
     if (scl_unlikely(!t)) return SCL_ERR_OUT_OF_MEMORY;
     t->params = params;
     t->alloc  = alloc;
+    t->scratch = scl_alloc_arena_create(alloc, 8192, 0);
+    if (!t->scratch) { scl_free(alloc, t); return SCL_ERR_OUT_OF_MEMORY; }
     *model = t;
     return SCL_OK;
 }
@@ -467,8 +467,9 @@ scl_ml_tree_new(scl_ml_tree_t **model, scl_ml_tree_params_t params) {
 void
 scl_ml_tree_free(scl_ml_tree_t *model) {
     if (scl_unlikely(!model)) return;
-    scl_allocator_t *a = model->alloc ? model->alloc : scl_allocator_default();
+    scl_allocator_t *a = model->alloc;
     scl_free(a, model->nodes);
+    if (model->scratch) scl_alloc_arena_destroy(model->scratch);
     memset(model, 0, sizeof(*model));
     scl_free(a, model);
 }
@@ -482,6 +483,7 @@ scl_ml_tree_fit(scl_ml_tree_t *model, const scl_ml_dataset_t *ds) {
     scl_ml_simd_init();
 
     scl_ml_tree_t *t = model;
+    scl_alloc_arena_reset(t->scratch);
     t->n_features = ds->n_cols;
     t->n_nodes = 0;
     t->n_leaves = 0;
@@ -516,7 +518,7 @@ scl_ml_tree_fit(scl_ml_tree_t *model, const scl_ml_dataset_t *ds) {
         }
     }
 
-    size_t *indices = (size_t *)scl_alloc(t->alloc, ds->n_rows * sizeof(size_t), alignof(max_align_t));
+    size_t *indices = (size_t *)scl_alloc(t->scratch, ds->n_rows * sizeof(size_t), alignof(max_align_t));
     if (!indices) return SCL_ERR_OUT_OF_MEMORY;
     for (size_t i = 0; i < ds->n_rows; i++)
         indices[i] = i;
@@ -526,16 +528,13 @@ scl_ml_tree_fit(scl_ml_tree_t *model, const scl_ml_dataset_t *ds) {
     if (n_features_use > t->n_features) n_features_use = t->n_features;
 
     size_t *feature_subset = (size_t *)scl_alloc(
-        t->alloc, n_features_use * sizeof(size_t), alignof(max_align_t));
-    if (!feature_subset) { scl_free(t->alloc, indices); return SCL_ERR_OUT_OF_MEMORY; }
+        t->scratch, n_features_use * sizeof(size_t), alignof(max_align_t));
+    if (!feature_subset) return SCL_ERR_OUT_OF_MEMORY;
     for (size_t i = 0; i < n_features_use; i++)
         feature_subset[i] = i;
 
     int ret = scl_ml_tree_grow(t, ds, indices, ds->n_rows, 0,
                                 feature_subset, n_features_use);
-
-    scl_free(t->alloc, feature_subset);
-    scl_free(t->alloc, indices);
 
     if (ret != 0) {
         scl_free(t->alloc, t->nodes);
@@ -598,7 +597,7 @@ scl_ml_tree_save(const scl_ml_tree_t *model,
                   uint8_t **buf, size_t *len, scl_allocator_t *alloc) {
     if (scl_unlikely(!model || !buf || !len)) return SCL_ERR_NULL_PTR;
     if (scl_unlikely(!model->fitted)) return SCL_ERR_INVALID_STATE;
-    if (scl_unlikely(!alloc)) alloc = model->alloc ? model->alloc : scl_allocator_default();
+    if (scl_unlikely(!alloc)) return SCL_ERR_NULL_PTR;
 
     size_t nodes_bytes = model->n_nodes * sizeof(scl_ml_tree_node_t);
 

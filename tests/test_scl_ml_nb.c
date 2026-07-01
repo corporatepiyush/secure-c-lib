@@ -4,6 +4,7 @@
 #include "scl_ml.h"
 #include "naive_bayes/scl_ml_nb.h"
 #include "preprocessing/scl_ml_metrics.h"
+#include "scl_alloc_arena.h"
 #include <string.h>
 #include <math.h>
 
@@ -17,7 +18,7 @@
 
 static void test_nb_fit_predict(scl_test_runner_t *tr) {
     scl_test_group("nb_fit_predict");
-    scl_allocator_t *a = scl_allocator_default();
+    scl_allocator_t *a = scl_alloc_arena_create(scl_allocator_default(), 1 << 20, 0);
     scl_ml_dataset_t ds;
     /* 3 classes, 2 features: each class cluster at (c*10, c*10) */
     SCL_EXPECT_OK(tr, scl_ml_dataset_init(&ds, a, 15, 2));
@@ -32,6 +33,7 @@ static void test_nb_fit_predict(scl_test_runner_t *tr) {
     SCL_EXPECT_OK(tr, scl_ml_dataset_prepare(&ds, a));
 
     scl_ml_nb_params_t params = SCL_ML_NB_PARAMS_DEFAULT();
+    params.alloc = a;
     scl_ml_nb_t *model = NULL;
     SCL_EXPECT_OK(tr, scl_ml_nb_new(&model, params));
     SCL_EXPECT_NOT_NULL(tr, model);
@@ -45,10 +47,11 @@ static void test_nb_fit_predict(scl_test_runner_t *tr) {
 
     scl_ml_nb_free(model);
     scl_ml_dataset_destroy(&ds, a);
+    scl_alloc_arena_destroy(a);
 }
 static void test_nb_predict_proba(scl_test_runner_t *tr) {
     scl_test_group("nb_predict_proba");
-    scl_allocator_t *a = scl_allocator_default();
+    scl_allocator_t *a = scl_alloc_arena_create(scl_allocator_default(), 1 << 20, 0);
     scl_ml_dataset_t ds;
     SCL_EXPECT_OK(tr, scl_ml_dataset_init(&ds, a, 6, 1));
     for (size_t i = 0; i < 2; i++) { ds.data[i * ds.row_stride] = 0.0f; ds.targets[i] = 0.0f; }
@@ -57,6 +60,7 @@ static void test_nb_predict_proba(scl_test_runner_t *tr) {
     SCL_EXPECT_OK(tr, scl_ml_dataset_prepare(&ds, a));
 
     scl_ml_nb_params_t params = SCL_ML_NB_PARAMS_DEFAULT();
+    params.alloc = a;
     scl_ml_nb_t *model = NULL;
     SCL_EXPECT_OK(tr, scl_ml_nb_new(&model, params));
     SCL_EXPECT_OK(tr, scl_ml_nb_fit(model, &ds));
@@ -70,19 +74,23 @@ static void test_nb_predict_proba(scl_test_runner_t *tr) {
 
     scl_ml_nb_free(model);
     scl_ml_dataset_destroy(&ds, a);
+    scl_alloc_arena_destroy(a);
 }
 static void test_nb_errors(scl_test_runner_t *tr) {
     scl_test_group("nb_errors");
+    scl_allocator_t *a = scl_alloc_arena_create(scl_allocator_default(), 1 << 20, 0);
     scl_ml_nb_params_t nep = SCL_ML_NB_PARAMS_DEFAULT();
+    nep.alloc = a;
     SCL_EXPECT_ERROR(tr, scl_ml_nb_new(NULL, nep), SCL_ERR_NULL_PTR);
     scl_ml_nb_t *m = NULL;
     SCL_EXPECT_OK(tr, scl_ml_nb_new(&m, nep));
     SCL_EXPECT_ERROR(tr, scl_ml_nb_fit(m, NULL), SCL_ERR_NULL_PTR);
     scl_ml_nb_free(m);
+    scl_alloc_arena_destroy(a);
 }
 static void test_nb_serialization(scl_test_runner_t *tr) {
     scl_test_group("nb_serialization");
-    scl_allocator_t *a = scl_allocator_default();
+    scl_allocator_t *a = scl_alloc_arena_create(scl_allocator_default(), 1 << 20, 0);
     scl_ml_dataset_t ds;
     SCL_EXPECT_OK(tr, scl_ml_dataset_init(&ds, a, 6, 1));
     for (size_t i = 0; i < 3; i++) { ds.data[i * ds.row_stride] = 0.0f; ds.targets[i] = 0.0f; }
@@ -90,6 +98,7 @@ static void test_nb_serialization(scl_test_runner_t *tr) {
     SCL_EXPECT_OK(tr, scl_ml_dataset_prepare(&ds, a));
 
     scl_ml_nb_params_t np = SCL_ML_NB_PARAMS_DEFAULT();
+    np.alloc = a;
     scl_ml_nb_t *model = NULL;
     SCL_EXPECT_OK(tr, scl_ml_nb_new(&model, np));
     SCL_EXPECT_OK(tr, scl_ml_nb_fit(model, &ds));
@@ -102,8 +111,10 @@ static void test_nb_serialization(scl_test_runner_t *tr) {
     SCL_EXPECT_TRUE(tr, len > 0);
     scl_ml_nb_free(model);
 
+    scl_ml_nb_params_t np2 = SCL_ML_NB_PARAMS_DEFAULT();
+    np2.alloc = a;
     scl_ml_nb_t *loaded = NULL;
-    SCL_EXPECT_OK(tr, scl_ml_nb_load(&loaded, buf, len, np));
+    SCL_EXPECT_OK(tr, scl_ml_nb_load(&loaded, buf, len, np2));
     SCL_EXPECT_NOT_NULL(tr, loaded);
     SCL_EXPECT_EQ_SZ(tr, scl_ml_nb_get_n_classes(loaded), 2);
 
@@ -114,6 +125,7 @@ static void test_nb_serialization(scl_test_runner_t *tr) {
     scl_ml_nb_free(loaded);
     scl_free(a, buf);
     scl_ml_dataset_destroy(&ds, a);
+    scl_alloc_arena_destroy(a);
 }
 
 int main(void) {

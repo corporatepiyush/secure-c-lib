@@ -4,6 +4,7 @@
 #include "scl_ml.h"
 #include "tree/scl_ml_tree.h"
 #include "preprocessing/scl_ml_metrics.h"
+#include "scl_alloc_arena.h"
 #include <string.h>
 #include <math.h>
 
@@ -17,7 +18,7 @@
 
 static void test_tree_classification(scl_test_runner_t *tr) {
     scl_test_group("tree_classification");
-    scl_allocator_t *a = scl_allocator_default();
+    scl_allocator_t *a = scl_alloc_arena_create(scl_allocator_default(), 1 << 20, 0);
     scl_ml_dataset_t ds;
     SCL_EXPECT_OK(tr, scl_ml_dataset_init(&ds, a, 12, 2));
     /* Class 0: bottom-left, Class 1: top-right */
@@ -36,6 +37,7 @@ static void test_tree_classification(scl_test_runner_t *tr) {
     scl_ml_tree_params_t params = SCL_ML_TREE_PARAMS_DEFAULT();
     params.max_depth = 5;
     params.random_seed = 42;
+    params.alloc = a;
     scl_ml_tree_t *model = NULL;
     SCL_EXPECT_OK(tr, scl_ml_tree_new(&model, params));
     SCL_EXPECT_NOT_NULL(tr, model);
@@ -51,10 +53,11 @@ static void test_tree_classification(scl_test_runner_t *tr) {
 
     scl_ml_tree_free(model);
     scl_ml_dataset_destroy(&ds, a);
+    scl_alloc_arena_destroy(a);
 }
 static void test_tree_regression(scl_test_runner_t *tr) {
     scl_test_group("tree_regression");
-    scl_allocator_t *a = scl_allocator_default();
+    scl_allocator_t *a = scl_alloc_arena_create(scl_allocator_default(), 1 << 20, 0);
     scl_ml_dataset_t ds;
     SCL_EXPECT_OK(tr, scl_ml_dataset_init(&ds, a, 10, 1));
     for (size_t i = 0; i < 10; i++) {
@@ -66,6 +69,7 @@ static void test_tree_regression(scl_test_runner_t *tr) {
     scl_ml_tree_params_t params = SCL_ML_TREE_PARAMS_DEFAULT();
     params.criterion = SCL_ML_CRITERION_MSE;
     params.max_depth = 4;
+    params.alloc = a;
     scl_ml_tree_t *model = NULL;
     SCL_EXPECT_OK(tr, scl_ml_tree_new(&model, params));
     SCL_EXPECT_OK(tr, scl_ml_tree_fit(model, &ds));
@@ -77,19 +81,23 @@ static void test_tree_regression(scl_test_runner_t *tr) {
 
     scl_ml_tree_free(model);
     scl_ml_dataset_destroy(&ds, a);
+    scl_alloc_arena_destroy(a);
 }
 static void test_tree_errors(scl_test_runner_t *tr) {
     scl_test_group("tree_errors");
+    scl_allocator_t *a = scl_alloc_arena_create(scl_allocator_default(), 1 << 20, 0);
     scl_ml_tree_params_t tep = SCL_ML_TREE_PARAMS_DEFAULT();
+    tep.alloc = a;
     SCL_EXPECT_ERROR(tr, scl_ml_tree_new(NULL, tep), SCL_ERR_NULL_PTR);
     scl_ml_tree_t *m = NULL;
     SCL_EXPECT_OK(tr, scl_ml_tree_new(&m, tep));
     SCL_EXPECT_ERROR(tr, scl_ml_tree_fit(m, NULL), SCL_ERR_NULL_PTR);
     scl_ml_tree_free(m);
+    scl_alloc_arena_destroy(a);
 }
 static void test_tree_serialization(scl_test_runner_t *tr) {
     scl_test_group("tree_serialization");
-    scl_allocator_t *a = scl_allocator_default();
+    scl_allocator_t *a = scl_alloc_arena_create(scl_allocator_default(), 1 << 20, 0);
     scl_ml_dataset_t ds;
     SCL_EXPECT_OK(tr, scl_ml_dataset_init(&ds, a, 10, 1));
     for (size_t i = 0; i < 5; i++) { ds.data[i * ds.row_stride] = 0.0f; ds.targets[i] = 0.0f; }
@@ -97,6 +105,7 @@ static void test_tree_serialization(scl_test_runner_t *tr) {
     SCL_EXPECT_OK(tr, scl_ml_dataset_prepare(&ds, a));
 
     scl_ml_tree_params_t tp = SCL_ML_TREE_PARAMS_DEFAULT();
+    tp.alloc = a;
     scl_ml_tree_t *model = NULL;
     SCL_EXPECT_OK(tr, scl_ml_tree_new(&model, tp));
     SCL_EXPECT_OK(tr, scl_ml_tree_fit(model, &ds));
@@ -111,6 +120,7 @@ static void test_tree_serialization(scl_test_runner_t *tr) {
     scl_ml_tree_free(model);
 
     scl_ml_tree_t *loaded = NULL;
+    tp.alloc = a;
     SCL_EXPECT_OK(tr, scl_ml_tree_load(&loaded, buf, len, tp));
     SCL_EXPECT_NOT_NULL(tr, loaded);
     SCL_EXPECT_EQ_SZ(tr, scl_ml_tree_get_n_nodes(loaded), nn);
@@ -122,12 +132,13 @@ static void test_tree_serialization(scl_test_runner_t *tr) {
     scl_ml_tree_free(loaded);
     scl_free(a, buf);
     scl_ml_dataset_destroy(&ds, a);
+    scl_alloc_arena_destroy(a);
 }
 
 /* ── Edge Cases ───────────────────────────────────────────────*/
 static void test_tree_entropy_criterion(scl_test_runner_t *tr) {
     scl_test_group("tree_entropy");
-    scl_allocator_t *a = scl_allocator_default();
+    scl_allocator_t *a = scl_alloc_arena_create(scl_allocator_default(), 1 << 20, 0);
     scl_ml_dataset_t ds;
     SCL_EXPECT_OK(tr, scl_ml_dataset_init(&ds, a, 12, 2));
     for (size_t i = 0; i < 6; i++) { ds.data[i*ds.row_stride+0]=(SCL_ML_FLOAT)i; ds.data[i*ds.row_stride+1]=(SCL_ML_FLOAT)i; ds.targets[i]=0.0f; }
@@ -136,6 +147,7 @@ static void test_tree_entropy_criterion(scl_test_runner_t *tr) {
     scl_ml_tree_params_t params = SCL_ML_TREE_PARAMS_DEFAULT();
     params.criterion = SCL_ML_CRITERION_ENTROPY;
     params.max_depth = 5; params.random_seed = 42;
+    params.alloc = a;
     scl_ml_tree_t *m = NULL;
     SCL_EXPECT_OK(tr, scl_ml_tree_new(&m, params));
     SCL_EXPECT_OK(tr, scl_ml_tree_fit(m, &ds));
@@ -146,11 +158,12 @@ static void test_tree_entropy_criterion(scl_test_runner_t *tr) {
     SCL_EXPECT_TRUE(tr, acc > 0.99f);
     scl_ml_tree_free(m);
     scl_ml_dataset_destroy(&ds, a);
+    scl_alloc_arena_destroy(a);
 }
 
 static void test_tree_max_depth_zero(scl_test_runner_t *tr) {
     scl_test_group("tree_max_depth_zero");
-    scl_allocator_t *a = scl_allocator_default();
+    scl_allocator_t *a = scl_alloc_arena_create(scl_allocator_default(), 1 << 20, 0);
     scl_ml_dataset_t ds;
     SCL_EXPECT_OK(tr, scl_ml_dataset_init(&ds, a, 10, 2));
     for (size_t i = 0; i < 5; i++) { ds.data[i*ds.row_stride+0]=0.0f; ds.data[i*ds.row_stride+1]=0.0f; ds.targets[i]=0.0f; }
@@ -158,6 +171,7 @@ static void test_tree_max_depth_zero(scl_test_runner_t *tr) {
     SCL_EXPECT_OK(tr, scl_ml_dataset_prepare(&ds, a));
     scl_ml_tree_params_t params = SCL_ML_TREE_PARAMS_DEFAULT();
     params.max_depth = 0; /* stump — single node should be a leaf */
+    params.alloc = a;
     scl_ml_tree_t *m = NULL;
     SCL_EXPECT_OK(tr, scl_ml_tree_new(&m, params));
     SCL_EXPECT_OK(tr, scl_ml_tree_fit(m, &ds));
@@ -165,6 +179,7 @@ static void test_tree_max_depth_zero(scl_test_runner_t *tr) {
     SCL_EXPECT_TRUE(tr, scl_ml_tree_get_n_leaves(m) > 0);
     scl_ml_tree_free(m);
     scl_ml_dataset_destroy(&ds, a);
+    scl_alloc_arena_destroy(a);
 }
 
 int main(void) {

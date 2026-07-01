@@ -5,6 +5,7 @@
 #include "linear_model/scl_ml_logistic.h"
 #include "preprocessing/scl_ml_scaler.h"
 #include "preprocessing/scl_ml_metrics.h"
+#include "scl_alloc_arena.h"
 #include <string.h>
 #include <math.h>
 
@@ -18,7 +19,7 @@
 
 static void test_logistic_fit_predict(scl_test_runner_t *tr) {
     scl_test_group("logistic_fit_predict");
-    scl_allocator_t *a = scl_allocator_default();
+    scl_allocator_t *a = scl_alloc_arena_create(scl_allocator_default(), 1 << 20, 0);
     scl_ml_dataset_t ds;
     /* Binary classification: x<5 -> 0, x>=5 -> 1 */
     SCL_EXPECT_OK(tr, scl_ml_dataset_init(&ds, a, 20, 2));
@@ -35,7 +36,7 @@ static void test_logistic_fit_predict(scl_test_runner_t *tr) {
     SCL_EXPECT_OK(tr, scl_ml_dataset_prepare(&ds, a));
 
     scl_ml_standard_scaler_t *log_scaler = NULL;
-    SCL_EXPECT_OK(tr, scl_ml_standard_scaler_new(&log_scaler));
+    SCL_EXPECT_OK(tr, scl_ml_standard_scaler_new(&log_scaler, a));
     SCL_EXPECT_OK(tr, scl_ml_standard_scaler_fit_transform(log_scaler, &ds));
 
     scl_ml_logistic_params_t params = SCL_ML_LOGISTIC_PARAMS_DEFAULT();
@@ -43,6 +44,7 @@ static void test_logistic_fit_predict(scl_test_runner_t *tr) {
     params.learning_rate = 0.5f;
     params.alpha = 1e-6f;
     params.random_seed = 42;
+    params.alloc = a;
     scl_ml_logistic_t *model = NULL;
     SCL_EXPECT_OK(tr, scl_ml_logistic_new(&model, params));
     SCL_EXPECT_NOT_NULL(tr, model);
@@ -56,10 +58,11 @@ static void test_logistic_fit_predict(scl_test_runner_t *tr) {
     scl_ml_logistic_free(model);
     scl_ml_standard_scaler_free(log_scaler);
     scl_ml_dataset_destroy(&ds, a);
+    scl_alloc_arena_destroy(a);
 }
 static void test_logistic_predict_proba(scl_test_runner_t *tr) {
     scl_test_group("logistic_predict_proba");
-    scl_allocator_t *a = scl_allocator_default();
+    scl_allocator_t *a = scl_alloc_arena_create(scl_allocator_default(), 1 << 20, 0);
     scl_ml_dataset_t ds;
     SCL_EXPECT_OK(tr, scl_ml_dataset_init(&ds, a, 10, 1));
     for (size_t i = 0; i < 5; i++) { ds.data[i * ds.row_stride] = 0.0f; ds.targets[i] = 0.0f; }
@@ -67,7 +70,7 @@ static void test_logistic_predict_proba(scl_test_runner_t *tr) {
     SCL_EXPECT_OK(tr, scl_ml_dataset_prepare(&ds, a));
 
     scl_ml_standard_scaler_t *log_scaler = NULL;
-    SCL_EXPECT_OK(tr, scl_ml_standard_scaler_new(&log_scaler));
+    SCL_EXPECT_OK(tr, scl_ml_standard_scaler_new(&log_scaler, a));
     SCL_EXPECT_OK(tr, scl_ml_standard_scaler_fit_transform(log_scaler, &ds));
 
     scl_ml_logistic_params_t params = SCL_ML_LOGISTIC_PARAMS_DEFAULT();
@@ -75,6 +78,7 @@ static void test_logistic_predict_proba(scl_test_runner_t *tr) {
     params.learning_rate = 0.5f;
     params.alpha = 1e-6f;
     params.random_seed = 42;
+    params.alloc = a;
     scl_ml_logistic_t *model = NULL;
     SCL_EXPECT_OK(tr, scl_ml_logistic_new(&model, params));
     SCL_EXPECT_OK(tr, scl_ml_logistic_fit(model, &ds));
@@ -87,29 +91,36 @@ static void test_logistic_predict_proba(scl_test_runner_t *tr) {
     scl_ml_logistic_free(model);
     scl_ml_standard_scaler_free(log_scaler);
     scl_ml_dataset_destroy(&ds, a);
+    scl_alloc_arena_destroy(a);
 }
 static void test_logistic_getters(scl_test_runner_t *tr) {
     scl_test_group("logistic_getters");
+    scl_allocator_t *a = scl_alloc_arena_create(scl_allocator_default(), 1 << 20, 0);
     scl_ml_logistic_params_t p = SCL_ML_LOGISTIC_PARAMS_DEFAULT();
+    p.alloc = a;
     scl_ml_logistic_t *m = NULL;
     SCL_EXPECT_OK(tr, scl_ml_logistic_new(&m, p));
     SCL_EXPECT_EQ_SZ(tr, scl_ml_logistic_get_n_features(m), 0);
     SCL_ML_NEAR(tr, scl_ml_logistic_get_intercept(m), 0.0f, 1e-5f);
     SCL_EXPECT_NULL(tr, scl_ml_logistic_get_coef(m));
     scl_ml_logistic_free(m);
+    scl_alloc_arena_destroy(a);
 }
 static void test_logistic_errors(scl_test_runner_t *tr) {
     scl_test_group("logistic_errors");
+    scl_allocator_t *a = scl_alloc_arena_create(scl_allocator_default(), 1 << 20, 0);
     scl_ml_logistic_params_t ep = SCL_ML_LOGISTIC_PARAMS_DEFAULT();
+    ep.alloc = a;
     SCL_EXPECT_ERROR(tr, scl_ml_logistic_new(NULL, ep), SCL_ERR_NULL_PTR);
     scl_ml_logistic_t *m = NULL;
     SCL_EXPECT_OK(tr, scl_ml_logistic_new(&m, ep));
     SCL_EXPECT_ERROR(tr, scl_ml_logistic_fit(m, NULL), SCL_ERR_NULL_PTR);
     scl_ml_logistic_free(m);
+    scl_alloc_arena_destroy(a);
 }
 static void test_logistic_serialization(scl_test_runner_t *tr) {
     scl_test_group("logistic_serialization");
-    scl_allocator_t *a = scl_allocator_default();
+    scl_allocator_t *a = scl_alloc_arena_create(scl_allocator_default(), 1 << 20, 0);
     scl_ml_dataset_t ds;
     SCL_EXPECT_OK(tr, scl_ml_dataset_init(&ds, a, 10, 1));
     for (size_t i = 0; i < 5; i++) { ds.data[i * ds.row_stride] = 0.0f; ds.targets[i] = 0.0f; }
@@ -119,6 +130,7 @@ static void test_logistic_serialization(scl_test_runner_t *tr) {
     scl_ml_logistic_params_t params = SCL_ML_LOGISTIC_PARAMS_DEFAULT();
     params.max_iter = 500;
     params.random_seed = 42;
+    params.alloc = a;
     scl_ml_logistic_t *model = NULL;
     SCL_EXPECT_OK(tr, scl_ml_logistic_new(&model, params));
     SCL_EXPECT_OK(tr, scl_ml_logistic_fit(model, &ds));
@@ -131,8 +143,10 @@ static void test_logistic_serialization(scl_test_runner_t *tr) {
     SCL_EXPECT_TRUE(tr, len > 0);
     scl_ml_logistic_free(model);
 
+    scl_ml_logistic_params_t load_params = SCL_ML_LOGISTIC_PARAMS_DEFAULT();
+    load_params.alloc = a;
     scl_ml_logistic_t *loaded = NULL;
-    SCL_EXPECT_OK(tr, scl_ml_logistic_load(&loaded, buf, len, params));
+    SCL_EXPECT_OK(tr, scl_ml_logistic_load(&loaded, buf, len, load_params));
     SCL_EXPECT_NOT_NULL(tr, loaded);
     SCL_ML_NEAR(tr, scl_ml_logistic_get_coef(loaded)[0], coef_orig, 1e-5f);
     SCL_ML_NEAR(tr, scl_ml_logistic_get_intercept(loaded), int_orig, 1e-5f);
@@ -140,6 +154,7 @@ static void test_logistic_serialization(scl_test_runner_t *tr) {
     scl_ml_logistic_free(loaded);
     scl_free(a, buf);
     scl_ml_dataset_destroy(&ds, a);
+    scl_alloc_arena_destroy(a);
 }
 
 int main(void) {

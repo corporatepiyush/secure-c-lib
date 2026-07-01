@@ -16,6 +16,7 @@
 
 #include "scl_ml_logistic.h"
 #include "scl_ml_simd.h"
+#include "scl_alloc_arena.h"
 #include <string.h>
 #include <math.h>
 #include <float.h>
@@ -31,6 +32,7 @@ typedef struct scl_ml_logistic {
     SCL_ML_FLOAT *gradient;
     SCL_ML_FLOAT *pred_buffer;
     scl_allocator_t *alloc;
+    scl_allocator_t *scratch;
 } scl_ml_logistic_t;
 
 static scl_error_t
@@ -123,13 +125,15 @@ scl_ml_logistic_fit_sgd(scl_ml_logistic_t *model, const scl_ml_dataset_t *ds) {
 SCL_WARN_UNUSED scl_error_t
 scl_ml_logistic_new(scl_ml_logistic_t **model, scl_ml_logistic_params_t params) {
     if (scl_unlikely(!model)) return SCL_ERR_NULL_PTR;
-
-    scl_allocator_t *alloc = params.alloc ? params.alloc : scl_allocator_default();
+    if (!params.alloc) return SCL_ERR_INVALID_ARG;
+    scl_allocator_t *alloc = params.alloc;
     scl_ml_logistic_t *m = (scl_ml_logistic_t *)scl_calloc(alloc, 1, sizeof(scl_ml_logistic_t), alignof(max_align_t));
     if (scl_unlikely(!m)) return SCL_ERR_OUT_OF_MEMORY;
 
     m->params = params;
     m->alloc = alloc;
+    m->scratch = scl_alloc_arena_create(alloc, 8192, 0);
+    if (!m->scratch) { scl_free(alloc, m); return SCL_ERR_OUT_OF_MEMORY; }
     *model = m;
     return SCL_OK;
 }
@@ -137,10 +141,11 @@ scl_ml_logistic_new(scl_ml_logistic_t **model, scl_ml_logistic_params_t params) 
 void
 scl_ml_logistic_free(scl_ml_logistic_t *model) {
     if (scl_unlikely(!model)) return;
-    scl_allocator_t *a = model->alloc ? model->alloc : scl_allocator_default();
+    scl_allocator_t *a = model->alloc;
     scl_free(a, model->weights);
     scl_free(a, model->gradient);
     scl_free(a, model->pred_buffer);
+    if (model->scratch) scl_alloc_arena_destroy(model->scratch);
     memset(model, 0, sizeof(*model));
     scl_free(a, model);
 }
@@ -151,6 +156,9 @@ scl_ml_logistic_fit(scl_ml_logistic_t *model, const scl_ml_dataset_t *ds) {
     if (scl_unlikely(!ds->data || ds->n_rows == 0)) return SCL_ERR_INVALID_ARG;
     if (scl_unlikely(scl_ml_dataset_has_missing(ds))) return SCL_ERR_ML_MISSING_DATA;
 
+    scl_ml_simd_init();
+
+    scl_alloc_arena_reset(model->scratch);
     scl_allocator_t *a = model->alloc;
 
     size_t d = ds->n_cols;
@@ -242,7 +250,7 @@ scl_ml_logistic_save(const scl_ml_logistic_t *model,
                       uint8_t **buf, size_t *len, scl_allocator_t *alloc) {
     if (scl_unlikely(!model || !buf || !len)) return SCL_ERR_NULL_PTR;
     if (scl_unlikely(!model->fitted)) return SCL_ERR_INVALID_STATE;
-    if (scl_unlikely(!alloc)) alloc = scl_allocator_default();
+    if (scl_unlikely(!alloc)) return SCL_ERR_NULL_PTR;
 
     size_t weights_bytes = model->n_features * sizeof(SCL_ML_FLOAT);
     scl_ml_serial_header_t hdr;

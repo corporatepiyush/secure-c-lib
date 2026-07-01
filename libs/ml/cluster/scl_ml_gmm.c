@@ -16,6 +16,7 @@
 
 #include "scl_ml_gmm.h"
 #include "scl_ml_simd.h"
+#include "scl_alloc_arena.h"
 #include <string.h>
 #include <math.h>
 #include <float.h>
@@ -36,6 +37,7 @@ typedef struct scl_ml_gmm {
     SCL_ML_FLOAT  log_likelihood_;
     int           fitted;
     scl_allocator_t *alloc;
+    scl_allocator_t *scratch;
 } scl_ml_gmm_t;
 
 /* Deterministic, thread-safe local PRNG (xorshift32) — replaces the global
@@ -64,7 +66,6 @@ scl_ml_gmm_init_kmeans(scl_ml_gmm_t *model, const scl_ml_dataset_t *ds) {
     size_t d = ds->n_cols;
     size_t K = model->n_components;
     size_t stride = ds->row_stride;
-    scl_allocator_t *a = model->alloc;
 
     uint32_t rng = (uint32_t)model->params.random_seed;
     if (rng == 0) rng = 0x9E3779B9u;
@@ -74,7 +75,7 @@ scl_ml_gmm_init_kmeans(scl_ml_gmm_t *model, const scl_ml_dataset_t *ds) {
     for (size_t j = 0; j < d; j++)
         model->means[j] = ds->data[first * stride + j];
 
-    SCL_ML_FLOAT *min_dist = (SCL_ML_FLOAT *)scl_alloc(a, n * sizeof(SCL_ML_FLOAT), alignof(max_align_t));
+    SCL_ML_FLOAT *min_dist = (SCL_ML_FLOAT *)scl_alloc(model->scratch, n * sizeof(SCL_ML_FLOAT), alignof(max_align_t));
     if (!min_dist) return SCL_ERR_OUT_OF_MEMORY;
 
     for (size_t k = 1; k < K; k++) {
@@ -106,13 +107,11 @@ scl_ml_gmm_init_kmeans(scl_ml_gmm_t *model, const scl_ml_dataset_t *ds) {
             model->means[k * d + j] = ds->data[chosen * stride + j];
     }
 
-    scl_free(a, min_dist);
-
     SCL_ML_FLOAT inv_K = 1.0f / (SCL_ML_FLOAT)K;
     for (size_t k = 0; k < K; k++)
         model->weights[k] = inv_K;
 
-    SCL_ML_FLOAT *global_var = (SCL_ML_FLOAT *)scl_calloc(a, d, sizeof(SCL_ML_FLOAT), alignof(max_align_t));
+    SCL_ML_FLOAT *global_var = (SCL_ML_FLOAT *)scl_calloc(model->scratch, d, sizeof(SCL_ML_FLOAT), alignof(max_align_t));
     if (!global_var) return SCL_ERR_OUT_OF_MEMORY;
 
     for (size_t j = 0; j < d; j++) {
@@ -141,18 +140,20 @@ scl_ml_gmm_init_kmeans(scl_ml_gmm_t *model, const scl_ml_dataset_t *ds) {
         model->log_covar_det[k] = (SCL_ML_FLOAT)sum_log;
     }
 
-    scl_free(a, global_var);
     return SCL_OK;
 }
 
 SCL_WARN_UNUSED scl_error_t
 scl_ml_gmm_new(scl_ml_gmm_t **model, scl_ml_gmm_params_t params) {
     if (scl_unlikely(!model)) return SCL_ERR_NULL_PTR;
-
-    scl_allocator_t *alloc = params.alloc ? params.alloc : scl_allocator_default();
+    if (!params.alloc) return SCL_ERR_INVALID_ARG;
+    scl_allocator_t *alloc = params.alloc;
     scl_ml_gmm_t *m = (scl_ml_gmm_t *)scl_calloc(
         alloc, 1, sizeof(scl_ml_gmm_t), alignof(max_align_t));
     if (scl_unlikely(!m)) return SCL_ERR_OUT_OF_MEMORY;
+
+    m->scratch = scl_alloc_arena_create(alloc, 8192, 0);
+    if (!m->scratch) { scl_free(alloc, m); return SCL_ERR_OUT_OF_MEMORY; }
 
     m->params = params;
     m->alloc  = alloc;
@@ -168,13 +169,14 @@ scl_ml_gmm_new(scl_ml_gmm_t **model, scl_ml_gmm_params_t params) {
 void
 scl_ml_gmm_free(scl_ml_gmm_t *model) {
     if (scl_unlikely(!model)) return;
-    scl_allocator_t *a = model->alloc ? model->alloc : scl_allocator_default();
+    scl_allocator_t *a = model->alloc;
     scl_free(a, model->weights);
     scl_free(a, model->means);
     scl_free(a, model->covariances);
     scl_free(a, model->precisions);
     scl_free(a, model->log_covar_det);
     scl_free(a, model->responsibilities);
+    if (model->scratch) scl_alloc_arena_destroy(model->scratch);
     memset(model, 0, sizeof(*model));
     scl_free(a, model);
 }
@@ -194,6 +196,8 @@ scl_ml_gmm_fit(scl_ml_gmm_t *model, const scl_ml_dataset_t *ds) {
 
     if (K > n) K = n;
     if (K == 0) return SCL_ERR_INVALID_ARG;
+
+    scl_alloc_arena_reset(model->scratch);
 
     model->n_features = d;
     model->n_components = K;
@@ -223,9 +227,9 @@ scl_ml_gmm_fit(scl_ml_gmm_t *model, const scl_ml_dataset_t *ds) {
     scl_error_t err = scl_ml_gmm_init_kmeans(model, ds);
     if (scl_unlikely(err != SCL_OK)) return err;
 
-    SCL_ML_FLOAT *sum_x = (SCL_ML_FLOAT *)scl_calloc(a, K * d, sizeof(SCL_ML_FLOAT), alignof(max_align_t));
-    double *N_k = (double *)scl_calloc(a, K, sizeof(double), alignof(max_align_t));
-    if (!sum_x || !N_k) { scl_free(a, sum_x); scl_free(a, N_k); return SCL_ERR_OUT_OF_MEMORY; }
+    SCL_ML_FLOAT *sum_x = (SCL_ML_FLOAT *)scl_calloc(model->scratch, K * d, sizeof(SCL_ML_FLOAT), alignof(max_align_t));
+    double *N_k = (double *)scl_calloc(model->scratch, K, sizeof(double), alignof(max_align_t));
+    if (!sum_x || !N_k) { return SCL_ERR_OUT_OF_MEMORY; }
 
     double prev_log_likelihood = -DBL_MAX;
     int converged = 0;
@@ -335,9 +339,6 @@ scl_ml_gmm_fit(scl_ml_gmm_t *model, const scl_ml_dataset_t *ds) {
         }
     }
 
-    scl_free(a, sum_x);
-    scl_free(a, N_k);
-
     model->log_likelihood_ = (SCL_ML_FLOAT)prev_log_likelihood;
     model->fitted = 1;
     return converged ? SCL_OK : SCL_ERR_ML_CONVERGENCE;
@@ -354,6 +355,8 @@ scl_ml_gmm_predict(scl_ml_gmm_t *model, const scl_ml_dataset_t *ds,
     size_t d = model->n_features;
     size_t K = model->n_components;
     size_t stride = ds->row_stride;
+
+    scl_alloc_arena_reset(model->scratch);
 
     for (size_t i = 0; i < n; i++) {
         double best = -DBL_MAX;
@@ -434,7 +437,7 @@ scl_ml_gmm_save(const scl_ml_gmm_t *model,
                  uint8_t **buf, size_t *len, scl_allocator_t *alloc) {
     if (scl_unlikely(!model || !buf || !len)) return SCL_ERR_NULL_PTR;
     if (scl_unlikely(!model->fitted)) return SCL_ERR_INVALID_STATE;
-    if (scl_unlikely(!alloc)) alloc = model->alloc ? model->alloc : scl_allocator_default();
+    if (scl_unlikely(!alloc)) return SCL_ERR_NULL_PTR;
 
     size_t nc = model->n_components;
     size_t d  = model->n_features;

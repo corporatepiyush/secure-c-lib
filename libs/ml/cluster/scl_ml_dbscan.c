@@ -16,6 +16,7 @@
 
 #include "scl_ml_dbscan.h"
 #include "scl_ml_simd.h"
+#include "scl_alloc_arena.h"
 #include <string.h>
 #include <math.h>
 #include <float.h>
@@ -32,6 +33,7 @@ typedef struct scl_ml_dbscan {
     size_t  n_features;
     int     fitted;
     scl_allocator_t *alloc;
+    scl_allocator_t *scratch;
 } scl_ml_dbscan_t;
 
 static size_t
@@ -56,11 +58,14 @@ SCL_WARN_UNUSED scl_error_t
 scl_ml_dbscan_new(scl_ml_dbscan_t **model, scl_ml_dbscan_params_t params)
 {
     if (scl_unlikely(!model)) return SCL_ERR_NULL_PTR;
-
-    scl_allocator_t *alloc = params.alloc ? params.alloc : scl_allocator_default();
+    if (!params.alloc) return SCL_ERR_INVALID_ARG;
+    scl_allocator_t *alloc = params.alloc;
     scl_ml_dbscan_t *m = (scl_ml_dbscan_t *)scl_calloc(
         alloc, 1, sizeof(scl_ml_dbscan_t), alignof(max_align_t));
     if (scl_unlikely(!m)) return SCL_ERR_OUT_OF_MEMORY;
+
+    m->scratch = scl_alloc_arena_create(alloc, 8192, 0);
+    if (!m->scratch) { scl_free(alloc, m); return SCL_ERR_OUT_OF_MEMORY; }
 
     if (params.eps <= 0.0) params.eps = 0.5;
     if (params.min_pts == 0) params.min_pts = 5;
@@ -75,8 +80,9 @@ void
 scl_ml_dbscan_free(scl_ml_dbscan_t *model)
 {
     if (scl_unlikely(!model)) return;
-    scl_allocator_t *a = model->alloc ? model->alloc : scl_allocator_default();
+    scl_allocator_t *a = model->alloc;
     scl_free(a, model->labels);
+    if (model->scratch) scl_alloc_arena_destroy(model->scratch);
     memset(model, 0, sizeof(*model));
     scl_free(a, model);
 }
@@ -95,6 +101,8 @@ scl_ml_dbscan_fit(scl_ml_dbscan_t *model, const scl_ml_dataset_t *ds)
     size_t min_pts = model->params.min_pts;
     float eps_sq = (float)(model->params.eps * model->params.eps);
 
+    scl_alloc_arena_reset(model->scratch);
+
     scl_allocator_t *a = model->alloc;
 
     scl_free(a, model->labels);
@@ -108,10 +116,9 @@ scl_ml_dbscan_fit(scl_ml_dbscan_t *model, const scl_ml_dataset_t *ds)
     for (size_t i = 0; i < n; i++)
         model->labels[i] = SCL_ML_DBSCAN_UNASSIGNED;
 
-    size_t *neighbors = (size_t *)scl_alloc(a, n * sizeof(size_t), alignof(max_align_t));
-    size_t *queue = (size_t *)scl_alloc(a, n * sizeof(size_t), alignof(max_align_t));
+    size_t *neighbors = (size_t *)scl_alloc(model->scratch, n * sizeof(size_t), alignof(max_align_t));
+    size_t *queue = (size_t *)scl_alloc(model->scratch, n * sizeof(size_t), alignof(max_align_t));
     if (!neighbors || !queue) {
-        scl_free(a, neighbors); scl_free(a, queue);
         return SCL_ERR_OUT_OF_MEMORY;
     }
 
@@ -164,8 +171,6 @@ scl_ml_dbscan_fit(scl_ml_dbscan_t *model, const scl_ml_dataset_t *ds)
         }
     }
 
-    scl_free(a, neighbors);
-    scl_free(a, queue);
     model->fitted = 1;
     return SCL_OK;
 }
@@ -178,6 +183,8 @@ scl_ml_dbscan_predict(scl_ml_dbscan_t *model, const scl_ml_dataset_t *ds,
     if (scl_unlikely(!model->fitted)) return SCL_ERR_INVALID_STATE;
     if (scl_unlikely(ds->n_cols != model->n_features)) return SCL_ERR_INVALID_ARG;
     if (scl_unlikely(ds->n_rows != model->n_samples)) return SCL_ERR_INVALID_ARG;
+
+    scl_alloc_arena_reset(model->scratch);
 
     memcpy(y_out, model->labels, model->n_samples * sizeof(int));
     return SCL_OK;
@@ -201,7 +208,7 @@ scl_ml_dbscan_save(const scl_ml_dbscan_t *model,
 {
     if (scl_unlikely(!model || !buf || !len)) return SCL_ERR_NULL_PTR;
     if (scl_unlikely(!model->fitted)) return SCL_ERR_INVALID_STATE;
-    if (scl_unlikely(!alloc)) alloc = model->alloc ? model->alloc : scl_allocator_default();
+    if (scl_unlikely(!alloc)) return SCL_ERR_NULL_PTR;
 
     size_t labels_bytes = model->n_samples * sizeof(int);
 

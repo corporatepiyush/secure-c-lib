@@ -16,6 +16,7 @@
 
 #include "scl_ml_knn.h"
 #include "scl_ml_simd.h"
+#include "scl_alloc_arena.h"
 #include <string.h>
 #include <math.h>
 #include <float.h>
@@ -29,6 +30,7 @@ typedef struct scl_ml_knn {
     size_t        n_features;
     int           fitted;
     scl_allocator_t *alloc;
+    scl_allocator_t *scratch;
 } scl_ml_knn_t;
 
 static SCL_COLD_PATH scl_error_t
@@ -63,8 +65,8 @@ SCL_WARN_UNUSED scl_error_t
 scl_ml_knn_new(scl_ml_knn_t **model, scl_ml_knn_params_t params)
 {
     if (scl_unlikely(!model)) return SCL_ERR_NULL_PTR;
-
-    scl_allocator_t *alloc = params.alloc ? params.alloc : scl_allocator_default();
+    if (!params.alloc) return SCL_ERR_INVALID_ARG;
+    scl_allocator_t *alloc = params.alloc;
     scl_ml_knn_t *m = (scl_ml_knn_t *)scl_calloc(
         alloc, 1, sizeof(scl_ml_knn_t), alignof(max_align_t));
     if (scl_unlikely(!m)) return SCL_ERR_OUT_OF_MEMORY;
@@ -72,6 +74,8 @@ scl_ml_knn_new(scl_ml_knn_t **model, scl_ml_knn_params_t params)
     if (params.k == 0) params.k = 5;
     m->params = params;
     m->alloc  = alloc;
+    m->scratch = scl_alloc_arena_create(alloc, 8192, 0);
+    if (!m->scratch) { scl_free(alloc, m); return SCL_ERR_OUT_OF_MEMORY; }
     *model = m;
     return SCL_OK;
 }
@@ -80,9 +84,10 @@ void
 scl_ml_knn_free(scl_ml_knn_t *model)
 {
     if (scl_unlikely(!model)) return;
-    scl_allocator_t *a = model->alloc ? model->alloc : scl_allocator_default();
+    scl_allocator_t *a = model->alloc;
     scl_free(a, model->train_data);
     scl_free(a, model->train_targets);
+    if (model->scratch) scl_alloc_arena_destroy(model->scratch);
     memset(model, 0, sizeof(*model));
     scl_free(a, model);
 }
@@ -99,6 +104,7 @@ scl_ml_knn_fit(scl_ml_knn_t *model, const scl_ml_dataset_t *ds)
     size_t n = ds->n_rows;
     size_t d = ds->n_cols;
 
+    scl_alloc_arena_reset(model->scratch);
     scl_allocator_t *a = model->alloc;
 
     scl_free(a, model->train_data);
@@ -142,15 +148,14 @@ scl_ml_knn_predict(scl_ml_knn_t *model, const scl_ml_dataset_t *ds,
     if (k > nt) k = nt;
     if (k == 0) { memset(y_out, 0, nq * sizeof(SCL_ML_FLOAT)); return SCL_OK; }
 
-    scl_allocator_t *a = model->alloc;
-    float *dist_row = (float *)scl_alloc(a, nt * sizeof(float), alignof(max_align_t));
-    uint32_t *indices = (uint32_t *)scl_alloc(a, k * sizeof(uint32_t), alignof(max_align_t));
-    float *dists_k = (float *)scl_alloc(a, k * sizeof(float), alignof(max_align_t));
+    scl_alloc_arena_reset(model->scratch);
+    float *dist_row = (float *)scl_alloc(model->scratch, nt * sizeof(float), alignof(max_align_t));
+    uint32_t *indices = (uint32_t *)scl_alloc(model->scratch, k * sizeof(uint32_t), alignof(max_align_t));
+    float *dists_k = (float *)scl_alloc(model->scratch, k * sizeof(float), alignof(max_align_t));
     float seen_labels[32];
     float seen_weights[32];
     int   seen_counts[32];
     if (!dist_row || !indices || !dists_k) {
-        scl_free(a, dist_row); scl_free(a, indices); scl_free(a, dists_k);
         return SCL_ERR_OUT_OF_MEMORY;
     }
 
@@ -223,9 +228,6 @@ scl_ml_knn_predict(scl_ml_knn_t *model, const scl_ml_dataset_t *ds,
         }
     }
 
-    scl_free(a, dist_row);
-    scl_free(a, indices);
-    scl_free(a, dists_k);
     return SCL_OK;
 }
 
@@ -247,7 +249,7 @@ scl_ml_knn_save(const scl_ml_knn_t *model,
 {
     if (scl_unlikely(!model || !buf || !len)) return SCL_ERR_NULL_PTR;
     if (scl_unlikely(!model->fitted)) return SCL_ERR_INVALID_STATE;
-    if (scl_unlikely(!alloc)) alloc = model->alloc ? model->alloc : scl_allocator_default();
+    if (scl_unlikely(!alloc)) return SCL_ERR_NULL_PTR;
 
     size_t data_bytes = model->n_samples * model->n_features * sizeof(SCL_ML_FLOAT);
     size_t tgt_bytes  = model->n_samples * sizeof(SCL_ML_FLOAT);

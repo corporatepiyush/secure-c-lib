@@ -16,6 +16,7 @@
 
 #include "scl_ml_kmeans.h"
 #include "scl_ml_simd.h"
+#include "scl_alloc_arena.h"
 #include <string.h>
 #include <math.h>
 #include <float.h>
@@ -36,6 +37,7 @@ typedef struct scl_ml_kmeans {
     SCL_ML_FLOAT *old_centroids;  /* [k * d] */
     float  *dists;                /* [k] candidate distances */
     scl_allocator_t *alloc;       /* pluggable allocator (arena/slab/tlsf/pool) */
+    scl_allocator_t *scratch;     /* arena for temporary fit/predict allocations */
 } scl_ml_kmeans_t;
 
 static uint32_t
@@ -72,7 +74,7 @@ scl_ml_kmeans_init_pp(scl_ml_kmeans_t *model,
     for (size_t dim = 0; dim < d; dim++)
         model->centroids[0 * d + dim] = data[first * row_stride + dim];
 
-    float *min_dists = (float *)scl_alloc(model->alloc, n * sizeof(float),
+    float *min_dists = (float *)scl_alloc(model->scratch, n * sizeof(float),
                                             alignof(max_align_t));
     if (!min_dists) return SCL_ERR_OUT_OF_MEMORY;
 
@@ -110,7 +112,6 @@ scl_ml_kmeans_init_pp(scl_ml_kmeans_t *model,
         }
     }
 
-    scl_free(model->alloc, min_dists);
     return SCL_OK;
 }
 
@@ -194,11 +195,14 @@ SCL_WARN_UNUSED scl_error_t
 scl_ml_kmeans_new(scl_ml_kmeans_t **model, scl_ml_kmeans_params_t params)
 {
     if (scl_unlikely(!model)) return SCL_ERR_NULL_PTR;
-
-    scl_allocator_t *alloc = params.alloc ? params.alloc : scl_allocator_default();
+    if (!params.alloc) return SCL_ERR_INVALID_ARG;
+    scl_allocator_t *alloc = params.alloc;
     scl_ml_kmeans_t *m = (scl_ml_kmeans_t *)scl_calloc(
         alloc, 1, sizeof(scl_ml_kmeans_t), alignof(max_align_t));
     if (scl_unlikely(!m)) return SCL_ERR_OUT_OF_MEMORY;
+
+    m->scratch = scl_alloc_arena_create(alloc, 8192, 0);
+    if (!m->scratch) { scl_free(alloc, m); return SCL_ERR_OUT_OF_MEMORY; }
 
     if (params.n_clusters == 0) params.n_clusters = 8;
     if (params.max_iter == 0)   params.max_iter = 300;
@@ -214,12 +218,13 @@ void
 scl_ml_kmeans_free(scl_ml_kmeans_t *model)
 {
     if (scl_unlikely(!model)) return;
-    scl_allocator_t *a = model->alloc ? model->alloc : scl_allocator_default();
+    scl_allocator_t *a = model->alloc;
     scl_free(a, model->centroids);
     scl_free(a, model->labels);
     scl_free(a, model->counts);
     scl_free(a, model->old_centroids);
     scl_free(a, model->dists);
+    if (model->scratch) scl_alloc_arena_destroy(model->scratch);
     memset(model, 0, sizeof(*model));
     scl_free(a, model);
 }
@@ -239,6 +244,8 @@ scl_ml_kmeans_fit(scl_ml_kmeans_t *model, const scl_ml_dataset_t *ds)
 
     if (k > n) k = n;
     if (k == 0) return SCL_ERR_INVALID_ARG;
+
+    scl_alloc_arena_reset(model->scratch);
 
     scl_allocator_t *a = model->alloc;
     scl_free(a, model->centroids);
@@ -289,10 +296,9 @@ scl_ml_kmeans_fit(scl_ml_kmeans_t *model, const scl_ml_dataset_t *ds)
             best_inertia = model->inertia;
             if (!best_centroids) {
                 best_centroids = (SCL_ML_FLOAT *)scl_alloc(
-                    a, d * k * sizeof(SCL_ML_FLOAT), alignof(max_align_t));
-                best_labels = (int *)scl_alloc(a, n * sizeof(int), alignof(max_align_t));
+                    model->scratch, d * k * sizeof(SCL_ML_FLOAT), alignof(max_align_t));
+                best_labels = (int *)scl_alloc(model->scratch, n * sizeof(int), alignof(max_align_t));
                 if (!best_centroids || !best_labels) {
-                    scl_free(a, best_centroids); scl_free(a, best_labels);
                     return SCL_ERR_OUT_OF_MEMORY;
                 }
             }
@@ -309,8 +315,6 @@ scl_ml_kmeans_fit(scl_ml_kmeans_t *model, const scl_ml_dataset_t *ds)
         memcpy(model->labels, best_labels,
                n * sizeof(int));
         model->inertia = best_inertia;
-        scl_free(a, best_centroids);
-        scl_free(a, best_labels);
     }
 
     model->fitted = 1;
@@ -329,10 +333,12 @@ scl_ml_kmeans_predict(scl_ml_kmeans_t *model, const scl_ml_dataset_t *ds,
     size_t d = model->n_features;
     size_t k = model->n_clusters;
 
+    scl_alloc_arena_reset(model->scratch);
+
     /* Reuse fit-time scratch dists[] so predict is allocation-free */
     float *dists = model->dists;
     if (scl_unlikely(!dists)) {
-        dists = (float *)scl_alloc(model->alloc, k * sizeof(float),
+        dists = (float *)scl_alloc(model->scratch, k * sizeof(float),
                                     alignof(max_align_t));
         if (!dists) return SCL_ERR_OUT_OF_MEMORY;
     }
@@ -348,7 +354,6 @@ scl_ml_kmeans_predict(scl_ml_kmeans_t *model, const scl_ml_dataset_t *ds,
         y_out[ci] = (int)best;
     }
 
-    if (dists != model->dists) scl_free(model->alloc, dists);
     return SCL_OK;
 }
 
@@ -376,7 +381,7 @@ scl_ml_kmeans_save(const scl_ml_kmeans_t *model,
 {
     if (scl_unlikely(!model || !buf || !len)) return SCL_ERR_NULL_PTR;
     if (scl_unlikely(!model->fitted)) return SCL_ERR_INVALID_STATE;
-    if (scl_unlikely(!alloc)) alloc = model->alloc ? model->alloc : scl_allocator_default();
+    if (scl_unlikely(!alloc)) return SCL_ERR_NULL_PTR;
 
     size_t centroids_bytes = model->n_features * model->n_clusters *
                              sizeof(SCL_ML_FLOAT);

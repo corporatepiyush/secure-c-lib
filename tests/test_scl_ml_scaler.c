@@ -3,6 +3,7 @@
 #include "scl_test.h"
 #include "scl_ml.h"
 #include "preprocessing/scl_ml_scaler.h"
+#include "scl_alloc_arena.h"
 #include <string.h>
 #include <math.h>
 
@@ -16,7 +17,7 @@
 
 static void test_standard_scaler(scl_test_runner_t *tr) {
     scl_test_group("standard_scaler");
-    scl_allocator_t *a = scl_allocator_default();
+    scl_allocator_t *a = scl_alloc_arena_create(scl_allocator_default(), 1 << 20, 0);
     scl_ml_dataset_t ds;
     SCL_EXPECT_OK(tr, scl_ml_dataset_init(&ds, a, 4, 2));
     /* data: col0={1,2,3,4}, col1={2,4,6,8} */
@@ -28,7 +29,7 @@ static void test_standard_scaler(scl_test_runner_t *tr) {
     SCL_EXPECT_OK(tr, scl_ml_dataset_prepare(&ds, a));
 
     scl_ml_standard_scaler_t *scaler = NULL;
-    SCL_EXPECT_OK(tr, scl_ml_standard_scaler_new(&scaler));
+    SCL_EXPECT_OK(tr, scl_ml_standard_scaler_new(&scaler, a));
     SCL_EXPECT_NOT_NULL(tr, scaler);
 
     SCL_EXPECT_OK(tr, scl_ml_standard_scaler_fit(scaler, &ds));
@@ -47,10 +48,11 @@ static void test_standard_scaler(scl_test_runner_t *tr) {
 
     scl_ml_standard_scaler_free(scaler);
     scl_ml_dataset_destroy(&ds, a);
+    scl_alloc_arena_destroy(a);
 }
 static void test_minmax_scaler(scl_test_runner_t *tr) {
     scl_test_group("minmax_scaler");
-    scl_allocator_t *a = scl_allocator_default();
+    scl_allocator_t *a = scl_alloc_arena_create(scl_allocator_default(), 1 << 20, 0);
     scl_ml_dataset_t ds;
     SCL_EXPECT_OK(tr, scl_ml_dataset_init(&ds, a, 4, 1));
     for (size_t i = 0; i < 4; i++) {
@@ -60,7 +62,7 @@ static void test_minmax_scaler(scl_test_runner_t *tr) {
     SCL_EXPECT_OK(tr, scl_ml_dataset_prepare(&ds, a));
 
     scl_ml_minmax_scaler_t *scaler = NULL;
-    SCL_EXPECT_OK(tr, scl_ml_minmax_scaler_new(&scaler));
+    SCL_EXPECT_OK(tr, scl_ml_minmax_scaler_new(&scaler, a));
     SCL_EXPECT_OK(tr, scl_ml_minmax_scaler_fit(scaler, &ds));
     SCL_EXPECT_TRUE(tr, scaler->fitted);
     SCL_ML_NEAR(tr, scaler->min_[0], 0.0f, 1e-5f);
@@ -77,23 +79,26 @@ static void test_minmax_scaler(scl_test_runner_t *tr) {
 
     scl_ml_minmax_scaler_free(scaler);
     scl_ml_dataset_destroy(&ds, a);
+    scl_alloc_arena_destroy(a);
 }
 static void test_scaler_errors(scl_test_runner_t *tr) {
     scl_test_group("scaler_errors");
+    scl_allocator_t *a = scl_alloc_arena_create(scl_allocator_default(), 1 << 20, 0);
     scl_ml_standard_scaler_t *ss = NULL;
     scl_ml_minmax_scaler_t *ms = NULL;
 
-    SCL_EXPECT_ERROR(tr, scl_ml_standard_scaler_new(NULL), SCL_ERR_NULL_PTR);
-    SCL_EXPECT_ERROR(tr, scl_ml_minmax_scaler_new(NULL), SCL_ERR_NULL_PTR);
+    SCL_EXPECT_ERROR(tr, scl_ml_standard_scaler_new(NULL, a), SCL_ERR_NULL_PTR);
+    SCL_EXPECT_ERROR(tr, scl_ml_minmax_scaler_new(NULL, a), SCL_ERR_NULL_PTR);
 
-    SCL_EXPECT_OK(tr, scl_ml_standard_scaler_new(&ss));
-    SCL_EXPECT_OK(tr, scl_ml_minmax_scaler_new(&ms));
+    SCL_EXPECT_OK(tr, scl_ml_standard_scaler_new(&ss, a));
+    SCL_EXPECT_OK(tr, scl_ml_minmax_scaler_new(&ms, a));
 
     SCL_EXPECT_ERROR(tr, scl_ml_standard_scaler_fit(ss, NULL), SCL_ERR_NULL_PTR);
     SCL_EXPECT_ERROR(tr, scl_ml_minmax_scaler_fit(ms, NULL), SCL_ERR_NULL_PTR);
 
     scl_ml_standard_scaler_free(ss);
     scl_ml_minmax_scaler_free(ms);
+    scl_alloc_arena_destroy(a);
 }
 
 int main(void) {

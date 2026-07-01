@@ -4,6 +4,7 @@
 #include "scl_ml.h"
 #include "svm/scl_ml_svm.h"
 #include "preprocessing/scl_ml_metrics.h"
+#include "scl_alloc_arena.h"
 #include <string.h>
 #include <math.h>
 
@@ -17,7 +18,7 @@
 
 static void test_svm_linear(scl_test_runner_t *tr) {
     scl_test_group("svm_linear");
-    scl_allocator_t *a = scl_allocator_default();
+    scl_allocator_t *a = scl_alloc_arena_create(scl_allocator_default(), 1 << 20, 0);
     scl_ml_dataset_t ds;
     SCL_EXPECT_OK(tr, scl_ml_dataset_init(&ds, a, 10, 2));
     for (size_t i = 0; i < 5; i++) {
@@ -37,6 +38,7 @@ static void test_svm_linear(scl_test_runner_t *tr) {
     params.C = 1.0f;
     params.max_iter = 500;
     params.random_seed = 42;
+    params.alloc = a;
     scl_ml_svm_t *model = NULL;
     SCL_EXPECT_OK(tr, scl_ml_svm_new(&model, params));
     SCL_EXPECT_NOT_NULL(tr, model);
@@ -51,10 +53,11 @@ static void test_svm_linear(scl_test_runner_t *tr) {
 
     scl_ml_svm_free(model);
     scl_ml_dataset_destroy(&ds, a);
+    scl_alloc_arena_destroy(a);
 }
 static void test_svm_rbf(scl_test_runner_t *tr) {
     scl_test_group("svm_rbf");
-    scl_allocator_t *a = scl_allocator_default();
+    scl_allocator_t *a = scl_alloc_arena_create(scl_allocator_default(), 1 << 20, 0);
     scl_ml_dataset_t ds;
     /* Non-linear separable pattern */
     SCL_EXPECT_OK(tr, scl_ml_dataset_init(&ds, a, 12, 2));
@@ -77,6 +80,7 @@ static void test_svm_rbf(scl_test_runner_t *tr) {
     params.tol = 1e-3f;
     params.max_iter = 1000;
     params.random_seed = 42;
+    params.alloc = a;
     scl_ml_svm_t *model = NULL;
     SCL_EXPECT_OK(tr, scl_ml_svm_new(&model, params));
     SCL_EXPECT_OK(tr, scl_ml_svm_fit(model, &ds));
@@ -88,19 +92,23 @@ static void test_svm_rbf(scl_test_runner_t *tr) {
 
     scl_ml_svm_free(model);
     scl_ml_dataset_destroy(&ds, a);
+    scl_alloc_arena_destroy(a);
 }
 static void test_svm_errors(scl_test_runner_t *tr) {
     scl_test_group("svm_errors");
+    scl_allocator_t *a = scl_alloc_arena_create(scl_allocator_default(), 1 << 20, 0);
     scl_ml_svm_params_t sep = SCL_ML_SVM_PARAMS_DEFAULT();
+    sep.alloc = a;
     SCL_EXPECT_ERROR(tr, scl_ml_svm_new(NULL, sep), SCL_ERR_NULL_PTR);
     scl_ml_svm_t *m = NULL;
     SCL_EXPECT_OK(tr, scl_ml_svm_new(&m, sep));
     SCL_EXPECT_ERROR(tr, scl_ml_svm_fit(m, NULL), SCL_ERR_NULL_PTR);
     scl_ml_svm_free(m);
+    scl_alloc_arena_destroy(a);
 }
 static void test_svm_serialization(scl_test_runner_t *tr) {
     scl_test_group("svm_serialization");
-    scl_allocator_t *a = scl_allocator_default();
+    scl_allocator_t *a = scl_alloc_arena_create(scl_allocator_default(), 1 << 20, 0);
     scl_ml_dataset_t ds;
     SCL_EXPECT_OK(tr, scl_ml_dataset_init(&ds, a, 10, 1));
     for (size_t i = 0; i < 5; i++) { ds.data[i * ds.row_stride] = 0.0f; ds.targets[i] = -1.0f; }
@@ -113,6 +121,7 @@ static void test_svm_serialization(scl_test_runner_t *tr) {
     params.C = 1.0f;
     params.max_iter = 200;
     params.random_seed = 42;
+    params.alloc = a;
     SCL_EXPECT_OK(tr, scl_ml_svm_new(&model, params));
     SCL_EXPECT_OK(tr, scl_ml_svm_fit(model, &ds));
 
@@ -125,8 +134,10 @@ static void test_svm_serialization(scl_test_runner_t *tr) {
     SCL_EXPECT_TRUE(tr, len > 0);
     scl_ml_svm_free(model);
 
+    scl_ml_svm_params_t load_params = SCL_ML_SVM_PARAMS_DEFAULT();
+    load_params.alloc = a;
     scl_ml_svm_t *loaded = NULL;
-    SCL_EXPECT_OK(tr, scl_ml_svm_load(&loaded, buf, len, params));
+    SCL_EXPECT_OK(tr, scl_ml_svm_load(&loaded, buf, len, load_params));
     SCL_EXPECT_NOT_NULL(tr, loaded);
     SCL_EXPECT_EQ_SZ(tr, scl_ml_svm_get_n_support(loaded), ns);
 
@@ -137,6 +148,7 @@ static void test_svm_serialization(scl_test_runner_t *tr) {
     scl_ml_svm_free(loaded);
     scl_free(a, buf);
     scl_ml_dataset_destroy(&ds, a);
+    scl_alloc_arena_destroy(a);
 }
 
 int main(void) {

@@ -16,6 +16,7 @@
 
 #include "scl_ml_nb.h"
 #include "scl_ml_simd.h"
+#include "scl_alloc_arena.h"
 #include <string.h>
 #include <math.h>
 #include <float.h>
@@ -42,6 +43,7 @@ typedef struct scl_ml_nb {
     SCL_ML_FLOAT *log_term;
     SCL_ML_FLOAT *inv_2var;
     scl_allocator_t *alloc;
+    scl_allocator_t *scratch;
 } scl_ml_nb_t;
 
 static int
@@ -69,14 +71,16 @@ scl_ml_nb_precompute_gaussian(scl_ml_nb_t *model) {
 SCL_WARN_UNUSED scl_error_t
 scl_ml_nb_new(scl_ml_nb_t **model, scl_ml_nb_params_t params) {
     if (scl_unlikely(!model)) return SCL_ERR_NULL_PTR;
-
-    scl_allocator_t *alloc = params.alloc ? params.alloc : scl_allocator_default();
+    if (!params.alloc) return SCL_ERR_INVALID_ARG;
+    scl_allocator_t *alloc = params.alloc;
     scl_ml_nb_t *m = (scl_ml_nb_t *)scl_calloc(
         alloc, 1, sizeof(scl_ml_nb_t), alignof(max_align_t));
     if (scl_unlikely(!m)) return SCL_ERR_OUT_OF_MEMORY;
 
     m->params = params;
     m->alloc  = alloc;
+    m->scratch = scl_alloc_arena_create(alloc, 8192, 0);
+    if (!m->scratch) { scl_free(alloc, m); return SCL_ERR_OUT_OF_MEMORY; }
     *model = m;
     return SCL_OK;
 }
@@ -84,7 +88,7 @@ scl_ml_nb_new(scl_ml_nb_t **model, scl_ml_nb_params_t params) {
 void
 scl_ml_nb_free(scl_ml_nb_t *model) {
     if (scl_unlikely(!model)) return;
-    scl_allocator_t *a = model->alloc ? model->alloc : scl_allocator_default();
+    scl_allocator_t *a = model->alloc;
     scl_free(a, model->means);
     scl_free(a, model->vars);
     scl_free(a, model->class_log_prior);
@@ -92,6 +96,7 @@ scl_ml_nb_free(scl_ml_nb_t *model) {
     scl_free(a, model->lp_buffer);
     scl_free(a, model->log_term);
     scl_free(a, model->inv_2var);
+    if (model->scratch) scl_alloc_arena_destroy(model->scratch);
     memset(model, 0, sizeof(*model));
     scl_free(a, model);
 }
@@ -108,8 +113,10 @@ scl_ml_nb_fit(scl_ml_nb_t *model, const scl_ml_dataset_t *ds) {
     size_t nf = ds->n_cols;
     scl_allocator_t *a = model->alloc;
 
+    scl_alloc_arena_reset(model->scratch);
+
     int n_classes = 0;
-    int *labels = (int *)scl_calloc(a, n, sizeof(int), alignof(max_align_t));
+    int *labels = (int *)scl_calloc(model->scratch, n, sizeof(int), alignof(max_align_t));
     if (!labels) return SCL_ERR_OUT_OF_MEMORY;
 
     for (size_t i = 0; i < n; i++) {
@@ -119,12 +126,11 @@ scl_ml_nb_fit(scl_ml_nb_t *model, const scl_ml_dataset_t *ds) {
     }
 
     if (n_classes < 2) {
-        scl_free(a, labels);
         return SCL_ERR_INVALID_ARG;
     }
 
-    int *counts = (int *)scl_calloc(a, (size_t)n_classes, sizeof(int), alignof(max_align_t));
-    if (!counts) { scl_free(a, labels); return SCL_ERR_OUT_OF_MEMORY; }
+    int *counts = (int *)scl_calloc(model->scratch, (size_t)n_classes, sizeof(int), alignof(max_align_t));
+    if (!counts) { return SCL_ERR_OUT_OF_MEMORY; }
 
     for (size_t i = 0; i < n; i++) {
         int label = (int)ds->targets[i];
@@ -151,7 +157,6 @@ scl_ml_nb_fit(scl_ml_nb_t *model, const scl_ml_dataset_t *ds) {
     if (!model->means || !model->vars || !model->class_log_prior ||
         !model->class_labels || !model->lp_buffer ||
         !model->log_term || !model->inv_2var) {
-        scl_free(a, labels); scl_free(a, counts);
         return SCL_ERR_OUT_OF_MEMORY;
     }
 
@@ -191,9 +196,6 @@ scl_ml_nb_fit(scl_ml_nb_t *model, const scl_ml_dataset_t *ds) {
         model->class_log_prior[c] = logf((float)counts[c] * inv_n);
 
     scl_ml_nb_precompute_gaussian(model);
-
-    scl_free(a, labels);
-    scl_free(a, counts);
 
     model->fitted = 1;
     return SCL_OK;
@@ -276,7 +278,7 @@ scl_ml_nb_save(const scl_ml_nb_t *model,
                 uint8_t **buf, size_t *len, scl_allocator_t *alloc) {
     if (scl_unlikely(!model || !buf || !len)) return SCL_ERR_NULL_PTR;
     if (scl_unlikely(!model->fitted)) return SCL_ERR_INVALID_STATE;
-    if (scl_unlikely(!alloc)) alloc = model->alloc ? model->alloc : scl_allocator_default();
+    if (scl_unlikely(!alloc)) return SCL_ERR_NULL_PTR;
 
     scl_ml_serial_header_t hdr;
     hdr.magic     = SCL_ML_MAGIC;

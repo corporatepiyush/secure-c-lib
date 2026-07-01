@@ -2,6 +2,7 @@
 
 #include "scl_test.h"
 #include "scl_ml.h"
+#include "scl_alloc_arena.h"
 #include <string.h>
 
 /* ── Helpers ─────────────────────────────────────────────────── */
@@ -16,7 +17,7 @@ static void test_dataset_init(scl_test_runner_t *tr) {
     scl_test_group("dataset_init");
     scl_ml_dataset_t ds;
     memset(&ds, 0, sizeof(ds));
-    scl_allocator_t *a = scl_allocator_default();
+    scl_allocator_t *a = scl_alloc_arena_create(scl_allocator_default(), 1 << 20, 0);
     SCL_EXPECT_OK(tr, scl_ml_dataset_init(&ds, a, 10, 3));
     SCL_EXPECT_EQ_SZ(tr, ds.n_rows, 10);
     SCL_EXPECT_EQ_SZ(tr, ds.n_cols, 3);
@@ -25,6 +26,7 @@ static void test_dataset_init(scl_test_runner_t *tr) {
     SCL_EXPECT_TRUE(tr, ds.owns_data);
     SCL_EXPECT_TRUE(tr, ds.owns_targets);
     scl_ml_dataset_destroy(&ds, a);
+    scl_alloc_arena_destroy(a);
 }
 static void test_dataset_wrap(scl_test_runner_t *tr) {
     scl_test_group("dataset_wrap");
@@ -43,7 +45,7 @@ static void test_dataset_wrap(scl_test_runner_t *tr) {
 }
 static void test_dataset_prepare(scl_test_runner_t *tr) {
     scl_test_group("dataset_prepare");
-    scl_allocator_t *a = scl_allocator_default();
+    scl_allocator_t *a = scl_alloc_arena_create(scl_allocator_default(), 1 << 20, 0);
     scl_ml_dataset_t ds;
     SCL_EXPECT_OK(tr, scl_ml_dataset_init(&ds, a, 5, 2));
     for (size_t i = 0; i < 5; i++) {
@@ -54,10 +56,11 @@ static void test_dataset_prepare(scl_test_runner_t *tr) {
     SCL_EXPECT_OK(tr, scl_ml_dataset_prepare(&ds, a));
     SCL_EXPECT_NOT_NULL(tr, ds.data_col);
     scl_ml_dataset_destroy(&ds, a);
+    scl_alloc_arena_destroy(a);
 }
 static void test_dataset_errors(scl_test_runner_t *tr) {
     scl_test_group("dataset_errors");
-    scl_allocator_t *a = scl_allocator_default();
+    scl_allocator_t *a = scl_alloc_arena_create(scl_allocator_default(), 1 << 20, 0);
     scl_ml_dataset_t ds;
 
     SCL_EXPECT_ERROR(tr, scl_ml_dataset_init(NULL, a, 1, 1), SCL_ERR_NULL_PTR);
@@ -67,6 +70,8 @@ static void test_dataset_errors(scl_test_runner_t *tr) {
 
     SCL_EXPECT_ERROR(tr, scl_ml_dataset_wrap(NULL, NULL, NULL, 0, 0), SCL_ERR_NULL_PTR);
     SCL_EXPECT_ERROR(tr, scl_ml_dataset_wrap(&ds, NULL, NULL, 1, 1), SCL_ERR_INVALID_ARG);
+
+    scl_alloc_arena_destroy(a);
 }
 
 int main(void) {

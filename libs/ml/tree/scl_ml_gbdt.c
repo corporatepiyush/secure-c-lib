@@ -17,6 +17,7 @@
 #include "scl_ml_gbdt.h"
 #include "scl_ml_tree.h"
 #include "scl_ml_simd.h"
+#include "scl_alloc_arena.h"
 #include <string.h>
 #include <math.h>
 #include <float.h>
@@ -42,6 +43,7 @@ typedef struct scl_ml_gbdt {
     size_t                      n_features;
     int                         fitted;
     scl_allocator_t            *alloc;
+    scl_allocator_t            *scratch;
 } scl_ml_gbdt_t;
 
 static uint32_t
@@ -58,12 +60,15 @@ scl_ml_gbdt_rand_uniform(uint32_t *state) {
 SCL_WARN_UNUSED scl_error_t
 scl_ml_gbdt_new(scl_ml_gbdt_t **model, scl_ml_gbdt_params_t params) {
     if (scl_unlikely(!model)) return SCL_ERR_NULL_PTR;
-    scl_allocator_t *alloc = params.alloc ? params.alloc : scl_allocator_default();
+    if (!params.alloc) return SCL_ERR_INVALID_ARG;
+    scl_allocator_t *alloc = params.alloc;
     scl_ml_gbdt_t *m = (scl_ml_gbdt_t *)scl_calloc(
         alloc, 1, sizeof(scl_ml_gbdt_t), alignof(max_align_t));
     if (scl_unlikely(!m)) return SCL_ERR_OUT_OF_MEMORY;
     m->params = params;
     m->alloc  = alloc;
+    m->scratch = scl_alloc_arena_create(alloc, 8192, 0);
+    if (!m->scratch) { scl_free(alloc, m); return SCL_ERR_OUT_OF_MEMORY; }
     *model = m;
     return SCL_OK;
 }
@@ -71,10 +76,11 @@ scl_ml_gbdt_new(scl_ml_gbdt_t **model, scl_ml_gbdt_params_t params) {
 void
 scl_ml_gbdt_free(scl_ml_gbdt_t *model) {
     if (scl_unlikely(!model)) return;
-    scl_allocator_t *a = model->alloc ? model->alloc : scl_allocator_default();
+    scl_allocator_t *a = model->alloc;
     for (size_t i = 0; i < model->n_estimators; i++)
         scl_free(a, model->trees[i].nodes);
     scl_free(a, model->trees);
+    if (model->scratch) scl_alloc_arena_destroy(model->scratch);
     memset(model, 0, sizeof(*model));
     scl_free(a, model);
 }
@@ -85,7 +91,11 @@ scl_ml_gbdt_train_regression_tree(
     const scl_ml_dataset_t *ds,
     const SCL_ML_FLOAT *targets_override,
     size_t n_features_total,
-    scl_ml_gbdt_params_t *params) {
+    scl_ml_gbdt_params_t *params,
+    scl_allocator_t *persist_alloc) {
+
+    scl_allocator_t *tree_arena = scl_alloc_arena_create(persist_alloc, 8192, 0);
+    if (!tree_arena) return -1;
 
     scl_ml_tree_params_t tree_params;
     memset(&tree_params, 0, sizeof(tree_params));
@@ -95,6 +105,7 @@ scl_ml_gbdt_train_regression_tree(
     tree_params.criterion = SCL_ML_CRITERION_MSE;
     tree_params.max_features = n_features_total;
     tree_params.min_impurity_decrease = 0.0;
+    tree_params.alloc = tree_arena;
 
     scl_ml_dataset_t tmp_ds;
     memset(&tmp_ds, 0, sizeof(tmp_ds));
@@ -106,11 +117,12 @@ scl_ml_gbdt_train_regression_tree(
 
     scl_ml_tree_t *t = NULL;
     scl_error_t err = scl_ml_tree_new(&t, tree_params);
-    if (err != SCL_OK) return -1;
+    if (err != SCL_OK) { scl_alloc_arena_destroy(tree_arena); return -1; }
 
     err = scl_ml_tree_fit(t, &tmp_ds);
     if (err != SCL_OK) {
         scl_ml_tree_free(t);
+        scl_alloc_arena_destroy(tree_arena);
         return -1;
     }
 
@@ -120,10 +132,11 @@ scl_ml_gbdt_train_regression_tree(
     tree_out->is_classifier = 0;
 
     tree_out->nodes = (scl_ml_gbdt_node_t *)scl_alloc(
-        scl_allocator_default(), tree_out->n_nodes * sizeof(scl_ml_gbdt_node_t),
+        persist_alloc, tree_out->n_nodes * sizeof(scl_ml_gbdt_node_t),
         alignof(max_align_t));
     if (!tree_out->nodes) {
         scl_ml_tree_free(t);
+        scl_alloc_arena_destroy(tree_arena);
         return -1;
     }
 
@@ -132,6 +145,7 @@ scl_ml_gbdt_train_regression_tree(
            tree_out->n_nodes * sizeof(scl_ml_tree_node_t));
 
     scl_ml_tree_free(t);
+    scl_alloc_arena_destroy(tree_arena);
     return 0;
 }
 
@@ -161,6 +175,7 @@ scl_ml_gbdt_fit(scl_ml_gbdt_t *model, const scl_ml_dataset_t *ds) {
     model->n_features = ds->n_cols;
     model->n_estimators = model->params.n_estimators;
     model->fitted = 0;
+    scl_alloc_arena_reset(model->scratch);
 
     double sum_y = 0.0;
     for (size_t i = 0; i < ds->n_rows; i++)
@@ -168,24 +183,25 @@ scl_ml_gbdt_fit(scl_ml_gbdt_t *model, const scl_ml_dataset_t *ds) {
     model->base_score = (SCL_ML_FLOAT)(sum_y / (double)ds->n_rows);
 
     scl_allocator_t *a = model->alloc;
+    scl_allocator_t *s = model->scratch;
 
     SCL_ML_FLOAT *current_pred = (SCL_ML_FLOAT *)scl_calloc(
-        a, ds->n_rows, sizeof(SCL_ML_FLOAT), alignof(max_align_t));
+        s, ds->n_rows, sizeof(SCL_ML_FLOAT), alignof(max_align_t));
     if (!current_pred) return SCL_ERR_OUT_OF_MEMORY;
 
     for (size_t i = 0; i < ds->n_rows; i++)
         current_pred[i] = model->base_score;
 
     SCL_ML_FLOAT *residuals = (SCL_ML_FLOAT *)scl_alloc(
-        a, ds->n_rows * sizeof(SCL_ML_FLOAT), alignof(max_align_t));
-    if (!residuals) { scl_free(a, current_pred); return SCL_ERR_OUT_OF_MEMORY; }
+        s, ds->n_rows * sizeof(SCL_ML_FLOAT), alignof(max_align_t));
+    if (!residuals) return SCL_ERR_OUT_OF_MEMORY;
 
     uint32_t seed = (uint32_t)model->params.random_seed;
     if (seed == (uint32_t)-1) seed = 42;
 
     model->trees = (scl_ml_gbdt_internal_tree_t *)scl_calloc(
         a, model->n_estimators, sizeof(scl_ml_gbdt_internal_tree_t), alignof(max_align_t));
-    if (!model->trees) { scl_free(a, current_pred); scl_free(a, residuals); return SCL_ERR_OUT_OF_MEMORY; }
+    if (!model->trees) return SCL_ERR_OUT_OF_MEMORY;
 
     size_t subsample_n = (size_t)(model->params.subsample * (double)ds->n_rows);
     if (subsample_n < 1) subsample_n = 1;
@@ -203,12 +219,11 @@ scl_ml_gbdt_fit(scl_ml_gbdt_t *model, const scl_ml_dataset_t *ds) {
 
         if (model->params.subsample < 1.0 - 1e-6) {
             size_t *sub_idx = (size_t *)scl_alloc(
-                a, subsample_n * sizeof(size_t), alignof(max_align_t));
+                s, subsample_n * sizeof(size_t), alignof(max_align_t));
             if (!sub_idx) {
                 for (size_t j = 0; j < round; j++)
                     scl_free(a, model->trees[j].nodes);
-                scl_free(a, model->trees); scl_free(a, current_pred);
-                scl_free(a, residuals); return SCL_ERR_OUT_OF_MEMORY;
+                scl_free(a, model->trees); return SCL_ERR_OUT_OF_MEMORY;
             }
 
             uint32_t ls = seed;
@@ -219,15 +234,13 @@ scl_ml_gbdt_fit(scl_ml_gbdt_t *model, const scl_ml_dataset_t *ds) {
             }
 
             SCL_ML_FLOAT *sub_data = (SCL_ML_FLOAT *)scl_alloc(
-                a, subsample_n * ds->n_cols * sizeof(SCL_ML_FLOAT), alignof(max_align_t));
+                s, subsample_n * ds->n_cols * sizeof(SCL_ML_FLOAT), alignof(max_align_t));
             sub_residuals = (SCL_ML_FLOAT *)scl_alloc(
-                a, subsample_n * sizeof(SCL_ML_FLOAT), alignof(max_align_t));
+                s, subsample_n * sizeof(SCL_ML_FLOAT), alignof(max_align_t));
             if (!sub_data || !sub_residuals) {
-                scl_free(a, sub_idx); scl_free(a, sub_data); scl_free(a, sub_residuals);
                 for (size_t j = 0; j < round; j++)
                     scl_free(a, model->trees[j].nodes);
-                scl_free(a, model->trees); scl_free(a, current_pred);
-                scl_free(a, residuals); return SCL_ERR_OUT_OF_MEMORY;
+                scl_free(a, model->trees); return SCL_ERR_OUT_OF_MEMORY;
             }
 
             for (size_t i = 0; i < subsample_n; i++) {
@@ -246,17 +259,12 @@ scl_ml_gbdt_fit(scl_ml_gbdt_t *model, const scl_ml_dataset_t *ds) {
 
             int ret = scl_ml_gbdt_train_regression_tree(
                 &model->trees[round], &subset_ds, sub_residuals,
-                model->n_features, &model->params);
-
-            scl_free(a, sub_idx);
-            scl_free(a, sub_data);
-            scl_free(a, sub_residuals);
+                model->n_features, &model->params, a);
 
             if (ret != 0) {
                 for (size_t j = 0; j <= round; j++)
                     scl_free(a, model->trees[j].nodes);
-                scl_free(a, model->trees); scl_free(a, current_pred);
-                scl_free(a, residuals); return SCL_ERR_OUT_OF_MEMORY;
+                scl_free(a, model->trees); return SCL_ERR_OUT_OF_MEMORY;
             }
         } else {
             subset_ds.data = ds->data;
@@ -267,13 +275,12 @@ scl_ml_gbdt_fit(scl_ml_gbdt_t *model, const scl_ml_dataset_t *ds) {
 
             int ret = scl_ml_gbdt_train_regression_tree(
                 &model->trees[round], &subset_ds, residuals,
-                model->n_features, &model->params);
+                model->n_features, &model->params, a);
 
             if (ret != 0) {
                 for (size_t j = 0; j <= round; j++)
                     scl_free(a, model->trees[j].nodes);
-                scl_free(a, model->trees); scl_free(a, current_pred);
-                scl_free(a, residuals); return SCL_ERR_OUT_OF_MEMORY;
+                scl_free(a, model->trees); return SCL_ERR_OUT_OF_MEMORY;
             }
         }
 
@@ -286,8 +293,6 @@ scl_ml_gbdt_fit(scl_ml_gbdt_t *model, const scl_ml_dataset_t *ds) {
         seed = seed * 1103515245u + 12345u;
     }
 
-    scl_free(a, current_pred);
-    scl_free(a, residuals);
     model->fitted = 1;
     return SCL_OK;
 }
@@ -322,7 +327,7 @@ scl_ml_gbdt_save(const scl_ml_gbdt_t *model,
                   uint8_t **buf, size_t *len, scl_allocator_t *alloc) {
     if (scl_unlikely(!model || !buf || !len)) return SCL_ERR_NULL_PTR;
     if (scl_unlikely(!model->fitted)) return SCL_ERR_INVALID_STATE;
-    if (scl_unlikely(!alloc)) alloc = model->alloc ? model->alloc : scl_allocator_default();
+    if (scl_unlikely(!alloc)) return SCL_ERR_NULL_PTR;
 
     size_t trees_data_sz = 0;
     for (size_t i = 0; i < model->n_estimators; i++) {

@@ -3,6 +3,7 @@
 #include "scl_test.h"
 #include "scl_ml.h"
 #include "cluster/scl_ml_dbscan.h"
+#include "scl_alloc_arena.h"
 #include <string.h>
 #include <math.h>
 
@@ -16,7 +17,7 @@
 
 static void test_dbscan_fit(scl_test_runner_t *tr) {
     scl_test_group("dbscan_fit");
-    scl_allocator_t *a = scl_allocator_default();
+    scl_allocator_t *a = scl_alloc_arena_create(scl_allocator_default(), 1 << 20, 0);
     scl_ml_dataset_t ds;
     /* Two dense clusters + 1 noise point */
     SCL_EXPECT_OK(tr, scl_ml_dataset_init(&ds, a, 9, 2));
@@ -41,6 +42,7 @@ static void test_dbscan_fit(scl_test_runner_t *tr) {
     scl_ml_dbscan_params_t params = SCL_ML_DBSCAN_PARAMS_DEFAULT();
     params.eps = 5.0f;
     params.min_pts = 3;
+    params.alloc = a;
     scl_ml_dbscan_t *model = NULL;
     SCL_EXPECT_OK(tr, scl_ml_dbscan_new(&model, params));
     SCL_EXPECT_NOT_NULL(tr, model);
@@ -60,10 +62,11 @@ static void test_dbscan_fit(scl_test_runner_t *tr) {
 
     scl_ml_dbscan_free(model);
     scl_ml_dataset_destroy(&ds, a);
+    scl_alloc_arena_destroy(a);
 }
 static void test_dbscan_predict(scl_test_runner_t *tr) {
     scl_test_group("dbscan_predict");
-    scl_allocator_t *a = scl_allocator_default();
+    scl_allocator_t *a = scl_alloc_arena_create(scl_allocator_default(), 1 << 20, 0);
     scl_ml_dataset_t ds;
     SCL_EXPECT_OK(tr, scl_ml_dataset_init(&ds, a, 6, 1));
     for (size_t i = 0; i < 3; i++) { ds.data[i * ds.row_stride] = 0.0f; ds.targets[i] = 0; }
@@ -74,6 +77,7 @@ static void test_dbscan_predict(scl_test_runner_t *tr) {
     scl_ml_dbscan_params_t params = SCL_ML_DBSCAN_PARAMS_DEFAULT();
     params.eps = 3.0f;
     params.min_pts = 2;
+    params.alloc = a;
     SCL_EXPECT_OK(tr, scl_ml_dbscan_new(&model, params));
     SCL_EXPECT_OK(tr, scl_ml_dbscan_fit(model, &ds));
 
@@ -85,19 +89,23 @@ static void test_dbscan_predict(scl_test_runner_t *tr) {
 
     scl_ml_dbscan_free(model);
     scl_ml_dataset_destroy(&ds, a);
+    scl_alloc_arena_destroy(a);
 }
 static void test_dbscan_errors(scl_test_runner_t *tr) {
     scl_test_group("dbscan_errors");
+    scl_allocator_t *a = scl_alloc_arena_create(scl_allocator_default(), 1 << 20, 0);
     scl_ml_dbscan_params_t dep = SCL_ML_DBSCAN_PARAMS_DEFAULT();
+    dep.alloc = a;
     SCL_EXPECT_ERROR(tr, scl_ml_dbscan_new(NULL, dep), SCL_ERR_NULL_PTR);
     scl_ml_dbscan_t *m = NULL;
     SCL_EXPECT_OK(tr, scl_ml_dbscan_new(&m, dep));
     SCL_EXPECT_ERROR(tr, scl_ml_dbscan_fit(m, NULL), SCL_ERR_NULL_PTR);
     scl_ml_dbscan_free(m);
+    scl_alloc_arena_destroy(a);
 }
 static void test_dbscan_serialization(scl_test_runner_t *tr) {
     scl_test_group("dbscan_serialization");
-    scl_allocator_t *a = scl_allocator_default();
+    scl_allocator_t *a = scl_alloc_arena_create(scl_allocator_default(), 1 << 20, 0);
     scl_ml_dataset_t ds;
     SCL_EXPECT_OK(tr, scl_ml_dataset_init(&ds, a, 6, 1));
     for (size_t i = 0; i < 3; i++) { ds.data[i * ds.row_stride] = 0.0f; ds.targets[i] = 0; }
@@ -107,6 +115,7 @@ static void test_dbscan_serialization(scl_test_runner_t *tr) {
     scl_ml_dbscan_t *model = NULL;
     scl_ml_dbscan_params_t params = SCL_ML_DBSCAN_PARAMS_DEFAULT();
     params.eps = 3.0f; params.min_pts = 2;
+    params.alloc = a;
     SCL_EXPECT_OK(tr, scl_ml_dbscan_new(&model, params));
     SCL_EXPECT_OK(tr, scl_ml_dbscan_fit(model, &ds));
 
@@ -131,6 +140,7 @@ static void test_dbscan_serialization(scl_test_runner_t *tr) {
     scl_ml_dbscan_free(loaded);
     scl_free(a, buf);
     scl_ml_dataset_destroy(&ds, a);
+    scl_alloc_arena_destroy(a);
 }
 
 int main(void) {

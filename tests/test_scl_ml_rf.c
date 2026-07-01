@@ -4,6 +4,7 @@
 #include "scl_ml.h"
 #include "tree/scl_ml_rf.h"
 #include "preprocessing/scl_ml_metrics.h"
+#include "scl_alloc_arena.h"
 #include <string.h>
 #include <math.h>
 
@@ -17,7 +18,7 @@
 
 static void test_rf_classification(scl_test_runner_t *tr) {
     scl_test_group("rf_classification");
-    scl_allocator_t *a = scl_allocator_default();
+    scl_allocator_t *a = scl_alloc_arena_create(scl_allocator_default(), 1 << 20, 0);
     scl_ml_dataset_t ds;
     SCL_EXPECT_OK(tr, scl_ml_dataset_init(&ds, a, 12, 2));
     for (size_t i = 0; i < 6; i++) {
@@ -36,6 +37,7 @@ static void test_rf_classification(scl_test_runner_t *tr) {
     params.n_estimators = 10;
     params.max_depth = 4;
     params.random_seed = 42;
+    params.alloc = a;
     scl_ml_rf_t *model = NULL;
     SCL_EXPECT_OK(tr, scl_ml_rf_new(&model, params));
     SCL_EXPECT_NOT_NULL(tr, model);
@@ -49,10 +51,11 @@ static void test_rf_classification(scl_test_runner_t *tr) {
 
     scl_ml_rf_free(model);
     scl_ml_dataset_destroy(&ds, a);
+    scl_alloc_arena_destroy(a);
 }
 static void test_rf_regression(scl_test_runner_t *tr) {
     scl_test_group("rf_regression");
-    scl_allocator_t *a = scl_allocator_default();
+    scl_allocator_t *a = scl_alloc_arena_create(scl_allocator_default(), 1 << 20, 0);
     scl_ml_dataset_t ds;
     SCL_EXPECT_OK(tr, scl_ml_dataset_init(&ds, a, 10, 1));
     for (size_t i = 0; i < 10; i++) {
@@ -66,6 +69,7 @@ static void test_rf_regression(scl_test_runner_t *tr) {
     params.max_depth = 4;
     params.criterion = SCL_ML_CRITERION_MSE;
     params.random_seed = 42;
+    params.alloc = a;
     scl_ml_rf_t *model = NULL;
     SCL_EXPECT_OK(tr, scl_ml_rf_new(&model, params));
     SCL_EXPECT_OK(tr, scl_ml_rf_fit(model, &ds));
@@ -77,19 +81,23 @@ static void test_rf_regression(scl_test_runner_t *tr) {
 
     scl_ml_rf_free(model);
     scl_ml_dataset_destroy(&ds, a);
+    scl_alloc_arena_destroy(a);
 }
 static void test_rf_errors(scl_test_runner_t *tr) {
     scl_test_group("rf_errors");
+    scl_allocator_t *a = scl_alloc_arena_create(scl_allocator_default(), 1 << 20, 0);
     scl_ml_rf_params_t rep = SCL_ML_RF_PARAMS_DEFAULT();
+    rep.alloc = a;
     SCL_EXPECT_ERROR(tr, scl_ml_rf_new(NULL, rep), SCL_ERR_NULL_PTR);
     scl_ml_rf_t *m = NULL;
     SCL_EXPECT_OK(tr, scl_ml_rf_new(&m, rep));
     SCL_EXPECT_ERROR(tr, scl_ml_rf_fit(m, NULL), SCL_ERR_NULL_PTR);
     scl_ml_rf_free(m);
+    scl_alloc_arena_destroy(a);
 }
 static void test_rf_serialization(scl_test_runner_t *tr) {
     scl_test_group("rf_serialization");
-    scl_allocator_t *a = scl_allocator_default();
+    scl_allocator_t *a = scl_alloc_arena_create(scl_allocator_default(), 1 << 20, 0);
     scl_ml_dataset_t ds;
     SCL_EXPECT_OK(tr, scl_ml_dataset_init(&ds, a, 10, 1));
     for (size_t i = 0; i < 5; i++) { ds.data[i * ds.row_stride] = 0.0f; ds.targets[i] = 0.0f; }
@@ -100,6 +108,7 @@ static void test_rf_serialization(scl_test_runner_t *tr) {
     scl_ml_rf_params_t params = SCL_ML_RF_PARAMS_DEFAULT();
     params.n_estimators = 5;
     params.random_seed = 42;
+    params.alloc = a;
     SCL_EXPECT_OK(tr, scl_ml_rf_new(&model, params));
     SCL_EXPECT_OK(tr, scl_ml_rf_fit(model, &ds));
 
@@ -112,6 +121,7 @@ static void test_rf_serialization(scl_test_runner_t *tr) {
     scl_ml_rf_free(model);
 
     scl_ml_rf_t *loaded = NULL;
+    params.alloc = a;
     SCL_EXPECT_OK(tr, scl_ml_rf_load(&loaded, buf, len, params));
     SCL_EXPECT_NOT_NULL(tr, loaded);
 
@@ -122,13 +132,14 @@ static void test_rf_serialization(scl_test_runner_t *tr) {
     scl_ml_rf_free(loaded);
     scl_free(a, buf);
     scl_ml_dataset_destroy(&ds, a);
+    scl_alloc_arena_destroy(a);
 }
 
 
 /* ── Edge Cases ───────────────────────────────────────────────*/
 static void test_rf_parallel_determinism(scl_test_runner_t *tr) {
     scl_test_group("rf_parallel_determinism");
-    scl_allocator_t *a = scl_allocator_default();
+    scl_allocator_t *a = scl_alloc_arena_create(scl_allocator_default(), 1 << 20, 0);
     scl_ml_dataset_t ds;
     SCL_EXPECT_OK(tr, scl_ml_dataset_init(&ds, a, 12, 2));
     for (size_t i = 0; i < 6; i++) { ds.data[i*ds.row_stride+0]=(SCL_ML_FLOAT)i; ds.data[i*ds.row_stride+1]=(SCL_ML_FLOAT)i; ds.targets[i]=0.0f; }
@@ -138,6 +149,7 @@ static void test_rf_parallel_determinism(scl_test_runner_t *tr) {
     /* Sequential */
     scl_ml_rf_params_t params = SCL_ML_RF_PARAMS_DEFAULT();
     params.n_estimators = 20; params.n_threads = 1; params.random_seed = 99;
+    params.alloc = a;
     scl_ml_rf_t *seq = NULL;
     SCL_EXPECT_OK(tr, scl_ml_rf_new(&seq, params));
     SCL_EXPECT_OK(tr, scl_ml_rf_fit(seq, &ds));
@@ -157,11 +169,12 @@ static void test_rf_parallel_determinism(scl_test_runner_t *tr) {
 
     scl_ml_rf_free(seq); scl_ml_rf_free(par);
     scl_ml_dataset_destroy(&ds, a);
+    scl_alloc_arena_destroy(a);
 }
 
 static void test_rf_mae_criterion(scl_test_runner_t *tr) {
     scl_test_group("rf_mae_criterion");
-    scl_allocator_t *a = scl_allocator_default();
+    scl_allocator_t *a = scl_alloc_arena_create(scl_allocator_default(), 1 << 20, 0);
     scl_ml_dataset_t ds;
     SCL_EXPECT_OK(tr, scl_ml_dataset_init(&ds, a, 10, 1));
     for (size_t i = 0; i < 10; i++) { ds.data[i*ds.row_stride]=(SCL_ML_FLOAT)i; ds.targets[i]=(SCL_ML_FLOAT)(i*2); }
@@ -169,6 +182,7 @@ static void test_rf_mae_criterion(scl_test_runner_t *tr) {
     scl_ml_rf_params_t params = SCL_ML_RF_PARAMS_DEFAULT();
     params.criterion = SCL_ML_CRITERION_MAE;
     params.n_estimators = 10; params.random_seed = 42;
+    params.alloc = a;
     scl_ml_rf_t *m = NULL;
     SCL_EXPECT_OK(tr, scl_ml_rf_new(&m, params));
     SCL_EXPECT_OK(tr, scl_ml_rf_fit(m, &ds));
@@ -178,6 +192,7 @@ static void test_rf_mae_criterion(scl_test_runner_t *tr) {
     SCL_EXPECT_TRUE(tr, r2 > 0.90f);
     scl_ml_rf_free(m);
     scl_ml_dataset_destroy(&ds, a);
+    scl_alloc_arena_destroy(a);
 }
 
 

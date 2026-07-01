@@ -4,6 +4,7 @@
 #include "scl_ml.h"
 #include "tree/scl_ml_gbdt.h"
 #include "preprocessing/scl_ml_metrics.h"
+#include "scl_alloc_arena.h"
 #include <string.h>
 #include <math.h>
 
@@ -17,7 +18,7 @@
 
 static void test_gbdt_regression(scl_test_runner_t *tr) {
     scl_test_group("gbdt_regression");
-    scl_allocator_t *a = scl_allocator_default();
+    scl_allocator_t *a = scl_alloc_arena_create(scl_allocator_default(), 1 << 20, 0);
     scl_ml_dataset_t ds;
     SCL_EXPECT_OK(tr, scl_ml_dataset_init(&ds, a, 20, 1));
     for (size_t i = 0; i < 20; i++) {
@@ -31,6 +32,7 @@ static void test_gbdt_regression(scl_test_runner_t *tr) {
     params.learning_rate = 0.5f;
     params.max_depth = 3;
     params.random_seed = 42;
+    params.alloc = a;
     scl_ml_gbdt_t *model = NULL;
     SCL_EXPECT_OK(tr, scl_ml_gbdt_new(&model, params));
     SCL_EXPECT_NOT_NULL(tr, model);
@@ -44,19 +46,23 @@ static void test_gbdt_regression(scl_test_runner_t *tr) {
 
     scl_ml_gbdt_free(model);
     scl_ml_dataset_destroy(&ds, a);
+    scl_alloc_arena_destroy(a);
 }
 static void test_gbdt_errors(scl_test_runner_t *tr) {
     scl_test_group("gbdt_errors");
+    scl_allocator_t *a = scl_alloc_arena_create(scl_allocator_default(), 1 << 20, 0);
     scl_ml_gbdt_params_t gep = SCL_ML_GBDT_PARAMS_DEFAULT();
+    gep.alloc = a;
     SCL_EXPECT_ERROR(tr, scl_ml_gbdt_new(NULL, gep), SCL_ERR_NULL_PTR);
     scl_ml_gbdt_t *m = NULL;
     SCL_EXPECT_OK(tr, scl_ml_gbdt_new(&m, gep));
     SCL_EXPECT_ERROR(tr, scl_ml_gbdt_fit(m, NULL), SCL_ERR_NULL_PTR);
     scl_ml_gbdt_free(m);
+    scl_alloc_arena_destroy(a);
 }
 static void test_gbdt_serialization(scl_test_runner_t *tr) {
     scl_test_group("gbdt_serialization");
-    scl_allocator_t *a = scl_allocator_default();
+    scl_allocator_t *a = scl_alloc_arena_create(scl_allocator_default(), 1 << 20, 0);
     scl_ml_dataset_t ds;
     SCL_EXPECT_OK(tr, scl_ml_dataset_init(&ds, a, 10, 1));
     for (size_t i = 0; i < 10; i++) {
@@ -70,6 +76,7 @@ static void test_gbdt_serialization(scl_test_runner_t *tr) {
     params.n_estimators = 10;
     params.max_depth = 2;
     params.random_seed = 42;
+    params.alloc = a;
     SCL_EXPECT_OK(tr, scl_ml_gbdt_new(&model, params));
     SCL_EXPECT_OK(tr, scl_ml_gbdt_fit(model, &ds));
 
@@ -82,6 +89,7 @@ static void test_gbdt_serialization(scl_test_runner_t *tr) {
     scl_ml_gbdt_free(model);
 
     scl_ml_gbdt_t *loaded = NULL;
+    params.alloc = a;
     SCL_EXPECT_OK(tr, scl_ml_gbdt_load(&loaded, buf, len, params));
     SCL_EXPECT_NOT_NULL(tr, loaded);
 
@@ -92,6 +100,7 @@ static void test_gbdt_serialization(scl_test_runner_t *tr) {
     scl_ml_gbdt_free(loaded);
     scl_free(a, buf);
     scl_ml_dataset_destroy(&ds, a);
+    scl_alloc_arena_destroy(a);
 }
 
 int main(void) {

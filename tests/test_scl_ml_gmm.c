@@ -3,6 +3,7 @@
 #include "scl_test.h"
 #include "scl_ml.h"
 #include "cluster/scl_ml_gmm.h"
+#include "scl_alloc_arena.h"
 #include <string.h>
 #include <math.h>
 
@@ -16,7 +17,7 @@
 
 static void test_gmm_fit_predict(scl_test_runner_t *tr) {
     scl_test_group("gmm_fit_predict");
-    scl_allocator_t *a = scl_allocator_default();
+    scl_allocator_t *a = scl_alloc_arena_create(scl_allocator_default(), 1 << 20, 0);
 
     /* Two well-separated clusters in 2D */
     scl_ml_dataset_t ds;
@@ -36,6 +37,7 @@ static void test_gmm_fit_predict(scl_test_runner_t *tr) {
     scl_ml_gmm_params_t params = SCL_ML_GMM_PARAMS_DEFAULT();
     params.n_components = 2;
     params.random_seed = 42;
+    params.alloc = a;
 
     scl_ml_gmm_t *gmm = NULL;
     SCL_EXPECT_OK(tr, scl_ml_gmm_new(&gmm, params));
@@ -57,10 +59,11 @@ static void test_gmm_fit_predict(scl_test_runner_t *tr) {
 
     scl_ml_gmm_free(gmm);
     scl_ml_dataset_destroy(&ds, a);
+    scl_alloc_arena_destroy(a);
 }
 static void test_gmm_predict_proba(scl_test_runner_t *tr) {
     scl_test_group("gmm_predict_proba");
-    scl_allocator_t *a = scl_allocator_default();
+    scl_allocator_t *a = scl_alloc_arena_create(scl_allocator_default(), 1 << 20, 0);
 
     scl_ml_dataset_t ds;
     SCL_EXPECT_OK(tr, scl_ml_dataset_init(&ds, a, 6, 1));
@@ -73,6 +76,7 @@ static void test_gmm_predict_proba(scl_test_runner_t *tr) {
     scl_ml_gmm_params_t params = SCL_ML_GMM_PARAMS_DEFAULT();
     params.n_components = 2;
     params.random_seed = 7;
+    params.alloc = a;
 
     scl_ml_gmm_t *gmm = NULL;
     SCL_EXPECT_OK(tr, scl_ml_gmm_new(&gmm, params));
@@ -87,10 +91,13 @@ static void test_gmm_predict_proba(scl_test_runner_t *tr) {
 
     scl_ml_gmm_free(gmm);
     scl_ml_dataset_destroy(&ds, a);
+    scl_alloc_arena_destroy(a);
 }
 static void test_gmm_errors(scl_test_runner_t *tr) {
     scl_test_group("gmm_errors");
+    scl_allocator_t *a = scl_alloc_arena_create(scl_allocator_default(), 1 << 20, 0);
     scl_ml_gmm_params_t ep = SCL_ML_GMM_PARAMS_DEFAULT();
+    ep.alloc = a;
 
     SCL_EXPECT_ERROR(tr, scl_ml_gmm_new(NULL, ep), SCL_ERR_NULL_PTR);
 
@@ -101,10 +108,11 @@ static void test_gmm_errors(scl_test_runner_t *tr) {
     SCL_EXPECT_ERROR(tr, scl_ml_gmm_predict(gmm, NULL, NULL), SCL_ERR_NULL_PTR);
 
     scl_ml_gmm_free(gmm);
+    scl_alloc_arena_destroy(a);
 }
 static void test_gmm_serialization(scl_test_runner_t *tr) {
     scl_test_group("gmm_serialization");
-    scl_allocator_t *a = scl_allocator_default();
+    scl_allocator_t *a = scl_alloc_arena_create(scl_allocator_default(), 1 << 20, 0);
 
     scl_ml_dataset_t ds;
     SCL_EXPECT_OK(tr, scl_ml_dataset_init(&ds, a, 10, 1));
@@ -116,6 +124,7 @@ static void test_gmm_serialization(scl_test_runner_t *tr) {
     scl_ml_gmm_params_t params = SCL_ML_GMM_PARAMS_DEFAULT();
     params.n_components = 2;
     params.random_seed = 42;
+    params.alloc = a;
 
     scl_ml_gmm_t *gmm = NULL;
     SCL_EXPECT_OK(tr, scl_ml_gmm_new(&gmm, params));
@@ -142,6 +151,7 @@ static void test_gmm_serialization(scl_test_runner_t *tr) {
     scl_ml_gmm_free(loaded);
     scl_free(a, buf);
     scl_ml_dataset_destroy(&ds, a);
+    scl_alloc_arena_destroy(a);
 }
 
 int main(void) {

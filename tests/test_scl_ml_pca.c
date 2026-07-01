@@ -3,6 +3,7 @@
 #include "scl_test.h"
 #include "scl_ml.h"
 #include "decomposition/scl_ml_pca.h"
+#include "scl_alloc_arena.h"
 #include <string.h>
 #include <math.h>
 
@@ -16,7 +17,7 @@
 
 static void test_pca_fit_transform(scl_test_runner_t *tr) {
     scl_test_group("pca_fit_transform");
-    scl_allocator_t *a = scl_allocator_default();
+    scl_allocator_t *a = scl_alloc_arena_create(scl_allocator_default(), 1 << 20, 0);
     scl_ml_dataset_t ds;
     /* 4 points in 3D, actually live on a 2D plane (z = x+y) */
     SCL_EXPECT_OK(tr, scl_ml_dataset_init(&ds, a, 4, 3));
@@ -29,6 +30,7 @@ static void test_pca_fit_transform(scl_test_runner_t *tr) {
 
     scl_ml_pca_params_t params = SCL_ML_PCA_PARAMS_DEFAULT();
     params.n_components = 2;
+    params.alloc = a;
     scl_ml_pca_t *pca = NULL;
     SCL_EXPECT_OK(tr, scl_ml_pca_new(&pca, params));
     SCL_EXPECT_NOT_NULL(tr, pca);
@@ -53,10 +55,11 @@ static void test_pca_fit_transform(scl_test_runner_t *tr) {
 
     scl_ml_pca_free(pca);
     scl_ml_dataset_destroy(&ds, a);
+    scl_alloc_arena_destroy(a);
 }
 static void test_pca_auto_components(scl_test_runner_t *tr) {
     scl_test_group("pca_auto_components");
-    scl_allocator_t *a = scl_allocator_default();
+    scl_allocator_t *a = scl_alloc_arena_create(scl_allocator_default(), 1 << 20, 0);
     scl_ml_dataset_t ds;
     SCL_EXPECT_OK(tr, scl_ml_dataset_init(&ds, a, 5, 2));
     for (size_t i = 0; i < 5; i++) {
@@ -68,6 +71,7 @@ static void test_pca_auto_components(scl_test_runner_t *tr) {
 
     scl_ml_pca_params_t params = SCL_ML_PCA_PARAMS_DEFAULT();
     params.n_components = 0; /* auto */
+    params.alloc = a;
     scl_ml_pca_t *pca = NULL;
     SCL_EXPECT_OK(tr, scl_ml_pca_new(&pca, params));
     SCL_EXPECT_OK(tr, scl_ml_pca_fit(pca, &ds));
@@ -78,10 +82,11 @@ static void test_pca_auto_components(scl_test_runner_t *tr) {
 
     scl_ml_pca_free(pca);
     scl_ml_dataset_destroy(&ds, a);
+    scl_alloc_arena_destroy(a);
 }
 static void test_pca_getters(scl_test_runner_t *tr) {
     scl_test_group("pca_getters");
-    scl_allocator_t *a = scl_allocator_default();
+    scl_allocator_t *a = scl_alloc_arena_create(scl_allocator_default(), 1 << 20, 0);
     scl_ml_dataset_t ds;
     SCL_EXPECT_OK(tr, scl_ml_dataset_init(&ds, a, 4, 2));
     for (size_t i = 0; i < 4; i++) {
@@ -92,6 +97,7 @@ static void test_pca_getters(scl_test_runner_t *tr) {
     SCL_EXPECT_OK(tr, scl_ml_dataset_prepare(&ds, a));
 
     scl_ml_pca_params_t params = SCL_ML_PCA_PARAMS_DEFAULT();
+    params.alloc = a;
     scl_ml_pca_t *pca = NULL;
     SCL_EXPECT_OK(tr, scl_ml_pca_new(&pca, params));
     SCL_EXPECT_OK(tr, scl_ml_pca_fit(pca, &ds));
@@ -103,10 +109,13 @@ static void test_pca_getters(scl_test_runner_t *tr) {
 
     scl_ml_pca_free(pca);
     scl_ml_dataset_destroy(&ds, a);
+    scl_alloc_arena_destroy(a);
 }
 static void test_pca_errors(scl_test_runner_t *tr) {
     scl_test_group("pca_errors");
+    scl_allocator_t *a = scl_alloc_arena_create(scl_allocator_default(), 1 << 20, 0);
     scl_ml_pca_params_t ep = SCL_ML_PCA_PARAMS_DEFAULT();
+    ep.alloc = a;
     SCL_EXPECT_ERROR(tr, scl_ml_pca_new(NULL, ep), SCL_ERR_NULL_PTR);
 
     scl_ml_pca_t *pca = NULL;
@@ -115,10 +124,11 @@ static void test_pca_errors(scl_test_runner_t *tr) {
     SCL_EXPECT_ERROR(tr, scl_ml_pca_fit(pca, NULL), SCL_ERR_NULL_PTR);
 
     scl_ml_pca_free(pca);
+    scl_alloc_arena_destroy(a);
 }
 static void test_pca_serialization(scl_test_runner_t *tr) {
     scl_test_group("pca_serialization");
-    scl_allocator_t *a = scl_allocator_default();
+    scl_allocator_t *a = scl_alloc_arena_create(scl_allocator_default(), 1 << 20, 0);
     scl_ml_dataset_t ds;
     SCL_EXPECT_OK(tr, scl_ml_dataset_init(&ds, a, 4, 2));
     for (size_t i = 0; i < 4; i++) {
@@ -129,6 +139,7 @@ static void test_pca_serialization(scl_test_runner_t *tr) {
     SCL_EXPECT_OK(tr, scl_ml_dataset_prepare(&ds, a));
 
     scl_ml_pca_params_t params = SCL_ML_PCA_PARAMS_DEFAULT();
+    params.alloc = a;
     scl_ml_pca_t *pca = NULL;
     SCL_EXPECT_OK(tr, scl_ml_pca_new(&pca, params));
     SCL_EXPECT_OK(tr, scl_ml_pca_fit(pca, &ds));
@@ -146,8 +157,10 @@ static void test_pca_serialization(scl_test_runner_t *tr) {
     SCL_EXPECT_EQ_SZ(tr, scl_ml_pca_get_n_components(pca), 2);
     scl_ml_pca_free(pca);
 
+    scl_ml_pca_params_t params2 = SCL_ML_PCA_PARAMS_DEFAULT();
+    params2.alloc = a;
     scl_ml_pca_t *loaded = NULL;
-    SCL_EXPECT_OK(tr, scl_ml_pca_load(&loaded, buf, len, params));
+    SCL_EXPECT_OK(tr, scl_ml_pca_load(&loaded, buf, len, params2));
     SCL_EXPECT_NOT_NULL(tr, loaded);
     SCL_EXPECT_EQ_SZ(tr, scl_ml_pca_get_n_components(loaded), 2);
     SCL_ML_NEAR(tr, scl_ml_pca_get_components(loaded)[0], c0, 1e-5f);
@@ -158,6 +171,7 @@ static void test_pca_serialization(scl_test_runner_t *tr) {
     scl_ml_pca_free(loaded);
     scl_free(a, buf);
     scl_ml_dataset_destroy(&ds, a);
+    scl_alloc_arena_destroy(a);
 }
 
 int main(void) {

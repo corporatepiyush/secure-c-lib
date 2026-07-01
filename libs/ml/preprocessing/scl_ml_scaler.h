@@ -39,7 +39,7 @@ typedef struct {
 } scl_ml_standard_scaler_t;
 
 SCL_WARN_UNUSED scl_error_t
-scl_ml_standard_scaler_new(scl_ml_standard_scaler_t **scaler);
+scl_ml_standard_scaler_new(scl_ml_standard_scaler_t **scaler, scl_allocator_t *alloc);
 
 void
 scl_ml_standard_scaler_free(scl_ml_standard_scaler_t *scaler);
@@ -75,7 +75,7 @@ typedef struct {
 } scl_ml_minmax_scaler_t;
 
 SCL_WARN_UNUSED scl_error_t
-scl_ml_minmax_scaler_new(scl_ml_minmax_scaler_t **scaler);
+scl_ml_minmax_scaler_new(scl_ml_minmax_scaler_t **scaler, scl_allocator_t *alloc);
 
 void
 scl_ml_minmax_scaler_free(scl_ml_minmax_scaler_t *scaler);
