@@ -1,0 +1,15 @@
+*.o
+*.a
+*.so
+*.dylib
+*.dSYM
+*.tmp
+*.o.tmp
+.DS_Store
+build/
+*mcpmem*
+opencode.json
+CHANGELOG.md
+.opencode
+.claude
+.swarm

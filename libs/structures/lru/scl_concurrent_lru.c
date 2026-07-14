@@ -1,0 +1,234 @@
+/*
+ * Copyright 2026 Piyush Katariya
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/* Thread-safe lru data structure. Guarded by scl_spinlock_t. */
+
+#include "scl_concurrent_lru.h"
+#include "scl_string.h"
+
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC optimize("O3", "unroll-loops", "tree-vectorize", "inline")
+#endif
+
+static size_t default_hash(const void *key, size_t len) {
+  const unsigned char *p = (const unsigned char *)key;
+  size_t h = 5381;
+  for (size_t i = 0; i < len; i++)
+    h = ((h << 5) + h) + p[i];
+  return h;
+}
+
+static size_t index_of(scl_concurrent_lru_t *cache, const void *key) {
+  return cache->key_hash(key, cache->key_size) % cache->index_capacity;
+}
+
+static bool key_equal(scl_concurrent_lru_t *cache, const void *a,
+                      const void *b) {
+  return scl_memcmp(a, b, cache->key_size) == 0;
+}
+
+static void detach(scl_concurrent_lru_t *cache, scl_concurrent_lru_node_t *n) {
+  if (n->prev)
+    n->prev->next = n->next;
+  else
+    cache->head = n->next;
+  if (n->next)
+    n->next->prev = n->prev;
+  else
+    cache->tail = n->prev;
+}
+
+static void push_front(scl_concurrent_lru_t *cache,
+                       scl_concurrent_lru_node_t *n) {
+  n->prev = NULL;
+  n->next = cache->head;
+  if (cache->head)
+    cache->head->prev = n;
+  cache->head = n;
+  if (!cache->tail)
+    cache->tail = n;
+}
+
+static void move_to_front(scl_concurrent_lru_t *cache,
+                          scl_concurrent_lru_node_t *n) {
+  detach(cache, n);
+  push_front(cache, n);
+}
+
+scl_error_t scl_clru_init(scl_allocator_t *alloc, scl_concurrent_lru_t *cache,
+                          size_t key_size, size_t value_size, size_t capacity) {
+  if (scl_unlikely(!cache))
+    return SCL_ERR_NULL_PTR;
+  if (scl_unlikely(key_size == 0 || value_size == 0 || capacity == 0))
+    return SCL_ERR_INVALID_ARG;
+  cache->head = cache->tail = NULL;
+  cache->capacity = capacity;
+  atomic_init(&cache->count, 0);
+  cache->key_size = key_size;
+  cache->value_size = value_size;
+  cache->key_cmp = NULL;
+  cache->key_hash = default_hash;
+  cache->index_capacity = capacity * 2;
+  cache->index =
+      scl_calloc(alloc, cache->index_capacity,
+                 sizeof(scl_concurrent_lru_node_t *), alignof(max_align_t));
+  if (scl_unlikely(!cache->index))
+    return SCL_ERR_OUT_OF_MEMORY;
+  scl_spinlock_init(&cache->lock);
+  return SCL_OK;
+}
+
+void scl_clru_destroy(scl_allocator_t *alloc, scl_concurrent_lru_t *cache) {
+  if (scl_unlikely(!cache))
+    return;
+  scl_spinlock_lock(&cache->lock);
+  scl_concurrent_lru_node_t *cur = cache->head;
+  while (scl_likely(cur)) {
+    scl_concurrent_lru_node_t *next = cur->next;
+    scl_secure_zero(cur->data, cur->key_size + cur->value_size);
+    scl_free(alloc, cur);
+    cur = next;
+  }
+  scl_free(alloc, cache->index);
+  cache->head = cache->tail = NULL;
+  cache->index = NULL;
+  atomic_store_explicit(&cache->count, 0, memory_order_relaxed);
+  scl_spinlock_unlock(&cache->lock);
+}
+
+scl_error_t scl_clru_put(scl_allocator_t *alloc, scl_concurrent_lru_t *cache,
+                         const void *SCL_RESTRICT key, const void *value) {
+  if (scl_unlikely(!cache || !key || !value))
+    return SCL_ERR_NULL_PTR;
+  scl_spinlock_lock(&cache->lock);
+  size_t idx = index_of(cache, key);
+  scl_concurrent_lru_node_t *cur = cache->index[idx];
+  while (scl_likely(cur)) {
+    if (key_equal(cache, cur->data, key)) {
+      scl_memcpy(cur->data + cur->key_size, value, cache->value_size);
+      move_to_front(cache, cur);
+      scl_spinlock_unlock(&cache->lock);
+      return SCL_OK;
+    }
+    cur = cur->next_hash;
+  }
+  if (atomic_load_explicit(&cache->count, memory_order_relaxed) ==
+      cache->capacity) {
+    scl_concurrent_lru_node_t *evict = cache->tail;
+    detach(cache, evict);
+    size_t eidx = index_of(cache, evict->data);
+    scl_concurrent_lru_node_t **ep = &cache->index[eidx];
+    while (*ep) {
+      if (*ep == evict) {
+        *ep = evict->next_hash;
+        break;
+      }
+      ep = &(*ep)->next_hash;
+    }
+    scl_secure_zero(evict->data, evict->key_size + evict->value_size);
+    scl_free(alloc, evict);
+    atomic_fetch_sub_explicit(&cache->count, 1, memory_order_relaxed);
+  }
+  size_t total_sz;
+  if (scl_add_overflow(sizeof(scl_concurrent_lru_node_t),
+                       cache->key_size + cache->value_size, &total_sz)) {
+    scl_spinlock_unlock(&cache->lock);
+    return SCL_ERR_SIZE_OVERFLOW;
+  }
+  scl_concurrent_lru_node_t *n =
+      scl_alloc(alloc, total_sz, alignof(max_align_t));
+  if (!n) {
+    scl_spinlock_unlock(&cache->lock);
+    return SCL_ERR_OUT_OF_MEMORY;
+  }
+  n->key_size = cache->key_size;
+  n->value_size = cache->value_size;
+  n->next_hash = NULL;
+  scl_memcpy(n->data, key, cache->key_size);
+  scl_memcpy(n->data + cache->key_size, value, cache->value_size);
+  push_front(cache, n);
+  n->next_hash = cache->index[idx];
+  cache->index[idx] = n;
+  atomic_fetch_add_explicit(&cache->count, 1, memory_order_relaxed);
+  scl_spinlock_unlock(&cache->lock);
+  return SCL_OK;
+}
+
+scl_error_t scl_clru_get(scl_concurrent_lru_t *cache, const void *key,
+                         void *SCL_RESTRICT out_value) {
+  if (scl_unlikely(!cache || !key || !out_value))
+    return SCL_ERR_NULL_PTR;
+  scl_spinlock_lock(&cache->lock);
+  size_t idx = index_of(cache, key);
+  scl_concurrent_lru_node_t *cur = cache->index[idx];
+  while (scl_likely(cur)) {
+    if (key_equal(cache, cur->data, key)) {
+      scl_memcpy(out_value, cur->data + cur->key_size, cache->value_size);
+      move_to_front(cache, cur);
+      scl_spinlock_unlock(&cache->lock);
+      return SCL_OK;
+    }
+    cur = cur->next_hash;
+  }
+  scl_spinlock_unlock(&cache->lock);
+  return SCL_ERR_NOT_FOUND;
+}
+
+bool scl_clru_contains(scl_concurrent_lru_t *cache, const void *key) {
+  if (scl_unlikely(!cache || !key))
+    return false;
+  scl_spinlock_lock(&cache->lock);
+  size_t idx = index_of(cache, key);
+  scl_concurrent_lru_node_t *cur = cache->index[idx];
+  while (scl_likely(cur)) {
+    if (key_equal(cache, cur->data, key)) {
+      scl_spinlock_unlock(&cache->lock);
+      return true;
+    }
+    cur = cur->next_hash;
+  }
+  scl_spinlock_unlock(&cache->lock);
+  return false;
+}
+
+scl_error_t scl_clru_remove(scl_allocator_t *alloc, scl_concurrent_lru_t *cache,
+                            const void *SCL_RESTRICT key) {
+  if (scl_unlikely(!cache || !key))
+    return SCL_ERR_NULL_PTR;
+  scl_spinlock_lock(&cache->lock);
+  size_t idx = index_of(cache, key);
+  scl_concurrent_lru_node_t **pp = &cache->index[idx];
+  scl_concurrent_lru_node_t *cur = cache->index[idx];
+  while (scl_likely(cur)) {
+    if (key_equal(cache, cur->data, key)) {
+      *pp = cur->next_hash;
+      detach(cache, cur);
+      scl_secure_zero(cur->data, cur->key_size + cur->value_size);
+      scl_free(alloc, cur);
+      atomic_fetch_sub_explicit(&cache->count, 1, memory_order_relaxed);
+      scl_spinlock_unlock(&cache->lock);
+      return SCL_OK;
+    }
+    pp = &cur->next_hash;
+    cur = cur->next_hash;
+  }
+  scl_spinlock_unlock(&cache->lock);
+  return SCL_ERR_NOT_FOUND;
+}
+
+size_t scl_clru_count(const scl_concurrent_lru_t *cache) {
+  return cache ? atomic_load_explicit(&cache->count, memory_order_relaxed) : 0;
+}

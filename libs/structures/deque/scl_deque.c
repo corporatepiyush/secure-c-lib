@@ -1,0 +1,217 @@
+/*
+ * Copyright 2026 Piyush Katariya
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/* deque data structure. */
+
+#include "scl_deque.h"
+#include "scl_string.h"
+
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC optimize("O3", "unroll-loops", "tree-vectorize", "inline")
+#endif
+
+scl_error_t scl_deque_init(scl_allocator_t *alloc, scl_deque_t *deque,
+                           size_t element_size, size_t initial_capacity) {
+  if (scl_unlikely(!deque))
+    return SCL_ERR_NULL_PTR;
+  if (scl_unlikely(element_size == 0))
+    return SCL_ERR_INVALID_ARG;
+
+  deque->data = NULL;
+  deque->element_size = element_size;
+  deque->capacity = 0;
+  deque->mask = 0;
+  deque->head = 0;
+  deque->count = 0;
+
+  if (initial_capacity > 0) {
+    size_t cap = initial_capacity < 4 ? 4 : scl_bit_ceil_sz(initial_capacity);
+    size_t bytes;
+    if (scl_mul_overflow(cap, element_size, &bytes))
+      return SCL_ERR_SIZE_OVERFLOW;
+    deque->data = scl_alloc(alloc, bytes, alignof(max_align_t));
+    if (scl_unlikely(!deque->data))
+      return SCL_ERR_OUT_OF_MEMORY;
+    deque->capacity = cap;
+    deque->mask = cap - 1;
+  }
+  return SCL_OK;
+}
+
+void scl_deque_destroy(scl_allocator_t *alloc, scl_deque_t *deque) {
+  if (deque) {
+    scl_free(alloc, deque->data);
+    deque->data = NULL;
+    deque->capacity = 0;
+    deque->mask = 0;
+    deque->head = 0;
+    deque->count = 0;
+  }
+}
+
+static SCL_COLD_PATH scl_error_t scl_deque_grow(scl_allocator_t *alloc,
+                                                scl_deque_t *deque) {
+  size_t es = deque->element_size;
+  size_t new_cap = deque->capacity == 0 ? 4 : deque->capacity * 2;
+  size_t new_bytes;
+  if (scl_mul_overflow(new_cap, es, &new_bytes))
+    return SCL_ERR_SIZE_OVERFLOW;
+
+  unsigned char *tmp = scl_alloc(alloc, new_bytes, alignof(max_align_t));
+  if (scl_unlikely(!tmp))
+    return SCL_ERR_OUT_OF_MEMORY;
+
+  size_t mask = deque->mask;
+  for (size_t i = 0; i < deque->count; i++) {
+    size_t src_idx = (deque->head + i) & mask;
+    scl_memcpy(tmp + i * es, deque->data + src_idx * es, es);
+  }
+
+  scl_free(alloc, deque->data);
+  deque->data = tmp;
+  deque->head = 0;
+  deque->capacity = new_cap;
+  deque->mask = new_cap - 1;
+  return SCL_OK;
+}
+
+scl_error_t scl_deque_push_front(scl_allocator_t *alloc, scl_deque_t *deque,
+                                 const void *SCL_RESTRICT element) {
+  if (scl_unlikely(!deque || !element))
+    return SCL_ERR_NULL_PTR;
+
+  if (deque->count == deque->capacity) {
+    scl_error_t err = scl_deque_grow(alloc, deque);
+    if (err != SCL_OK)
+      return err;
+  }
+
+  deque->head = (deque->head - 1) & deque->mask;
+  size_t offset;
+  if (scl_mul_overflow(deque->head, deque->element_size, &offset))
+    return SCL_ERR_SIZE_OVERFLOW;
+
+  scl_memcpy(deque->data + offset, element, deque->element_size);
+  deque->count++;
+  return SCL_OK;
+}
+
+scl_error_t scl_deque_push_back(scl_allocator_t *alloc, scl_deque_t *deque,
+                                const void *SCL_RESTRICT element) {
+  if (scl_unlikely(!deque || !element))
+    return SCL_ERR_NULL_PTR;
+
+  if (deque->count == deque->capacity) {
+    scl_error_t err = scl_deque_grow(alloc, deque);
+    if (err != SCL_OK)
+      return err;
+  }
+
+  size_t tail = (deque->head + deque->count) & deque->mask;
+  size_t offset;
+  if (scl_mul_overflow(tail, deque->element_size, &offset))
+    return SCL_ERR_SIZE_OVERFLOW;
+
+  scl_memcpy(deque->data + offset, element, deque->element_size);
+  deque->count++;
+  return SCL_OK;
+}
+
+scl_error_t scl_deque_pop_front(scl_deque_t *deque, void *out) {
+  if (scl_unlikely(!deque || !out))
+    return SCL_ERR_NULL_PTR;
+  if (deque->count == 0)
+    return SCL_ERR_EMPTY;
+
+  size_t offset;
+  if (scl_mul_overflow(deque->head, deque->element_size, &offset))
+    return SCL_ERR_SIZE_OVERFLOW;
+
+  scl_memcpy(out, deque->data + offset, deque->element_size);
+  deque->head = (deque->head + 1) & deque->mask;
+  deque->count--;
+  return SCL_OK;
+}
+
+scl_error_t scl_deque_pop_back(scl_deque_t *deque, void *out) {
+  if (scl_unlikely(!deque || !out))
+    return SCL_ERR_NULL_PTR;
+  if (deque->count == 0)
+    return SCL_ERR_EMPTY;
+
+  size_t tail = (deque->head + deque->count - 1) & deque->mask;
+  size_t offset;
+  if (scl_mul_overflow(tail, deque->element_size, &offset))
+    return SCL_ERR_SIZE_OVERFLOW;
+
+  scl_memcpy(out, deque->data + offset, deque->element_size);
+  deque->count--;
+  return SCL_OK;
+}
+
+scl_error_t scl_deque_peek_front(const scl_deque_t *deque, void *out) {
+  if (scl_unlikely(!deque || !out))
+    return SCL_ERR_NULL_PTR;
+  if (deque->count == 0)
+    return SCL_ERR_EMPTY;
+
+  size_t offset;
+  if (scl_mul_overflow(deque->head, deque->element_size, &offset))
+    return SCL_ERR_SIZE_OVERFLOW;
+
+  scl_memcpy(out, deque->data + offset, deque->element_size);
+  return SCL_OK;
+}
+
+scl_error_t scl_deque_peek_back(const scl_deque_t *deque, void *out) {
+  if (scl_unlikely(!deque || !out))
+    return SCL_ERR_NULL_PTR;
+  if (deque->count == 0)
+    return SCL_ERR_EMPTY;
+
+  size_t tail = (deque->head + deque->count - 1) & deque->mask;
+  size_t offset;
+  if (scl_mul_overflow(tail, deque->element_size, &offset))
+    return SCL_ERR_SIZE_OVERFLOW;
+
+  scl_memcpy(out, deque->data + offset, deque->element_size);
+  return SCL_OK;
+}
+
+size_t scl_deque_count(const scl_deque_t *deque) {
+  return deque ? deque->count : 0;
+}
+
+bool scl_deque_empty(const scl_deque_t *deque) {
+  return deque ? deque->count == 0 : true;
+}
+
+scl_error_t scl_deque_search(const scl_deque_t *restrict deque,
+                             const void *restrict key,
+                             int (*cmp)(const void *, const void *),
+                             size_t *restrict out_index) {
+  if (scl_unlikely(!deque || !key || !cmp || !out_index))
+    return SCL_ERR_NULL_PTR;
+
+  for (size_t i = 0; i < deque->count; i++) {
+    size_t pos = (deque->head + i) & deque->mask;
+    if (cmp(deque->data + pos * deque->element_size, key) == 0) {
+      *out_index = i;
+      return SCL_OK;
+    }
+  }
+  return SCL_ERR_NOT_FOUND;
+}
